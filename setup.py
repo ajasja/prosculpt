@@ -8,6 +8,6 @@ setup(
     author_email='nejbizjak@gmail.com',
     description='Package includes functions to protein strucutre analysis and data manipulation necessary',
     packages=find_packages(),
-    scripts=['prosculpt.py'],
+    scripts=['rfdiff_mpnn_af2_disontiuous.py'],
     install_requires=[],
 )
