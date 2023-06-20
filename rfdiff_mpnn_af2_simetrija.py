@@ -1,5 +1,5 @@
 import os
-import help_functions
+import prosculpt
 import glob
 import argparse
 import re
@@ -133,7 +133,7 @@ os.system(f"{python_path_mpnn} /home/tsatler/ProteinMPNN/helper_scripts/assign_f
 
 # Very important in MPNN: The first amino acid in the chain corresponds to 1 and not PDB residues index for now.
 #If this changes the process_pdb_files function must change accordingly
-fixed_pos_path = help_functions.process_pdb_files(rfdiff_out_dir, mpnn_out_dir) 
+fixed_pos_path = prosculpt.process_pdb_files(rfdiff_out_dir, mpnn_out_dir) 
 
 #_____________ RUN ProteinMPNN_____________
 
@@ -166,9 +166,9 @@ python_path_af2 = "/home/aljubetic/AF2/CF2.3/colabfold-conda/bin/python" # sourc
 
 #________________ RUN AF2______________
 for fasta_file in fasta_files: 
-    model_num = help_functions.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
+    model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
     model_dir = os.path.join(af2_out_dir, f"model_{model_num}") #create name for af2 directory name: model_0
-    help_functions.change_sequence_in_fasta_complex(rfdiff_pdb, fasta_file)
+    prosculpt.change_sequence_in_fasta_complex(rfdiff_pdb, fasta_file)
     if not os.path.exists(model_dir):
         os.makedirs(model_dir)
 
@@ -185,9 +185,9 @@ json_directories = glob.glob(os.path.join(af2_out_dir, "*"))
 
 for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
     
-    trb_num = help_functions.get_token_value(os.path.basename(model_i), "model_", "(\d+)") #get 0 from model_0 using reg exp
+    trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\d+)") #get 0 from model_0 using reg exp
     
-    help_functions.rename_pdb_create_csv(args.output_dir, rfdiff_out_dir, trb_num, model_i, pdb_path)
+    prosculpt.rename_pdb_create_csv(args.output_dir, rfdiff_out_dir, trb_num, model_i, pdb_path)
     
     python_path = "/home/aljubetic/conda/envs/pyro/bin/python"
     
@@ -196,20 +196,20 @@ os.system(f'{python_path} /home/nbizjak/projects/11_04_2023_rigid_connections/sc
             {csv_path}')
     
 scores_rg_path = os.path.join(args.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
-help_functions.merge_csv(args.output_dir, csv_path, scores_rg_path)
+prosculpt.merge_csv(args.output_dir, csv_path, scores_rg_path)
 
 os.remove(csv_path)
 os.remove(scores_rg_path)
     
 #renamed_pdb = os.path.join(os.path.dirname(args.output_dir), "final_pdbs", "*.pdb")
-#df = help_functions.create_dataframe(renamed_pdb, args.output_dir)
+#df = prosculpt.create_dataframe(renamed_pdb, args.output_dir)
 
 """
 python_path = "/home/tsatler/anaconda3/envs/pyro/bin/python"
 os.system(f'{python_path} /home/nbizjak/projects/11_04_2023_rigid_connections/scoring_rg_charge_sap.py \
           /home/nbizjak/projects/11_04_2023_rigid_connections/output.csv')
 
-help_functions.merge_csv("output.csv", "scores_rg_charge_sap.csv")
+prosculpt.merge_csv("output.csv", "scores_rg_charge_sap.csv")
 
 os.remove("output.csv")
 os.remove("scores_rg_charge_sap.csv")
