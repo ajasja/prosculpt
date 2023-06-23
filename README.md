@@ -21,6 +21,7 @@ To run the script, navigate to the directory containing the script and run the b
 `python rfdiff_mpnn_af2_disontiuous.py --original_pdb_path /home/.../input_protein.pdb --output_dir /home/.../outputs/ --contig '[C33-60/4-7/A1-30/0 B61-120]' --num_designs_rfdiff 15 --num_seq_per_target_mpnn 5 --chains_to_design_mpnn 'A' `
 
 Inputs: 
+- `python`: for running the script you need the the python from the.venv environment. Replace `python` this path `/home/nbizjak/projects/11_04_2023_rigid_connections/.venv/bin/python`
 - `original_pdb_path`: original PDB around which the new structure is generated
 - `contig`: explained in detail in the [RFdiffusion github repository](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md)  
 - `output_dir`: output directory. Along the pipeline, each module will create its own subdirectory. The AF2 models are in the end renamed and copied to a subdirectory called `final_pdbs` 
