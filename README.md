@@ -36,7 +36,7 @@ Then run the following command to send the tasks to the cluster
 `export GROUP_SIZE=1; sbatch --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 -J name_of_task  -a 1-number_of_tasks /home/.../scripts/wrapper_slurm_array_job_group.sh text_file_from_run_pipeline.txt`  
 Make sure you have the `wrapper_slurm_array_job_group.sh` script installed.  
   
-A note on outputs: when running on a cluster for each task a separate `final_outputs.csv` will be created run `merge_csv.py` along with the argument `--output_dir` to merge all csv files into one file.
+A note on outputs: when running on a cluster for each task a separate `final_outputs.csv` will be create. Run `merge_csv.py` along with the argument `--output_dir` to merge all csv files into one file.
 ## Examples for contigs
 Contigs are the most important input (for now, guiding potentials are another input to be explored in the future). Here are a few guidelines to ease the start of your projects.
 - For connecting two parts you could use a contig such as this: `'[A1-37/30-60/A42-70]'`. If the original PDB has another chain B, it will not be given to RFdiffusion in this case.
