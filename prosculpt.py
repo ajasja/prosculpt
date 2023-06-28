@@ -143,7 +143,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         for pp in ppb.build_peptides(structure):
             seq += f":{pp.get_sequence().__str__()}"
 
-        print(seq)
+
 
         dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(\d*\.\d+|\d+\.?\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\d*\.\d+|\d+\.?\d*)"),
@@ -204,8 +204,9 @@ class NumpyInt64Encoder(json.JSONEncoder):
         if isinstance(obj, np.int64):
             return int(obj)
         return super(NumpyInt64Encoder, self).default(obj)
-"""
-def process_pdb_files(pdb_path: str, out_path: str):
+
+
+def process_pdb_files(pdb_path: str, out_path: str, trb_path = None):
     fixpos = {}
     pdb_files = Path(pdb_path).glob("*.pdb")
 
@@ -214,49 +215,9 @@ def process_pdb_files(pdb_path: str, out_path: str):
         trb_file = pdb_file.with_suffix(".trb")
 
         if not trb_file.exists():
-            print(f"TRB file not found for {pdb_basename}. Skipping...")
-            continue
-
-        with open(trb_file, 'rb') as f:
-            trb_data = pickle.load(f)
-        
-        if 'complex_con_hal_pdb_idx' in trb_data:
-            con_hal_idx = trb_data.get('complex_con_hal_pdb_idx', []) #con_hal_pdb_idx #complex_con_hal_pdb_idx
-        else:
-            con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
-        # Process con_hal_idx to extract chain ids and indices
-        fixed_res = {}
-        for chain, idx in con_hal_idx:
-            if chain not in fixed_res:
-                fixed_res[chain] = []
-            fixed_res[chain].append(idx)
-
-        fixpos[pdb_basename] = fixed_res
-    
-    #print("_________trb data____", trb_data)
-    
-    
-    # print("_________ fix pos_________", fixpos)
-    file_path = os.path.join(out_path, "fixed_pdbs.jsonl")
-    # Save the fixpos dict as a JSON file
-    with open(file_path, "w") as outfile:
-        json.dump(fixpos, outfile, cls=NumpyInt64Encoder)
-
-
-    return file_path
-"""
-
-def process_pdb_files(pdb_path: str, out_path: str):
-    fixpos = {}
-    pdb_files = Path(pdb_path).glob("*.pdb")
-
-    for pdb_file in pdb_files:
-        pdb_basename = pdb_file.stem
-        trb_file = pdb_file.with_suffix(".trb")
-
-        if not trb_file.exists():
-            print(f"TRB file not found for {pdb_basename}. Skipping...")
-            continue
+            trb_file = trb_path
+            print(f"TRB file not found for {pdb_basename}. CAUTION, using _0.trb")
+            
 
         with open(trb_file, 'rb') as f:
             trb_data = pickle.load(f)
