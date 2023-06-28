@@ -5,24 +5,17 @@ import argparse
 import re
 import shutil
 
-"""
-READ ME
-Guidelines:
-    - Script written to design MULTIPLE linkers INSIDE ONE CHAIN or ONE linker to connect TWO CHAINS
-    - RFdiff designs protein so the designed chain/chains are now chain A, regardless of how they were identified before
-        - Other undesigned chains are B, C,... regardles if before they were A
 
-"""
 
 #/home/nbizjak/projects/11_04_2023_rigid_connections/inputs_for_rfdiff/phosphoCC_bundle.pdb
 #/home/nbizjak/projects/11_04_2023_rigid_connections/inputs_for_rfdiff/dva_helixa_delujoca.pdb
 pdb_path ="/home/nbizjak/projects/11_04_2023_rigid_connections/inputs_for_rfdiff/mALb8-antiA.pdb"
-output_dir = "/home/nbizjak/projects/11_04_2023_rigid_connections/outputs/"
+output_dir = "/home/nbizjak/prosculpt_dev/outputs/deafult_output/"
 contig = "[C33-60/5-7/A1-30/0 B61-120]" #[A1-30/5/C1-30/0 D1-30/0  B1-30] #[A1-37/30-60/A42-70] dva helixa  #[C33-60/3/A1-30/0 B61-120] mlba... [C33-60/5/A1-30/0 B61-120]
 num_designs_rfdiff = 1
 num_seq_per_target_mpnn = 1
 chains_to_design = "A" #might be very important for complexes
-af2_mpnn_cycles = 2
+
 
 #if designing complexes change in helper funcitions in the pdb proceisng function
 
@@ -33,7 +26,8 @@ parser.add_argument("--output_dir", default = output_dir, help="Path to output d
 parser.add_argument("--num_designs_rfdiff", type=int, default=num_designs_rfdiff, help="Number of designs to generate with RFdiffusion")
 parser.add_argument("--num_seq_per_target_mpnn", type=int, default=num_seq_per_target_mpnn, help="Number of sequences to generate per target with MPNN")
 parser.add_argument("--chains_to_design_mpnn", default= chains_to_design, help="All chains of protein even if not redesigned (except if doing binder design)") 
-parser.add_argument("--af2_mpnn_cycles", default = af2_mpnn_cycles, help="Cycles of mpnn-af2. Deafult is 1")
+parser.add_argument("--af2_mpnn_cycles", default = 1, type = int, help="Cycles of mpnn-af2. Deafult is 1")
+parser.add_argument("--af2_models", default = "1,2,3,4,5",type = str, help="Choose specific models to cycle in af2-mpnn")
 
 args = parser.parse_args()
 
@@ -88,10 +82,11 @@ rf_pdbs = glob.glob(os.path.join(rfdiff_out_path, '*.pdb'))
 for pdb in rf_pdbs:
     os.system(f'{pymol_python_path} /home/nbizjak/projects/11_04_2023_rigid_connections/rechain.py {pdb} {pdb}')
 
-
+print("entering for loop of cycles")
 #CYCLES OF MPNN AND AF2
 for cycle in range(args.af2_mpnn_cycles):
 
+    print("cycleeeeee", cycle)
     path_for_parsed_chains = os.path.join(mpnn_out_dir, "parsed_pdbs.jsonl")
     path_for_assigned_chains = os.path.join(mpnn_out_dir, "assigned_pdbs.jsonl")
     path_for_fixed_positions = os.path.join(mpnn_out_dir, "fixed_pdbs.jsonl")
@@ -109,20 +104,31 @@ for cycle in range(args.af2_mpnn_cycles):
                 --chain_list '{chains_to_design}'")
 
         fixed_pos_path = help_functions.process_pdb_files(input_mpnn, mpnn_out_dir)
-        
     else: #All other cycles get starting pdbs from af2
-        cycle_directory = os.path.join(output_dir, "2_1_cycle_directory")
-        #if os.path.exists(cycle_directory):
-        #   shutil.rmtree(cycle_directory)
+        print("______________________________entering cycle_____________________________________")
+        cycle_directory = os.path.join(args.output_dir, "2_1_cycle_directory")
+        if os.path.exists(cycle_directory):
+           shutil.rmtree(cycle_directory)
         os.makedirs(cycle_directory, exist_ok=True)
 
         af2_model_subdicts = glob.glob(os.path.join(af2_out_dir, "*"))
         #Access all af2 models and put them in one intemediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
         for model_subdict in af2_model_subdicts: 
-            af2_pdbs = list(glob.glob(os.path.join(model_subdict, "T*.pdb")))
+            af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
             for i, af2_pdb in enumerate(af2_pdbs):
-                # Rename pdbs to keep the model_num traceability with orginal rfdiff structure
-                shutil.move(af2_pdb, os.path.join(cycle_directory, f"{os.path.basename(model_subdict)}__af2_{i}__.pdb"))
+                print(i, os.path.basename(af2_pdb))
+                af_model_num = help_functions.get_token_value(os.path.basename(af2_pdb), "model_", "(\d+)")
+                if str(af_model_num) in args.af2_models:
+                # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
+                    if cycle == 1:
+                        rf_model_num = help_functions.get_token_value(os.path.basename(model_subdict), "model_", "(\d+)")
+                    #else:
+                        #rf_model_num = help_functions.get_token_value(os.path.basename(af2_pdb), "rf__", "(\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
+                    shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
+                            #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
+                            #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
+                            #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
+                            # is it maybe possible to filter best ranked by af2 from the itr numbers?
 
         input_mpnn = cycle_directory
 
@@ -179,7 +185,7 @@ for cycle in range(args.af2_mpnn_cycles):
         if cycle == 0:
             model_num = help_functions.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
         else:
-            model_num = help_functions.get_token_value(os.path.basename(fasta_file), "model_", "(\d+)")
+            model_num = help_functions.get_token_value(os.path.basename(fasta_file), "rf_", "(\d+)")
         model_dir = os.path.join(af2_out_dir, f"model_{model_num}") #create name for af2 directory name: model_0
         help_functions.change_sequence_in_fasta(rfdiff_pdb, fasta_file)
         if not os.path.exists(model_dir):
@@ -201,10 +207,10 @@ json_directories = glob.glob(os.path.join(af2_out_dir, "*"))
 for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
     
     trb_num = help_functions.get_token_value(os.path.basename(model_i), "model_", "(\d+)") #get 0 from model_0 using reg exp
-    
     help_functions.rename_pdb_create_csv(args.output_dir, rfdiff_out_dir, trb_num, model_i, pdb_path)
     
-    python_path = "/home/aljubetic/conda/envs/pyro/bin/python"
+    
+python_path = "/home/aljubetic/conda/envs/pyro/bin/python"
     
 csv_path = os.path.join(args.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
 os.system(f'{python_path} /home/nbizjak/projects/11_04_2023_rigid_connections/scoring_rg_charge_sap.py \
