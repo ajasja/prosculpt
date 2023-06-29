@@ -17,7 +17,7 @@ num_seq_per_target_mpnn = 1
 chains_to_design = "A" #might be very important for complexes
 
 
-#if designing complexes change in helper funcitions in the pdb proceisng function
+#if designing complexes change in helper functions in the pdb processing function
 
 parser = argparse.ArgumentParser(description="Run protein design pipeline")
 parser.add_argument("--contig", default=contig, help="Contig to design")
@@ -76,7 +76,7 @@ RFdiffusion joins chain sequences together
 For contig "[A1-30/4-6/C1-30/0 D1-30/0 B1-30]" you get two chains.
 This is problematic because AF2 than folds this incorrectly as if D and B are also connected.
 To solve this chain IDs are changed using rechain.py. 
-The script finds chainbreaks according to pyhisical distance between CA atoms.
+The script finds chain breaks according to physical distance between CA atoms.
 """ 
 rf_pdbs = glob.glob(os.path.join(rfdiff_out_path, '*.pdb'))
 for pdb in rf_pdbs:
@@ -112,7 +112,7 @@ for cycle in range(args.af2_mpnn_cycles):
         os.makedirs(cycle_directory, exist_ok=True)
 
         af2_model_subdicts = glob.glob(os.path.join(af2_out_dir, "*"))
-        #Access all af2 models and put them in one intemediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
+        #Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
         for model_subdict in af2_model_subdicts: 
             af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
             for i, af2_pdb in enumerate(af2_pdbs):
@@ -164,18 +164,18 @@ for cycle in range(args.af2_mpnn_cycles):
     os.makedirs(af2_out_dir, exist_ok=True)
 
     #_________ AF2 PREP____ Changing MPNN fasta for AF2_________
-    """
-    In order for AF2 to identifiy diffrent chains ":" must be placed between sequences
-    This is done by change_sequence_in_fasta
-
-    A specific RFdifff pdb can be provided (_0.pdb) since all RFdiff pdbs in a run have same chains
-    Only difference in the designed chain (chain A) which is not used by the function.
-    """
-    # TO DO fileter duplicates
+#    """
+#    In order for AF2 to identify different chains ":" must be placed between sequences
+#    This is done by change_sequence_in_fasta
+#
+#    A specific RFdifff pdb can be provided (_0.pdb) since all RFdiff pdbs in a run have same chains
+#    Only difference in the designed chain (chain A) which is not used by the function.
+#    """
+    # TO DO filter duplicates
         #test ali so duplikati na nivoju mpnn
 
     fasta_dir = os.path.join(mpnn_out_dir, "seqs")
-    fasta_files = sorted(glob.glob(os.path.join(fasta_dir, "*.fa"))) #glob ni sorted bo deafultu 
+    fasta_files = sorted(glob.glob(os.path.join(fasta_dir, "*.fa"))) # glob is not sorted by default.
     rfdiff_pdb = os.path.join(rfdiff_out_path, '_0.pdb')
     python_path_af2 = "/home/aljubetic/AF2/CF2.3/colabfold-conda/bin/python" # source /home/aljubetic/bin/set_up_AF2.3.sh
 
@@ -196,7 +196,7 @@ for cycle in range(args.af2_mpnn_cycles):
                 --msa-mode single_sequence \
                 {fasta_file} {model_dir}')
 
-    # msa single sequence makes sense for designed (no sense to aligbn to natural proteins)
+    # msa single sequence makes sense for designed (no sense to align to natural proteins)
 
 #FINAL OPERATIONS
 
