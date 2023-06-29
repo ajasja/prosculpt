@@ -131,7 +131,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         new_pdb_path = os.path.join(dir_renamed_pdb, new_pdb_file)
 
         try:
-            shutil.copy2(model_pdb_file, os.path.join(dir_renamed_pdb, new_pdb_path))
+            shutil.copy2(model_pdb_file, new_pdb_path)
         except OSError as e:
             print(f"Error copying {model_pdb_file} to {new_pdb_file}: {e}")
 
