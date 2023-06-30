@@ -1,4 +1,0 @@
-- inference.output_prefix=/home/nbizjak/prosculpt_dev/prosculpt/examples/two_helices_3cycles_model4/outputs/01/1_rfdiff/
-- inference.input_pdb=//home/nbizjak/prosculpt_dev/prosculpt/examples/inputs_for_rfdiff/two_helices.pdb
-- contigmap.contigs=[A1-37/30-60/A42-70]
-- inference.num_designs=2
