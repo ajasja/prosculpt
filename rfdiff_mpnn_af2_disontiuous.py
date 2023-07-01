@@ -136,7 +136,7 @@ for cycle in range(args.af2_mpnn_cycles):
 
         shutil.rmtree(mpnn_out_dir) # Remove MPNN dir so you can create new sequences
         os.makedirs(mpnn_out_dir, exist_ok=True) # Create it again
-        trb_path = os.path.join(rfdiff_out_dir, "_0.trb")
+        trb_paths = os.path.join(rfdiff_out_dir, "*.trb")
 
         os.system(f'{python_path_mpnn} /home/tsatler/ProteinMPNN/helper_scripts/parse_multiple_chains.py \
             --input_path={input_mpnn} \
@@ -147,11 +147,12 @@ for cycle in range(args.af2_mpnn_cycles):
                 --output_path={path_for_assigned_chains} \
                 --chain_list '{chains_to_design}'")
 
-        fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, mpnn_out_dir, trb_path)
+        fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, mpnn_out_dir, trb_paths)
 
      
     #_____________ RUN ProteinMPNN_____________
 
+#If we want one sequence per model in later cycles add another if condition...
     os.system(f'{python_path_mpnn} /home/tsatler/ProteinMPNN/protein_mpnn_run.py \
             --jsonl_path {path_for_parsed_chains} \
             --fixed_positions_jsonl {path_for_fixed_positions} \

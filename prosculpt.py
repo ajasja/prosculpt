@@ -208,17 +208,22 @@ class NumpyInt64Encoder(json.JSONEncoder):
         return super(NumpyInt64Encoder, self).default(obj)
 
 
-def process_pdb_files(pdb_path: str, out_path: str, trb_path = None):
+def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
     fixpos = {}
     pdb_files = Path(pdb_path).glob("*.pdb")
 
     for pdb_file in pdb_files:
+        
         pdb_basename = pdb_file.stem
         trb_file = pdb_file.with_suffix(".trb")
 
         if not trb_file.exists():
-            trb_file = trb_path
-            print(f"TRB file not found for {pdb_basename}. CAUTION, using _0.trb")
+            rf_model_num = get_token_value(os.path.basename(pdb_file), "rf_", "(\d+)")
+            trb_file = os.path.join(os.path.dirname(pdb_file), f"_{rf_model_num}.trb")
+            trb_file = trb_file.replace("2_1_cycle_directory", "1_rfdiff") 
+            print(f"TRB file not found for {pdb_basename}. CAUTION, using composed path")
+        
+        print(pdb_file, trb_file)
             
 
         with open(trb_file, 'rb') as f:
