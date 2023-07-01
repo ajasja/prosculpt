@@ -123,11 +123,10 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         
         #tracebility
         output_num = os.path.basename(output_dir)
-        model_number = os.path.basename(os.path.normpath(model_i)) # Get the name of the last directory in the path normpath handles any trailing slashes
-        iteration_num =  get_token_value(json_filename, '_model_', "(\d*\.\d+|\d+\.?\d*)")
+        af2_model =  get_token_value(json_filename, '_model_', "(\d*\.\d+|\d+\.?\d*)")
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_{rmsd}__pae_{pae}__out_{output_num}__rf_{trb_num}__{model_number}__af_itr_{iteration_num}_.pdb"
+        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_{rmsd}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
         new_pdb_path = os.path.join(dir_renamed_pdb, new_pdb_file)
 
         try:

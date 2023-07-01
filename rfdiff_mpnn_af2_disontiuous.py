@@ -27,7 +27,8 @@ parser.add_argument("--num_designs_rfdiff", type=int, default=num_designs_rfdiff
 parser.add_argument("--num_seq_per_target_mpnn", type=int, default=num_seq_per_target_mpnn, help="Number of sequences to generate per target with MPNN")
 parser.add_argument("--chains_to_design_mpnn", default= chains_to_design, help="All chains of protein even if not redesigned (except if doing binder design)") 
 parser.add_argument("--af2_mpnn_cycles", default = 1, type = int, help="Cycles of mpnn-af2. Deafult is 1")
-parser.add_argument("--af2_models", default = "1,2,3,4,5",type = str, help="Choose specific models to cycle in af2-mpnn")
+parser.add_argument("--model_order", default = "1,2,3,4,5",type = str, help="Choose specific models to cycle in af2-mpnn")
+
 
 args = parser.parse_args()
 
@@ -80,7 +81,7 @@ The script finds chainbreaks according to pyhisical distance between CA atoms.
 """ 
 rf_pdbs = glob.glob(os.path.join(rfdiff_out_path, '*.pdb'))
 for pdb in rf_pdbs:
-    os.system(f'{pymol_python_path} /home/nbizjak/projects/11_04_2023_rigid_connections/rechain.py {pdb} {pdb}')
+    os.system(f'{pymol_python_path} /home/nbizjak/prosculpt_dev/prosculpt/rechain.py {pdb} {pdb}')
 
 print("entering for loop of cycles")
 #CYCLES OF MPNN AND AF2
@@ -112,19 +113,20 @@ for cycle in range(args.af2_mpnn_cycles):
         os.makedirs(cycle_directory, exist_ok=True)
 
         af2_model_subdicts = glob.glob(os.path.join(af2_out_dir, "*"))
+
         #Access all af2 models and put them in one intemediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
         for model_subdict in af2_model_subdicts: 
             af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
             for i, af2_pdb in enumerate(af2_pdbs):
-                print(i, os.path.basename(af2_pdb))
+                
                 af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\d+)")
-                if str(af_model_num) in args.af2_models:
+                #if str(af_model_num) in args.af2_models:
                 # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
-                    if cycle == 1:
-                        rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\d+)")
+                if cycle == 1:
+                    rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\d+)")
                     #else:
                         #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
-                    shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
+                shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
                             #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
                             #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
                             #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
@@ -164,15 +166,6 @@ for cycle in range(args.af2_mpnn_cycles):
     os.makedirs(af2_out_dir, exist_ok=True)
 
     #_________ AF2 PREP____ Changing MPNN fasta for AF2_________
-    """
-    In order for AF2 to identifiy diffrent chains ":" must be placed between sequences
-    This is done by change_sequence_in_fasta
-
-    A specific RFdifff pdb can be provided (_0.pdb) since all RFdiff pdbs in a run have same chains
-    Only difference in the designed chain (chain A) which is not used by the function.
-    """
-    # TO DO fileter duplicates
-        #test ali so duplikati na nivoju mpnn
 
     fasta_dir = os.path.join(mpnn_out_dir, "seqs")
     fasta_files = sorted(glob.glob(os.path.join(fasta_dir, "*.fa"))) #glob ni sorted bo deafultu 
@@ -181,20 +174,36 @@ for cycle in range(args.af2_mpnn_cycles):
 
 
     #________________ RUN AF2______________
-    for fasta_file in fasta_files:
+    for fasta_file in fasta_files: # Number of fasta files corresponds to number of rfdiff models
         if cycle == 0:
-            model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
+            rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
         else:
-            model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "rf_", "(\d+)")
-        model_dir = os.path.join(af2_out_dir, f"model_{model_num}") #create name for af2 directory name: model_0
+            rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "rf_", "(\d+)") #get 0 from rf_0__model_1__cycle_2__itr_0__.pdb
+            af2_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "model_", "(\d+)") #get 1 from rf_0__model_1__cycle_2__itr_0__.pdb
+        model_dir = os.path.join(af2_out_dir, f"model_{rf_model_num}") #create name for af2 directory name: model_0
         prosculpt.change_sequence_in_fasta(rfdiff_pdb, fasta_file)
         if not os.path.exists(model_dir):
             os.makedirs(model_dir)
 
-        os.system(f'source /home/aljubetic/bin/set_up_AF2.3.sh && {python_path_af2} /home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch \
-                --model-type alphafold2_multimer_v3 \
-                --msa-mode single_sequence \
-                {fasta_file} {model_dir}')
+        model_order = args.model_order.split(",")
+        num_models = len(model_order) #model order "1,2,3" -> num of models = 3
+        if cycle == 0:
+            os.system(f'source /home/aljubetic/bin/set_up_AF2.3.sh && {python_path_af2} /home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch \
+                            --model-type alphafold2_multimer_v3 \
+                            --msa-mode single_sequence \
+                            {fasta_file} {model_dir} \
+                            --model-order {args.model_order} \
+                            --num-models {num_models}')
+        else: 
+            for model_number in model_order:
+                if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
+                    num_models = 1
+                    os.system(f'source /home/aljubetic/bin/set_up_AF2.3.sh && {python_path_af2} /home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch \
+                            --model-type alphafold2_multimer_v3 \
+                            --msa-mode single_sequence \
+                            {fasta_file} {model_dir} \
+                            --model-order {model_number} \
+                            --num-models {num_models}')
 
     # msa single sequence makes sense for designed (no sense to aligbn to natural proteins)
 
@@ -213,7 +222,7 @@ for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,.
 python_path = "/home/aljubetic/conda/envs/pyro/bin/python"
     
 csv_path = os.path.join(args.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
-os.system(f'{python_path} /home/nbizjak/projects/11_04_2023_rigid_connections/scoring_rg_charge_sap.py \
+os.system(f'{python_path} /home/nbizjak/prosculpt_dev/prosculpt/scoring_rg_charge_sap.py \
             {csv_path}')
     
 scores_rg_path = os.path.join(args.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
