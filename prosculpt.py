@@ -127,6 +127,9 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
 
         # Create a new name an copy te af2 model under that name into the output directory
         new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_{rmsd}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
+            #out -> 00 -> number of task
+            #rf -> 01 -> number of corresponding rf difff model
+            #af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag 
         new_pdb_path = os.path.join(dir_renamed_pdb, new_pdb_file)
 
         try:

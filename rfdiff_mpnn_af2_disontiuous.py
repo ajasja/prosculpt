@@ -187,7 +187,7 @@ for cycle in range(args.af2_mpnn_cycles):
 
         model_order = args.model_order.split(",")
         num_models = len(model_order) #model order "1,2,3" -> num of models = 3
-        if cycle == 0:
+        if cycle == 0: #have to run af2 differently in first cycle 
             os.system(f'source /home/aljubetic/bin/set_up_AF2.3.sh && {python_path_af2} /home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch \
                             --model-type alphafold2_multimer_v3 \
                             --msa-mode single_sequence \
