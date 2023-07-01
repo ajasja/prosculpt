@@ -123,15 +123,17 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         
         #tracebility
         output_num = os.path.basename(output_dir)
-        model_number = os.path.basename(os.path.normpath(model_i)) # Get the name of the last directory in the path normpath handles any trailing slashes
-        iteration_num =  get_token_value(json_filename, '_model_', "(\d*\.\d+|\d+\.?\d*)")
+        af2_model =  get_token_value(json_filename, '_model_', "(\d*\.\d+|\d+\.?\d*)")
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_{rmsd}__pae_{pae}__out_{output_num}__rf_{trb_num}__{model_number}__af_itr_{iteration_num}_.pdb"
+        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_{rmsd}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
+            #out -> 00 -> number of task
+            #rf -> 01 -> number of corresponding rf difff model
+            #af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag 
         new_pdb_path = os.path.join(dir_renamed_pdb, new_pdb_file)
 
         try:
-            shutil.copy2(model_pdb_file, os.path.join(dir_renamed_pdb, new_pdb_path))
+            shutil.copy2(model_pdb_file, new_pdb_path)
         except OSError as e:
             print(f"Error copying {model_pdb_file} to {new_pdb_file}: {e}")
 
@@ -143,7 +145,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         for pp in ppb.build_peptides(structure):
             seq += f":{pp.get_sequence().__str__()}"
 
-        print(seq)
+
 
         dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(\d*\.\d+|\d+\.?\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\d*\.\d+|\d+\.?\d*)"),
@@ -204,59 +206,25 @@ class NumpyInt64Encoder(json.JSONEncoder):
         if isinstance(obj, np.int64):
             return int(obj)
         return super(NumpyInt64Encoder, self).default(obj)
-"""
-def process_pdb_files(pdb_path: str, out_path: str):
+
+
+def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
     fixpos = {}
     pdb_files = Path(pdb_path).glob("*.pdb")
 
     for pdb_file in pdb_files:
-        pdb_basename = pdb_file.stem
-        trb_file = pdb_file.with_suffix(".trb")
-
-        if not trb_file.exists():
-            print(f"TRB file not found for {pdb_basename}. Skipping...")
-            continue
-
-        with open(trb_file, 'rb') as f:
-            trb_data = pickle.load(f)
         
-        if 'complex_con_hal_pdb_idx' in trb_data:
-            con_hal_idx = trb_data.get('complex_con_hal_pdb_idx', []) #con_hal_pdb_idx #complex_con_hal_pdb_idx
-        else:
-            con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
-        # Process con_hal_idx to extract chain ids and indices
-        fixed_res = {}
-        for chain, idx in con_hal_idx:
-            if chain not in fixed_res:
-                fixed_res[chain] = []
-            fixed_res[chain].append(idx)
-
-        fixpos[pdb_basename] = fixed_res
-    
-    #print("_________trb data____", trb_data)
-    
-    
-    # print("_________ fix pos_________", fixpos)
-    file_path = os.path.join(out_path, "fixed_pdbs.jsonl")
-    # Save the fixpos dict as a JSON file
-    with open(file_path, "w") as outfile:
-        json.dump(fixpos, outfile, cls=NumpyInt64Encoder)
-
-
-    return file_path
-"""
-
-def process_pdb_files(pdb_path: str, out_path: str):
-    fixpos = {}
-    pdb_files = Path(pdb_path).glob("*.pdb")
-
-    for pdb_file in pdb_files:
         pdb_basename = pdb_file.stem
         trb_file = pdb_file.with_suffix(".trb")
 
         if not trb_file.exists():
-            print(f"TRB file not found for {pdb_basename}. Skipping...")
-            continue
+            rf_model_num = get_token_value(os.path.basename(pdb_file), "rf_", "(\d+)")
+            trb_file = os.path.join(os.path.dirname(pdb_file), f"_{rf_model_num}.trb")
+            trb_file = trb_file.replace("2_1_cycle_directory", "1_rfdiff") 
+            print(f"TRB file not found for {pdb_basename}. CAUTION, using composed path")
+        
+        print(pdb_file, trb_file)
+            
 
         with open(trb_file, 'rb') as f:
             trb_data = pickle.load(f)
