@@ -32,6 +32,8 @@ parser.add_argument("--model_order", default = "1,2,3,4,5",type = str, help="Cho
 
 args = parser.parse_args()
 
+pdb_path = args.original_pdb_path # We don't want to have pdb hard-coded when calling prosculpt.rename_pdb_create_csv
+
 #_____________ GENERAL PREP ______________
 
 os.makedirs(args.output_dir, exist_ok=True) #exist_ok=True ensures the function does not raise an error if the directory already exists
