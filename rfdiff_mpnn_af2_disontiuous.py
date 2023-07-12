@@ -151,9 +151,8 @@ for cycle in range(args.af2_mpnn_cycles):
 
      
     #_____________ RUN ProteinMPNN_____________
-
-#If we want one sequence per model in later cycles add another if condition...
-    os.system(f'{python_path_mpnn} /home/tsatler/ProteinMPNN/protein_mpnn_run.py \
+    if cycle == 0: 
+        os.system(f'{python_path_mpnn} /home/tsatler/ProteinMPNN/protein_mpnn_run.py \
             --jsonl_path {path_for_parsed_chains} \
             --fixed_positions_jsonl {path_for_fixed_positions} \
             --chain_id_jsonl {path_for_assigned_chains} \
@@ -161,6 +160,17 @@ for cycle in range(args.af2_mpnn_cycles):
             --num_seq_per_target {args.num_seq_per_target_mpnn} \
             --sampling_temp "0.1" \
             --batch_size 1')
+    else:         
+        os.system(f'{python_path_mpnn} /home/tsatler/ProteinMPNN/protein_mpnn_run.py \
+            --jsonl_path {path_for_parsed_chains} \
+            --fixed_positions_jsonl {path_for_fixed_positions} \
+            --chain_id_jsonl {path_for_assigned_chains} \
+            --out_folder {mpnn_out_dir} \
+            --num_seq_per_target 1 \
+            --sampling_temp "0.1" \
+            --batch_size 1')
+#If we want one sequence per model in later cycles add another if condition...
+    
 
     # af2 directory must be empty
     shutil.rmtree(af2_out_dir)
