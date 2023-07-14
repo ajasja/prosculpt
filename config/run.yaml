@@ -23,3 +23,8 @@ defaults:
 # - Octahedral symmetry # call as octahedral
 # - Icosahedral symmetry # call as icosahedral
 #symmetry: c2
+
+inference:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+potentials:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null

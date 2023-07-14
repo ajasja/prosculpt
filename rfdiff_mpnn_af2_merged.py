@@ -68,13 +68,15 @@ def runRFdiff(cfg):
           inference.output_prefix={cfg.rfdiff_out_path} \
           inference.input_pdb={cfg.pdb_path} \
           'contigmap.contigs={cfg.contig}' \
-          inference.num_designs={cfg.num_designs_rfdiff}")
+          inference.num_designs={cfg.num_designs_rfdiff} \
+          -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}")
     
     os.system(f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
           inference.output_prefix={cfg.rfdiff_out_path} \
           inference.input_pdb={cfg.pdb_path} \
           'contigmap.contigs={cfg.contig}' \
-          inference.num_designs={cfg.num_designs_rfdiff}")
+          inference.num_designs={cfg.num_designs_rfdiff} \
+          -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}")
     
     log.info("After running RFdiffusion")
 
@@ -243,6 +245,32 @@ def finalOperations(cfg):
     os.remove(scores_rg_path)
 
 
+def passConfigToRfdiff(cfg):
+    """
+    This function creates a new .yaml file with "inference", "potentials" etc. read from run.yaml. Also add defaults: - base \n - _self_
+    Then, when calling RfDiff, add -cd [folder_with_this_created_config] -cn [name_of_created_config_file]
+    """
+    # Keep in mind that if passing through cmd, these parameters need to have ++ in front of them.
+
+    def keepOnlyGroups(pair):
+        groupsToPassToRfDiff = ["inference", "potentials"] # add addditional groups that should be passed to RfDiff
+        key, value = pair
+        if key not in groupsToPassToRfDiff:
+            return False
+        else:
+            return True
+
+
+    new_cfg = dict(filter(keepOnlyGroups, cfg.items()))
+    new_cfg["defaults"] = ["base", "_self_"]
+    log.info(f"Saving this config for RfDiff: {OmegaConf.to_yaml(new_cfg)}")
+    # save to file
+    with open(os.path.join(cfg.output_dir, "prosculpt2rfdiff.yaml"), "w") as f:
+        f.write(OmegaConf.to_yaml(new_cfg))
+
+
+    pass
+
 @hydra.main(version_base=None, config_path="config", config_name="run")
 def meinApp(cfg: DictConfig) -> None:
     log.info("The following config was passed: ")
@@ -252,8 +280,11 @@ def meinApp(cfg: DictConfig) -> None:
 
     log.info(f"Now in Hydra, cwd = {os.getcwd()}")
 
-    
+    ## In order to pass the config to Rfdiff, create a new .yaml file with "inference", "potentials" etc. read from run.yaml. Also add defaults: - base \n - _self_
+    # Then, when calling RfDiff, add -cd [folder_with_this_created_config] -cn [name_of_created_config_file]
+
     generalPrep(cfg)
+    passConfigToRfdiff(cfg)
     runRFdiff(cfg)
     rechainRFdiffPDBs(cfg)
     do_cycling(cfg)
