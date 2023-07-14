@@ -34,7 +34,6 @@ def generalPrep(cfg):
 
         cfg.fasta_dir = os.path.join(cfg.mpnn_out_dir, "seqs")
         cfg.rfdiff_pdb = os.path.join(cfg.rfdiff_out_path, '_0.pdb')
-        python_path_af2 = "/home/aljubetic/AF2/CF2.3/colabfold-conda/bin/python" # source /home/aljubetic/bin/set_up_AF2.3.sh
 
 
     
@@ -150,6 +149,7 @@ def do_cycling(cfg):
                 --chain_list='{cfg.chains_to_design}'")
 
         fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
+        # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
         log.info(f"Fixed positions path: {fixed_pos_path}")
 
         #_____________ RUN ProteinMPNN_____________
@@ -244,6 +244,7 @@ def meinApp(cfg: DictConfig) -> None:
 
     log.info(f"Now in Hydra, cwd = {os.getcwd()}")
 
+    # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(abeceda[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
     if cfg.chains_to_design != "A":
         log.warn("chains_to_design is set to something else than A. Please note that RfDiff sometimes renames all chains to A. Please check the log for potential errors.")
         log.info(f"Chains to design: {cfg.chains_to_design}")

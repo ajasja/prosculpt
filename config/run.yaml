@@ -13,3 +13,13 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 defaults:
   - installation
   - _self_
+
+
+# Symmetry to sample
+# Available symmetries:
+# - Cyclic symmetry (C_n) # call as c5
+# - Dihedral symmetry (D_n) # call as d5
+# - Tetrahedral symmetry # call as tetrahedral
+# - Octahedral symmetry # call as octahedral
+# - Icosahedral symmetry # call as icosahedral
+#symmetry: c2

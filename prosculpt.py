@@ -224,7 +224,16 @@ def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
             print(f"TRB file not found for {pdb_basename}. CAUTION, using composed path")
         
         print(pdb_file, trb_file)
-            
+
+        # We need to renumber fixed resids: each chain should start with 1 
+        chainResidOffset = {}
+        parser = PDBParser()
+        chainsInPdb = parser.get_structure("protein", pdb_file).get_chains()
+        for let_chain in chainsInPdb:
+            chainLetter = let_chain.get_id()
+            startingNo = int(next(let_chain.get_residues()).get_id()[1])
+            chainResidOffset.setdefault(chainLetter, startingNo-1)
+                    
 
         with open(trb_file, 'rb') as f:
             trb_data = pickle.load(f)
@@ -236,14 +245,11 @@ def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
         # Process con_hal_idx to extract chain ids and indices
         fixed_res = {}
         
+        # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
         for chain, idx in con_hal_idx:
-            if chain not in fixed_res and chain == "A":
-                fixed_res[chain] = []
-            elif chain == "A":
-                fixed_res[chain].append(idx)
-            elif chain not in fixed_res and chain != "A":
-                 fixed_res[chain] = []
-                 fixed_res[chain].append(fixed_res["A"])
+            # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
+            fixed_res.setdefault(chain, []).append(idx - chainResidOffset[chain]) 
+            # RfDiff outputs multiple chains if contig has /0 (chain break)
             
         fixpos[pdb_basename] = fixed_res
     
@@ -308,6 +314,7 @@ def read_fasta_file(fasta_file):
     return sequences
 
 def change_sequence_in_fasta (pdb_file, mpnn_fasta):
+        """
             #function adds : for chainbraks and chain sequences of all other chains
         sequences_all_chains = get_chains_seq(pdb_file)
         sequences_other_chains = sequences_all_chains[1:] 
@@ -323,6 +330,16 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
 
         with open(mpnn_fasta, "w") as output:
                 SeqIO.write(sequences_mpnn, output, "fasta")
+        """
+        # Read text file, then replace all slashes with colons
+        with open(mpnn_fasta, "r+") as f:
+            text = f.read()
+            text = text.replace("/", ":")
+            f.seek(0)
+            f.write(text)
+            f.truncate()
+        # I doubt we need to manually add "other" chains -- according to tutorials/examples, contig should always specify all chains (even if unchanged): [A1-30/6-6/B1-30/0 C1-100/0 D1-25/0 E1-123]
+
 
 def match_linker_length(trb_path):
     import re
