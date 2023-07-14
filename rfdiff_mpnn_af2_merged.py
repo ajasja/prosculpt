@@ -35,6 +35,14 @@ def generalPrep(cfg):
         cfg.fasta_dir = os.path.join(cfg.mpnn_out_dir, "seqs")
         cfg.rfdiff_pdb = os.path.join(cfg.rfdiff_out_path, '_0.pdb')
 
+        # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(abeceda[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
+        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains?
+        if cfg.chains_to_design == None:
+            breaks = cfg.contig.count("/0 ") + 1
+            log.info(f"Chains to design (according to contig chain breaks): {' '.join(abeceda[:breaks])}")
+            cfg.chains_to_design = ' '.join(abeceda[:breaks])
+
+
 
     
     for directory in [cfg.rfdiff_out_dir, cfg.mpnn_out_dir, cfg.af2_out_dir]:
@@ -244,13 +252,6 @@ def meinApp(cfg: DictConfig) -> None:
 
     log.info(f"Now in Hydra, cwd = {os.getcwd()}")
 
-    # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(abeceda[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
-    if cfg.chains_to_design != "A":
-        log.warn("chains_to_design is set to something else than A. Please note that RfDiff sometimes renames all chains to A. Please check the log for potential errors.")
-        log.info(f"Chains to design: {cfg.chains_to_design}")
-    else:
-        log.info("Chains to design: A")
-        log.info(cfg.chains_to_design)
     
     generalPrep(cfg)
     runRFdiff(cfg)

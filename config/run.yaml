@@ -4,7 +4,7 @@ output_dir: /home/nbizjak/prosculpt_dev/outputs/deafult_output/ # Path to output
 contig: "[C33-60/5-7/A1-30/0 B61-120]" # Contig to design
 num_designs_rfdiff: 1 # Number of designs to generate with RFdiffusion
 num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
-chains_to_design: A # All chains of protein even if not redesigned (except if doing binder design)
+chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
 af2_mpnn_cycles: 1 # Not used yet?
 model_order: 1,2,3,4,5 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
