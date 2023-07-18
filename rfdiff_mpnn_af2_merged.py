@@ -202,7 +202,7 @@ def do_cycling(cfg):
             if not os.path.exists(model_dir):
                 os.makedirs(model_dir)
 
-            model_order = cfg.model_order.split(",")
+            model_order = str(cfg.model_order).split(",") # If only one number is passed, Hydra converts it to int
             num_models = len(model_order) #model order "1,2,3" -> num of models = 3
             if cycle == 0: #have to run af2 differently in first cycle 
                 os.system(f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
