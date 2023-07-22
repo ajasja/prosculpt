@@ -253,7 +253,7 @@ def passConfigToRfdiff(cfg):
     # Keep in mind that if passing through cmd, these parameters need to have ++ in front of them.
 
     def keepOnlyGroups(pair):
-        groupsToPassToRfDiff = ["inference", "potentials"] # add addditional groups that should be passed to RfDiff
+        groupsToPassToRfDiff = cfg.pass_to_rfdiff # groups that should be passed to RfDiff
         key, value = pair
         if key not in groupsToPassToRfDiff:
             return False
