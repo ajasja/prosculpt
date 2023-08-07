@@ -272,7 +272,7 @@ def passConfigToRfdiff(cfg):
     pass
 
 @hydra.main(version_base=None, config_path="config", config_name="run")
-def meinApp(cfg: DictConfig) -> None:
+def prosculptApp(cfg: DictConfig) -> None:
     log.info("The following config was passed: ")
     log.info(cfg)
     log.info("Hydrić")
@@ -297,4 +297,4 @@ if __name__ == "__main__":
     a = pathlib.Path(__file__).resolve().parent
     print(a)
     print(f"Before runnning MYapp, cwd = {os.getcwd()}")
-    meinApp()
+    prosculptApp()
