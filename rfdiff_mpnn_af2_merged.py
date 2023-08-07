@@ -36,7 +36,7 @@ def generalPrep(cfg):
         cfg.rfdiff_pdb = os.path.join(cfg.rfdiff_out_path, '_0.pdb')
 
         # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(abeceda[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
-        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains?
+        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55
         if cfg.chains_to_design == None:
             breaks = cfg.contig.count("/0 ") + 1
             log.info(f"Chains to design (according to contig chain breaks): {' '.join(abeceda[:breaks])}")
@@ -164,7 +164,7 @@ def do_cycling(cfg):
 
         #_____________ RUN ProteinMPNN_____________
         # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
-        log.info(f'{cfg.python_path_mpnn} /home/tsatler/ProteinMPNN/protein_mpnn_run.py \
+        log.info(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
@@ -173,7 +173,7 @@ def do_cycling(cfg):
             --sampling_temp "0.1" \
             --batch_size 1')
 
-        os.system(f'{cfg.python_path_mpnn} /home/tsatler/ProteinMPNN/protein_mpnn_run.py \
+        os.system(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
