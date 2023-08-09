@@ -30,6 +30,12 @@ To run Prosculpt on Slurm, use the `slurm_runner.py` with the following position
 
 If you want to run Prosculpt locally, run the `rfdiff_mpnn_af2_merged.py` directly and modify args as needed.
 
+### Example: unconditional monomer
+Let's use slurm_runner to create 1 task named "Unconditional", set output directory and a simple contig that will generate 150 residues.
+```bash
+python slurm_runner.py 1 Unconditional output_dir="out/uncond" "contig=\[150-150\]"
+```
+
 ### Example: nickel symmetric motif
 ```bash
 python slurm_runner.py 2 testniNikelj output_dir=ZZtest/IZ_PAJPLAJNA/nikelj "contig=\[50/A2-4/50/0 50/A7-9/50/0 50/A12-14/50/0 50/A17-19/50/0\]" pdb_path="/home/tsatler/RFdif/RFdiffusion/examples/input_pdbs/nickel_symmetric_motif.pdb" num_designs_rfdiff=1 num_seq_per_target_mpnn=1 af2_mpnn_cycles=1 ++inference.symmetry="C4" ++inference.num_designs=2 '++potentials.guiding_potentials=["type:olig_contacts,weight_intra:1,weight_inter:0.06"]' ++potentials.olig_intra_all=True ++potentials.olig_inter_all=True ++potentials.guide_scale=2 ++potentials.guide_decay="quadratic" ++inference.ckpt_override_path=/home/tsatler/RFdif/RFdiffusion/models/Base_epoch8_ckpt.pt
