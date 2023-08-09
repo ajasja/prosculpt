@@ -20,7 +20,6 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
         with open(trb_path, 'rb') as f:
                 trb_dict = pickle.load(f)
         parser = PDBParser(PERMISSIVE = 1)
-        structure_control = parser.get_structure("control", starting_pdb)
         structure_designed = parser.get_structure("designed", af2_pdb)
 
         # Get different data from trb file depending on the fact if designing a monomer (one chain) or heteromer
@@ -35,9 +34,6 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
             residue_data_control = trb_dict['con_ref_idx0']
             residue_data_designed = trb_dict['con_hal_idx0']
 
-        control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
-        control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
-        #printed_ref = [res.get_resname() for res in control_res]
 
         designed_res = list(structure_designed.get_residues())
         designed_res = [designed_res[ind]['CA'] for ind in residue_data_designed]
@@ -51,21 +47,27 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
         linker_length = len(linker_indeces)
 
 
-        superimposer = Superimposer()
-        superimposer.set_atoms(control_res, designed_res)
-        
-
-        superimposer.apply(structure_designed.get_atoms())
-        rmsd = superimposer.rms
         io=PDBIO()
         io.set_structure(structure_designed)
         io.save("af2_pdb_2.pdb")
+
+        rmsd = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
+        if starting_pdb:
+            structure_control = parser.get_structure("control", starting_pdb)
+            control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
+            control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
+
+            superimposer = Superimposer()
+            superimposer.set_atoms(control_res, designed_res)
+            superimposer.apply(structure_designed.get_atoms())
+            rmsd = superimposer.rms
+
 
         return (round(rmsd, 1), linker_length)
 
 
 
-def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)"
+def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # (-?\d*\.\d+|-?\d+\.?\d*) to allow negative RMSD (-1 = undefined)
     """returns value next to token"""
     import re
     regexp = re.compile(f'{token}{regular_expression}')
@@ -118,7 +120,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         #Extract relevant data. Files used: json file of specific af2 model, specific af2 pdb,  trb file of rfdiff model (1 for all AF2 models from same rfdiff pdb)  
         plddt_list = params['plddt']
         plddt = int(np.mean(plddt_list))
-        rmsd, linker_length	= calculate_RMSD_linker_len (trb_file, model_pdb_file, control_structure_path)
+        rmsd, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path)
         pae = round((np.mean(params['pae'])), 2)
         
         #tracebility
@@ -149,7 +151,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
 
         dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(\d*\.\d+|\d+\.?\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\d*\.\d+|\d+\.?\d*)"),
-                'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(\d*\.\d+|\d+\.?\d*)"),
+                'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\d*\.\d+|-?\d+\.?\d*)"),
                 'pae': get_token_value(new_pdb_file, '__pae_', "(\d*\.\d+|\d+\.?\d*)"),
                 'model_path': new_pdb_path,
                 'sequence' : seq[1:],
