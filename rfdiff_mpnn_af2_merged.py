@@ -290,7 +290,6 @@ def prosculptApp(cfg: DictConfig) -> None:
     do_cycling(cfg)
     finalOperations(cfg)
 
-#TODO: Actually merge with _simmetry
 
 if __name__ == "__main__":
     print("File: ", __file__)
