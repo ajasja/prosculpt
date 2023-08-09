@@ -1,5 +1,5 @@
 # Config for the current run
-pdb_path: /home/nbizjak/projects/11_04_2023_rigid_connections/inputs_for_rfdiff/mALb8-antiA.pdb # Path to input PDB file
+pdb_path: null # Path to input PDB file || null when building unconditionally
 output_dir: /home/nbizjak/prosculpt_dev/outputs/deafult_output/ # Path to output directory
 contig: "[C33-60/5-7/A1-30/0 B61-120]" # Contig to design
 num_designs_rfdiff: 1 # Number of designs to generate with RFdiffusion

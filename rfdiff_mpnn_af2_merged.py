@@ -66,14 +66,12 @@ def runRFdiff(cfg):
 
     log.info(f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
           inference.output_prefix={cfg.rfdiff_out_path} \
-          inference.input_pdb={cfg.pdb_path} \
           'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
           -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}")
     
     os.system(f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
           inference.output_prefix={cfg.rfdiff_out_path} \
-          inference.input_pdb={cfg.pdb_path} \
           'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
           -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}")
@@ -263,6 +261,9 @@ def passConfigToRfdiff(cfg):
 
     new_cfg = dict(filter(keepOnlyGroups, cfg.items()))
     new_cfg["defaults"] = ["base", "_self_"]
+    with open_dict(new_cfg["inference"]):
+        new_cfg["inference"]["input_pdb"] = cfg.pdb_path
+
     log.info(f"Saving this config for RfDiff: {OmegaConf.to_yaml(new_cfg)}")
     # save to file
     with open(os.path.join(cfg.output_dir, "prosculpt2rfdiff.yaml"), "w") as f:
