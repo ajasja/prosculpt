@@ -237,13 +237,20 @@ def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
 
         with open(trb_file, 'rb') as f:
             trb_data = pickle.load(f)
+
+        # fixed_res should never be empty, otherwise ProteinMPNN will throw a KeyError fixed_position_dict[b['name']][letter]
+        # We need to set blank fixed_res for each generated chain (based on contig).
+        contig = trb_data["config"]["contigmap"]["contigs"][0]
+        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        breaks = contig.count("/0 ") + 1
+        fixed_res = dict(zip(abeceda, [[]]*breaks))
+        print(f"Fixed res (according to contig chain breaks): {fixed_res}")
         
         if 'complex_con_hal_pdb_idx' in trb_data:
             con_hal_idx = trb_data.get('complex_con_hal_pdb_idx', []) #con_hal_pdb_idx #complex_con_hal_pdb_idx
         else:
             con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
         # Process con_hal_idx to extract chain ids and indices
-        fixed_res = {}
         
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
         for chain, idx in con_hal_idx:
