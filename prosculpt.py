@@ -233,9 +233,10 @@ def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
         chainsInPdb = parser.get_structure("protein", pdb_file).get_chains()
         for let_chain in chainsInPdb:
             chainLetter = let_chain.get_id()
-            startingNo = int(next(let_chain.get_residues()).get_id()[1])
+            let_resids = let_chain.get_residues()
+            startingNo = int(next(let_resids).get_id()[1])
             chainResidOffset.setdefault(chainLetter, startingNo-1)
-                    
+        
 
         with open(trb_file, 'rb') as f:
             trb_data = pickle.load(f)
@@ -245,7 +246,7 @@ def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
         contig = trb_data["config"]["contigmap"]["contigs"][0]
         abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
         breaks = contig.count("/0 ") + 1
-        fixed_res = dict(zip(abeceda, [[]]*breaks))
+        fixed_res = dict(zip(abeceda, [[] for _ in range(breaks)]))
         print(f"Fixed res (according to contig chain breaks): {fixed_res}")
         
         if 'complex_con_hal_pdb_idx' in trb_data:
@@ -257,8 +258,10 @@ def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
         for chain, idx in con_hal_idx:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
-            fixed_res.setdefault(chain, []).append(idx - chainResidOffset[chain]) 
+            fixed_res.setdefault(chain, list()).append(idx - chainResidOffset[chain]) 
             # RfDiff outputs multiple chains if contig has /0 (chain break)
+
+        print(f"Fixed res: ${fixed_res}")
             
         fixpos[pdb_basename] = fixed_res
     
