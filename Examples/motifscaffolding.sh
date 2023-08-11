@@ -1,0 +1,1 @@
+python slurm_runner.py 1 Motifscaffolding output_dir="Examples_out/motifscaffolding" -cd Examples -cn motifscaffolding
