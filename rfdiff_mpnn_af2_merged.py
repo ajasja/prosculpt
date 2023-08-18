@@ -35,6 +35,11 @@ def generalPrep(cfg):
         cfg.fasta_dir = os.path.join(cfg.mpnn_out_dir, "seqs")
         cfg.rfdiff_pdb = os.path.join(cfg.rfdiff_out_path, '_0.pdb')
 
+        if cfg.get("skipRfDiff", False):
+            # We only need to redesign the chains specified in toChange
+            cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.toChange}))
+            log.info(f"Skipping RFdiff, only redesigning chains specified in toChange: {cfg.chains_to_design}")
+
         # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(abeceda[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
         abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55
         if cfg.chains_to_design == None:
@@ -156,7 +161,7 @@ def do_cycling(cfg):
                 --output_path={cfg.path_for_assigned_chains} \
                 --chain_list='{cfg.chains_to_design}'")
 
-        fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
+        fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
         # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
         log.info(f"Fixed positions path: {fixed_pos_path}")
 
@@ -285,9 +290,16 @@ def prosculptApp(cfg: DictConfig) -> None:
     # Then, when calling RfDiff, add -cd [folder_with_this_created_config] -cn [name_of_created_config_file]
 
     generalPrep(cfg)
-    passConfigToRfdiff(cfg)
-    runRFdiff(cfg)
-    rechainRFdiffPDBs(cfg)
+
+    if not cfg.get("skipRfDiff", False):
+        passConfigToRfdiff(cfg)
+        runRFdiff(cfg)
+        rechainRFdiffPDBs(cfg)
+    else:
+        print("*** Skipping RfDiff ***")
+        # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
+        shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
+
     do_cycling(cfg)
     finalOperations(cfg)
 
