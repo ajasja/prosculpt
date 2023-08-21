@@ -173,7 +173,7 @@ def do_cycling(cfg):
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            --sampling_temp "0.1" \
+            {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""}\
             --batch_size 1')
 
         os.system(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
@@ -182,7 +182,7 @@ def do_cycling(cfg):
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            --sampling_temp "0.1" \
+            {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""}\
             --batch_size 1')
 
         log.info("Preparing to empty af2 directory.")
