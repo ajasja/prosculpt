@@ -30,5 +30,5 @@ with open(out_command_file, 'w') as f:
         print(line, file=f)
 
 print(f"Slurm command can be found in {out_command_file}")
-os.system(f"export GROUP_SIZE=1; sbatch --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 -J {task_name}  -a 1-{n} wrapper_slurm_array_job_group.sh {out_command_file}")
+os.system(f"export GROUP_SIZE=1; sbatch --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} wrapper_slurm_array_job_group.sh {out_command_file}")
 print(f"Job {task_name} has been submitted to slurm".center(WIDTH, SYMBOL))
