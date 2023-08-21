@@ -100,6 +100,12 @@ def rechainRFdiffPDBs(cfg):
         os.system(f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} {pdb} {pdb} --chain_break_cutoff_A {cfg.chain_break_cutoff_A}')
     log.info("After rechaining")
 
+def passToMpnn(cfg):
+    dodatniArgumenti = ""
+    for k, v in cfg.get("pass_to_mpnn", {}).items():
+        dodatniArgumenti += f" {k} {v}"
+    return(dodatniArgumenti)
+
 def do_cycling(cfg):
     log.info("Running do_cycling")
     log.info("Entering the spinning loop of cycles")
@@ -173,7 +179,8 @@ def do_cycling(cfg):
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""}\
+            {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""} \
+            {passToMpnn(cfg)} \
             --batch_size 1')
 
         os.system(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
@@ -182,7 +189,8 @@ def do_cycling(cfg):
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""}\
+            {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""} \
+            {passToMpnn(cfg)} \
             --batch_size 1')
 
         log.info("Preparing to empty af2 directory.")
