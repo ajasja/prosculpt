@@ -84,6 +84,10 @@ A note on outputs: when running on a cluster for each task a separate `final_out
 ## Passing additional arguments to ProteinMPNN
 Add parameters as required by ProteinMPNN to the `pass_to_mpnn` group in run.yaml (including trailing `--`).
 
+## Passing additional arguments to AlphaFold
+Add parameters as required by AlphaFold to the `pass_to_af` group in run.yaml (including trailing `--`). Switches should be passed with an empty string value, like this `--templates: ""`. 
+
+
 ## Examples for contigs
 Contigs are the most important input (for now, guiding potentials are another input to be explored in the future). Here are a few guidelines to ease the start of your projects.
 - Ranges starting with letters will be taken from the input.pdb

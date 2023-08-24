@@ -100,9 +100,9 @@ def rechainRFdiffPDBs(cfg):
         os.system(f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} {pdb} {pdb} --chain_break_cutoff_A {cfg.chain_break_cutoff_A}')
     log.info("After rechaining")
 
-def passToMpnn(cfg):
+def parseAdditionalArgs(cfg, group):
     dodatniArgumenti = ""
-    for k, v in cfg.get("pass_to_mpnn", {}).items():
+    for k, v in cfg.get(group, {}).items():
         dodatniArgumenti += f" {k} {v}"
     return(dodatniArgumenti)
 
@@ -180,7 +180,7 @@ def do_cycling(cfg):
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
             {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""} \
-            {passToMpnn(cfg)} \
+            {parseAdditionalArgs(cfg, "pass_to_mpnn")} \
             --batch_size 1')
 
         os.system(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
@@ -190,7 +190,7 @@ def do_cycling(cfg):
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
             {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""} \
-            {passToMpnn(cfg)} \
+            {parseAdditionalArgs(cfg, "pass_to_mpnn")} \
             --batch_size 1')
 
         log.info("Preparing to empty af2 directory.")
@@ -221,6 +221,7 @@ def do_cycling(cfg):
                                 --msa-mode single_sequence \
                                 {fasta_file} {model_dir} \
                                 --model-order {cfg.model_order} \
+                                {parseAdditionalArgs(cfg, "pass_to_af")} \
                                 --num-models {num_models}')
             else: 
                 for model_number in model_order:
@@ -231,6 +232,7 @@ def do_cycling(cfg):
                                 --msa-mode single_sequence \
                                 {fasta_file} {model_dir} \
                                 --model-order {model_number} \
+                                {parseAdditionalArgs(cfg, "pass_to_af")} \
                                 --num-models {num_models}')
 
         # msa single sequence makes sense for designed (no sense to aligbn to natural proteins)

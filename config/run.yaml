@@ -25,6 +25,10 @@ pass_to_mpnn: # additional arguments and values to pass to ProteinMPNN
   --omit_AAs: "ACDEFGHIKLMNPQRSTVWY"
   --backbone_noise: 0.9 # See ProteinMPNN documentation for more arguments
 
+pass_to_af: # additional arguments and values to pass to AlphaFold
+  --templates: ""
+  --custom-template-path: /home/user/mhc/
+
 
 # Symmetry to sample
 # Available symmetries:
