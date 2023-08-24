@@ -102,7 +102,7 @@ def rechainRFdiffPDBs(cfg):
 
 def parseAdditionalArgs(cfg, group):
     dodatniArgumenti = ""
-    for k, v in cfg.get(group, {}).items():
+    for k, v in (cfg.get(group, {}) or {}).items(): # or to allow for empty groups
         dodatniArgumenti += f" {k} {v}"
     return(dodatniArgumenti)
 
