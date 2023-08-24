@@ -36,9 +36,9 @@ def generalPrep(cfg):
         cfg.rfdiff_pdb = os.path.join(cfg.rfdiff_out_path, '_0.pdb')
 
         if cfg.get("skipRfDiff", False):
-            # We only need to redesign the chains specified in toChange
-            cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.toChange}))
-            log.info(f"Skipping RFdiff, only redesigning chains specified in toChange: {cfg.chains_to_design}")
+            # We only need to redesign the chains specified in designable_residues
+            cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.designable_residues}))
+            log.info(f"Skipping RFdiff, only redesigning chains specified in designable_residues: {cfg.chains_to_design}")
 
         # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(abeceda[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
         abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55

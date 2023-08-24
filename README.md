@@ -61,7 +61,7 @@ python slurm_runner.py 2 helix output_dir=some/dir "contig=\[C33-60/4-7/A1-30/0 
 ## Skipping RfDiff
 Sometimes you may want to skip RfDiff and only pass the pdb to ProteinMPNN and AF with a few residues to change. 
 
-Add `skipRfDiff: True` and `toChange: [A8, A9, A10, A13, A85, B, C]` to the yaml config, where toChange contains the residues you want to change **and** all chain letters you want in your output pdb.
+Add `skipRfDiff: True` and `designable_residues: [A8, A9, A10, A13, A85, B, C]` to the yaml config, where designable_residues contains the residues you want to change **and** all chain letters you want in your output pdb.
 
 In order to actually produce diverse results, `--sampling_temp` and `--backbone_noise` passed to ProteinMPNN are increased to `0.3` and `1`, respectively.  
 _TODO: Make this configurable (maybe a similar trick to how we create a config file for RfDiff, pass it to ProteinMPNN)._

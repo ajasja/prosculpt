@@ -215,7 +215,7 @@ class NumpyInt64Encoder(json.JSONEncoder):
         return super(NumpyInt64Encoder, self).default(obj)
 
 
-def getChainResidOffsets(pdb_file, toChange):
+def getChainResidOffsets(pdb_file, designable_residues):
     chainResidOffset = {}
     con_hal_idx = []
 
@@ -226,18 +226,18 @@ def getChainResidOffsets(pdb_file, toChange):
         let_resids = let_chain.get_residues()
         startingNo = int(next(let_resids).get_id()[1])
         chainResidOffset.setdefault(chainLetter, startingNo-1)
-        if toChange:
+        if designable_residues:
             # We do this here to avoid PDBparser overhead
-            print("There is toChange. [inside getChainResidOffsets]")
+            print("There is designable_residues. [inside getChainResidOffsets]")
             for r in let_chain.get_residues():
                 # aa has id " ". Heteroatoms have id "W" for water etc. – we don't want them in the PDB (they count as residues and ProteinMPNN throws an out-of-range error)
-                if r.get_id()[0].strip() == "" and f"{chainLetter}{r.get_id()[1]}" not in toChange:
+                if r.get_id()[0].strip() == "" and f"{chainLetter}{r.get_id()[1]}" not in designable_residues:
                     con_hal_idx.append((chainLetter, r.get_id()[1]))
     return chainResidOffset, con_hal_idx
 
 def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
-    skipRfDiff = cfg.get("skipRfDiff", False) # Once updated to Py3.8, use `(skipRfDiff := cfg.get("skipRfDiff", False) and toChange = cfg.get("toChange", None)`
-    toChange = cfg.get("toChange", None)
+    skipRfDiff = cfg.get("skipRfDiff", False) # Once updated to Py3.8, use `(skipRfDiff := cfg.get("skipRfDiff", False) and designable_residues = cfg.get("designable_residues", None)`
+    designable_residues = cfg.get("designable_residues", None)
 
     fixpos = {}
     pdb_files = Path(pdb_path).glob("*.pdb")
@@ -249,7 +249,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
         fixed_res = {}
 
         # We need to renumber fixed resids: each chain should start with 1 
-        chainResidOffset, con_hal_idx = getChainResidOffsets(pdb_file, toChange)
+        chainResidOffset, con_hal_idx = getChainResidOffsets(pdb_file, designable_residues)
 
         if not skipRfDiff:
             trb_file = pdb_file.with_suffix(".trb")
