@@ -1,52 +1,102 @@
 # prosculpt
 Protein design and sculpting using Rosetta and Deep learning methods (RFDiff and Alphafold2)
 ## Description 
-The script `rfdiff_mpnn_af2_discontinuous.py` runs a pipeline to automate the processes of generating protein structures with RFdiffusion, sequence generation with ProteinMPNN, and folding and evaluation with AF2 and Rosetta. Specifically, the script uses motif scaffolding to generate structures (see [RFdiffusion github repository](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md])).
+The script `rfdiff_mpnn_af2_merged.py` runs a pipeline to automate the processes of generating protein structures with RFdiffusion, sequence generation with ProteinMPNN, and folding and evaluation with AF2 and Rosetta. Specifically, the script uses motif scaffolding to generate structures (see [RFdiffusion github repository](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md)).
 
 The main steps are as follows:
 1. The main inputs are a protein PDB file and a string that specifies how to generate the new structure around the original protein (which parts to keep, etc.) - this string is called a contig. 
-2. The RFdiffusion module generates new protein structures based on the contig provided.
-4. Generated PDB files are preprocessed using helper scripts and ProteinMPNN generates sequences for these structures.
-5. Sequences are prepared for the AF2, which folds them into structures
-6. Additional evaluation parameters are calculated for these structures using a separate script with Rosetta
+2. The RFdiffusion module generates new protein structures (backbone atoms only) based on the contig provided.
+4. Generated PDB files are preprocessed using helper scripts and ProteinMPNN generates sequences (aminoacid residues) for these structures.
+5. Sequences are prepared for the AF2, which folds them into structures.
+6. Additional evaluation parameters are calculated for these structures using a separate script with Rosetta.
 7. The final output is a CSV file containing AF2 structure path, evaluation parameters etc.
 
 ## Requirements  
-The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the script. Additionally, os, glob, argparse, re, and shutil packages should be installed.  
+The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionally, os, glob, re, and shutil packages should be installed (these are all part of Python Standard Library and are pre-installed), as well as biopython, hydra-core, pandas.  
+
+# Using the new _merged code
 ## Installation
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install biopython hydra-core pandas
+```
 
-  
-## Running the script locally
-To run the script, navigate to the directory containing the script and run the basic command in the command line (adjusted for your project):  
-`python rfdiff_mpnn_af2_disontiuous.py --original_pdb_path /home/.../input_protein.pdb --output_dir /home/.../outputs/ --contig '[C33-60/4-7/A1-30/0 B61-120]' --num_designs_rfdiff 15 --num_seq_per_target_mpnn 5 --chains_to_design_mpnn 'A' `
+## Usage
+To run Prosculpt on Slurm, use the `slurm_runner.py` with the following positional arguments:
+* `number of concurrent jobs to run`
+* `slurm job name`
+* `any arguments to be passed to the _merged script` (output_dir, contig, ++additionalArguments ...)
 
-Inputs: 
+If you want to run Prosculpt locally, run the `rfdiff_mpnn_af2_merged.py` directly and modify args as needed.
+
+### Example: unconditional monomer
+Let's use slurm_runner to create 1 task named "Unconditional", set output directory and a simple contig that will generate 150 residues.
+```bash
+python slurm_runner.py 1 Unconditional output_dir="out/uncond" "contig=\[150-150\]"
+```
+
+### Example: nickel symmetric motif
+```bash
+python slurm_runner.py 2 testniNikelj output_dir=ZZtest/IZ_PAJPLAJNA/nikelj "contig=\[50/A2-4/50/0 50/A7-9/50/0 50/A12-14/50/0 50/A17-19/50/0\]" pdb_path="/home/tsatler/RFdif/RFdiffusion/examples/input_pdbs/nickel_symmetric_motif.pdb" num_designs_rfdiff=1 num_seq_per_target_mpnn=1 af2_mpnn_cycles=1 ++inference.symmetry="C4" ++inference.num_designs=2 '++potentials.guiding_potentials=["type:olig_contacts,weight_intra:1,weight_inter:0.06"]' ++potentials.olig_intra_all=True ++potentials.olig_inter_all=True ++potentials.guide_scale=2 ++potentials.guide_decay="quadratic" ++inference.ckpt_override_path=/home/tsatler/RFdif/RFdiffusion/models/Base_epoch8_ckpt.pt
+```
+
+### Passing additional parameters
+Please note that the arguments to be passed forward to RfDiff need to be prefixed with `++`.
+
+## Running using config files
+You can use `run.yaml` config file for all the arguments (add `-cd directoryOfYourConfigFile -cn configFilenameWithoutExtension` as **the last two** arguments). If using `slurm_runner.py`, always pass the output_dir as a command line argument (this way, it will add new subfolders for the concurrent tasks).
+
+### Example: passing the args through a config file
+In the folder `mySuperNewProtein`, you have the config (based on run.yaml) named `rHelix5.yaml`. 
+```bash
+python slurm_runner.py 2 helix output_dir=some/dir -cd mySuperNewProtein -cn rHelix5
+```
+
+You can also combine the config file and command line arguments:
+```bash
+python slurm_runner.py 2 helix output_dir=some/dir "contig=\[C33-60/4-7/A1-30/0 B61-120\]" -cd mySuperNewProtein -cn rHelix5
+```
+
+## Skipping RfDiff
+Sometimes you may want to skip RfDiff and only pass the pdb to ProteinMPNN and AF with a few residues to change. 
+
+Add `skipRfDiff: True` and `designable_residues: [A8, A9, A10, A13, A85, B, C]` to the yaml config, where designable_residues contains the residues you want to change **and** all chain letters you want in your output pdb.
+
+In order to actually produce diverse results, `--sampling_temp` and `--backbone_noise` passed to ProteinMPNN are increased to `0.3` and `1`, respectively.  
+_TODO: Make this configurable (maybe a similar trick to how we create a config file for RfDiff, pass it to ProteinMPNN)._
+
+## Inputs: 
+Most input parameters are documented in the `run.yaml` config file. However, here's some additional info about them:
 - `python`: for running the script you need the python from the.venv environment. Replace `python` with `/home/nbizjak/projects/11_04_2023_rigid_connections/.venv/bin/python`
 - `original_pdb_path`: original PDB around which the new structure is generated
-- `contig`: explained in detail in the [RFdiffusion github repository](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md)  
+- `contig`: explained in detail in the [RFdiffusion github repository](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md).
+    - Please note: The whole argument must be enclosed in double quotes and square brackets must be escaped with a backslash! `"contig=\[150-150\]"`
 - `output_dir`: output directory. Along the pipeline, each module will create its own subdirectory. The AF2 models are in the end renamed and copied to a subdirectory called `final_pdbs` 
 - `num_designs_rfdiff`: number of structures generated by RFdiffusion
 - `num_seq_per_target_mpnn`: number of sequences generated per one RFdiffusion structure (each sequence is by default folded 5 separate times by AF2)
-- `chains_to_design_mpnn`: list chains for which MPNN should generate the sequence. If RFdiffusion generates a structure in two chains for example write `--chains_to_design_mpnn = 'A B'`
+- `chains_to_design_mpnn`: list chains for which MPNN should generate the sequence. If not specified, it will be assigned automatically based on contig (where `/0 ` denotes a chain break). If you have specific needs, specify it manually.
 
-If symmetry is needed in the design process use  `rfdiff_mpnn_af2_simterija.py` script instead of `rfdiff_mpnn_af2_disontiuous.py`. In this case, add the argument `--symmetry` which specifies the type of symmetry and equals the number of peptides in the symmetrical complex. Important symmetry must equal the number of chains to design in the `contig` and `chains_to_design_mpnn` arguments.  
+If symmetry is needed in the design process, add the argument `symmetry` which specifies the type of symmetry and equals the number of peptides in the symmetrical complex. Important: symmetry must equal the number of chains to design in the `contig` and `chains_to_design_mpnn` arguments.  
 
-## Running in parallel on a CLUSTER 
-To parallelize and speed up the design process you want to run the script on a CLUSTER. First using the `run_pipeline.py`script create a `.txt` file which contains the basic command to run the script repeated `n` times. `n` equals the number of tasks that are sent to separate compute nodes on the cluster.  
-Then run the following command to send the tasks to the cluster  
-`export GROUP_SIZE=1; sbatch --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 -J name_of_task  -a 1-number_of_tasks /home/.../scripts/wrapper_slurm_array_job_group.sh text_file_from_run_pipeline.txt`  
-Make sure you have the `wrapper_slurm_array_job_group.sh` script installed.  
-  
 A note on outputs: when running on a cluster for each task a separate `final_outputs.csv` will be create. Run `merge_csv.py` along with the argument `--output_dir` to merge all csv files into one file.
+
+## Passing additional arguments to ProteinMPNN
+Add parameters as required by ProteinMPNN to the `pass_to_mpnn` group in run.yaml (including trailing `--`).
+
+## Passing additional arguments to AlphaFold
+Add parameters as required by AlphaFold to the `pass_to_af` group in run.yaml (including trailing `--`). Switches should be passed with an empty string value, like this `--templates: ""`. 
+
+
 ## Examples for contigs
 Contigs are the most important input (for now, guiding potentials are another input to be explored in the future). Here are a few guidelines to ease the start of your projects.
-- For connecting two parts you could use a contig such as this: `'[A1-37/30-60/A42-70]'`. If the original PDB has another chain B, it will not be given to RFdiffusion in this case.
-- For connecting two parts with respect to another structure you could use a contig such as this: `'[C33-60/4-7/B1-30/0 C61-120]'`. Chain B is given to RFdiffusion but no new structures are generated on it. Note: in the generated structure PDB the chains will be labeled as A (connected A and B) and B (C in original). 
-- For connecting multiple chains you could use a contig such as this: `'[E10-68/5-15/C4-72/5-15/D78-145/5-15/A1-60/]' `
-- For leveraging symmetry you could use a contig such as this: `'[10/A29-41/10/0 10/B29-41/10/0 10/C29-41/10]'`. In this case, the additional symmetry parameter must be: `--symmmetry = C3` (three subunits). Also, you cannot use contigs with interval lengths to be generated e.g. `'[10-20/A29-41/10-20]'`. Symmetry is not good enough for now, it needs some debugging in the MPNN module and optimization in guiding potentials of RFdiffusion.
-
-# Testni commit
-
-
-
+- Ranges starting with letters will be taken from the input.pdb
+- Ranges without letters will generate that many residues
+- `/0 ` (mind the space!) will create a chain break
+- For connecting two parts, you could use a contig such as this: `'[A1-37/30-60/A42-70]'`. If the original PDB has another chain B, it will not be given to RFdiffusion in this case.
+- For connecting two parts with respect to another structure: `'[C33-60/4-7/B1-30/0 C61-120]'`. Chain B is given to RFdiffusion but no new structures are generated on it. Note: in the generated structure PDB, the chains will be labeled as A (connected A and B) and B (C in original). 
+- For connecting multiple chains: `'[E10-68/5-15/C4-72/5-15/D78-145/5-15/A1-60/]'`
+- For leveraging symmetry: `'[10/A29-41/10/0 10/B29-41/10/0 10/C29-41/10]'`. In this case, the additional symmetry parameter must be: `symmmetry=C3` (three subunits). Also, you cannot use contigs with interval lengths to be generated e.g. `'[10-20/A29-41/10-20]'`. Symmetry is not good enough for now, it needs some debugging in the MPNN module and optimization in guiding potentials of RFdiffusion.
+- Important: if you wish to force a number of newly generated residues, pass it as range: `[A1-7/3-3/A11-12/1-1/A14-84/1-1/A86-96]` (and not `[A1-7/3/A11-12/1/A14-84/1/A86-96]`)
+- More info is available in the [RFdiff repo](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md#motif-scaffolding).
 

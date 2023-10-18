@@ -1,0 +1,33 @@
+# Config for the current run
+pdb_path: /home/tsatler/RFdif/RFdiffusion/examples/input_pdbs/5TPN.pdb # Path to input PDB file || null when building unconditionally
+output_dir: Examples_out/ # Path to output directory
+contig: "[10-40/A163-181/10-40]" # Contig to design
+num_designs_rfdiff: 10 # Number of designs to generate with RFdiffusion
+num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
+chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
+af2_mpnn_cycles: 1 # Not used yet?
+model_order: 1 # Choose specific models to cycle in af2-mpnn
+chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
+
+
+defaults:
+  - installation
+  - _self_
+
+pass_to_rfdiff: # Groups to pass to RfDiff
+- inference
+- potentials
+
+# Symmetry to sample
+# Available symmetries:
+# - Cyclic symmetry (C_n) # call as c5
+# - Dihedral symmetry (D_n) # call as d5
+# - Tetrahedral symmetry # call as tetrahedral
+# - Octahedral symmetry # call as octahedral
+# - Icosahedral symmetry # call as icosahedral
+#symmetry: c2
+
+inference:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+potentials:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null

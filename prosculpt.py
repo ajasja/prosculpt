@@ -15,12 +15,16 @@ from pathlib import Path
 def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):        
     # First calculate RMSD between input protein and AF2 generated protein
     # Second calcualte number of total generated AA by RFDIFF 
-    #   - if designing only in one location the number is equal linker length      
+    #   - if designing only in one location the number is equal linker length   
+    
+        # Skip if trb does not exist
+        if not os.path.exists(trb_path):
+            print("trb file does not exist, likely due to --skipRfDiff. Skipping statistics; RMSD and linker will be -1")
+            return(-1, -1)
     
         with open(trb_path, 'rb') as f:
                 trb_dict = pickle.load(f)
         parser = PDBParser(PERMISSIVE = 1)
-        structure_control = parser.get_structure("control", starting_pdb)
         structure_designed = parser.get_structure("designed", af2_pdb)
 
         # Get different data from trb file depending on the fact if designing a monomer (one chain) or heteromer
@@ -35,9 +39,6 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
             residue_data_control = trb_dict['con_ref_idx0']
             residue_data_designed = trb_dict['con_hal_idx0']
 
-        control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
-        control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
-        #printed_ref = [res.get_resname() for res in control_res]
 
         designed_res = list(structure_designed.get_residues())
         designed_res = [designed_res[ind]['CA'] for ind in residue_data_designed]
@@ -51,21 +52,27 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
         linker_length = len(linker_indeces)
 
 
-        superimposer = Superimposer()
-        superimposer.set_atoms(control_res, designed_res)
-        
-
-        superimposer.apply(structure_designed.get_atoms())
-        rmsd = superimposer.rms
         io=PDBIO()
         io.set_structure(structure_designed)
         io.save("af2_pdb_2.pdb")
+
+        rmsd = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
+        if starting_pdb:
+            structure_control = parser.get_structure("control", starting_pdb)
+            control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
+            control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
+
+            superimposer = Superimposer()
+            superimposer.set_atoms(control_res, designed_res)
+            superimposer.apply(structure_designed.get_atoms())
+            rmsd = superimposer.rms
+
 
         return (round(rmsd, 1), linker_length)
 
 
 
-def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)"
+def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # (-?\d*\.\d+|-?\d+\.?\d*) to allow negative RMSD (-1 = undefined)
     """returns value next to token"""
     import re
     regexp = re.compile(f'{token}{regular_expression}')
@@ -118,7 +125,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         #Extract relevant data. Files used: json file of specific af2 model, specific af2 pdb,  trb file of rfdiff model (1 for all AF2 models from same rfdiff pdb)  
         plddt_list = params['plddt']
         plddt = int(np.mean(plddt_list))
-        rmsd, linker_length	= calculate_RMSD_linker_len (trb_file, model_pdb_file, control_structure_path)
+        rmsd, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path)
         pae = round((np.mean(params['pae'])), 2)
         
         #tracebility
@@ -147,9 +154,9 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
 
 
 
-        dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(\d*\.\d+|\d+\.?\d*)" ),
+        dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\d*\.\d+|-?\d+\.?\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\d*\.\d+|\d+\.?\d*)"),
-                'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(\d*\.\d+|\d+\.?\d*)"),
+                'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\d*\.\d+|-?\d+\.?\d*)"),
                 'pae': get_token_value(new_pdb_file, '__pae_', "(\d*\.\d+|\d+\.?\d*)"),
                 'model_path': new_pdb_path,
                 'sequence' : seq[1:],
@@ -208,44 +215,81 @@ class NumpyInt64Encoder(json.JSONEncoder):
         return super(NumpyInt64Encoder, self).default(obj)
 
 
-def process_pdb_files(pdb_path: str, out_path: str, trb_paths = None):
+def getChainResidOffsets(pdb_file, designable_residues):
+    chainResidOffset = {}
+    con_hal_idx = []
+
+    parser = PDBParser()
+    chainsInPdb = parser.get_structure("protein", pdb_file).get_chains()
+    for let_chain in chainsInPdb:
+        chainLetter = let_chain.get_id()
+        let_resids = let_chain.get_residues()
+        startingNo = int(next(let_resids).get_id()[1])
+        chainResidOffset.setdefault(chainLetter, startingNo-1)
+        if designable_residues:
+            # We do this here to avoid PDBparser overhead
+            print("There is designable_residues. [inside getChainResidOffsets]")
+            for r in let_chain.get_residues():
+                # aa has id " ". Heteroatoms have id "W" for water etc. – we don't want them in the PDB (they count as residues and ProteinMPNN throws an out-of-range error)
+                if r.get_id()[0].strip() == "" and f"{chainLetter}{r.get_id()[1]}" not in designable_residues:
+                    con_hal_idx.append((chainLetter, r.get_id()[1]))
+    return chainResidOffset, con_hal_idx
+
+def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
+    skipRfDiff = cfg.get("skipRfDiff", False) # Once updated to Py3.8, use `(skipRfDiff := cfg.get("skipRfDiff", False) and designable_residues = cfg.get("designable_residues", None)`
+    designable_residues = cfg.get("designable_residues", None)
+
     fixpos = {}
     pdb_files = Path(pdb_path).glob("*.pdb")
 
     for pdb_file in pdb_files:
         
         pdb_basename = pdb_file.stem
-        trb_file = pdb_file.with_suffix(".trb")
 
-        if not trb_file.exists():
-            rf_model_num = get_token_value(os.path.basename(pdb_file), "rf_", "(\d+)")
-            trb_file = os.path.join(os.path.dirname(pdb_file), f"_{rf_model_num}.trb")
-            trb_file = trb_file.replace("2_1_cycle_directory", "1_rfdiff") 
-            print(f"TRB file not found for {pdb_basename}. CAUTION, using composed path")
-        
-        print(pdb_file, trb_file)
-            
-
-        with open(trb_file, 'rb') as f:
-            trb_data = pickle.load(f)
-        
-        if 'complex_con_hal_pdb_idx' in trb_data:
-            con_hal_idx = trb_data.get('complex_con_hal_pdb_idx', []) #con_hal_pdb_idx #complex_con_hal_pdb_idx
-        else:
-            con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
-        # Process con_hal_idx to extract chain ids and indices
         fixed_res = {}
-        
+
+        # We need to renumber fixed resids: each chain should start with 1 
+        chainResidOffset, con_hal_idx = getChainResidOffsets(pdb_file, designable_residues)
+
+        if not skipRfDiff:
+            trb_file = pdb_file.with_suffix(".trb")
+
+            if not trb_file.exists():
+                rf_model_num = get_token_value(os.path.basename(pdb_file), "rf_", "(\d+)")
+                trb_file = os.path.join(os.path.dirname(pdb_file), f"_{rf_model_num}.trb")
+                trb_file = trb_file.replace("2_1_cycle_directory", "1_rfdiff") 
+                print(f"TRB file not found for {pdb_basename}. CAUTION, using composed path")
+            
+            print(pdb_file, trb_file)
+
+            with open(trb_file, 'rb') as f:
+                trb_data = pickle.load(f)
+
+            # fixed_res should never be empty, otherwise ProteinMPNN will throw a KeyError fixed_position_dict[b['name']][letter]
+            # We need to set blank fixed_res for each generated chain (based on contig).
+            contig = trb_data["config"]["contigmap"]["contigs"][0]
+            abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            breaks = contig.count("/0 ") + 1
+            fixed_res = dict(zip(abeceda, [[] for _ in range(breaks)]))
+            print(f"Fixed res (according to contig chain breaks): {fixed_res}")
+            
+            if 'complex_con_hal_pdb_idx' in trb_data:
+                con_hal_idx = trb_data.get('complex_con_hal_pdb_idx', []) #con_hal_pdb_idx #complex_con_hal_pdb_idx
+            else:
+                con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
+            # Process con_hal_idx to extract chain ids and indices
+            
+        # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
         for chain, idx in con_hal_idx:
-            if chain not in fixed_res and chain == "A":
-                fixed_res[chain] = []
-            elif chain == "A":
-                fixed_res[chain].append(idx)
-            elif chain not in fixed_res and chain != "A":
-                 fixed_res[chain] = []
-                 fixed_res[chain].append(fixed_res["A"])
+            # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
+            fixed_res.setdefault(chain, list()).append(idx - chainResidOffset[chain]) 
+            # RfDiff outputs multiple chains if contig has /0 (chain break)
+
+        print(f"Fixed res: ${fixed_res}")
             
         fixpos[pdb_basename] = fixed_res
+        
+         
     
     #print("_________trb data____", trb_data)
     
@@ -308,6 +352,7 @@ def read_fasta_file(fasta_file):
     return sequences
 
 def change_sequence_in_fasta (pdb_file, mpnn_fasta):
+        """
             #function adds : for chainbraks and chain sequences of all other chains
         sequences_all_chains = get_chains_seq(pdb_file)
         sequences_other_chains = sequences_all_chains[1:] 
@@ -323,6 +368,16 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
 
         with open(mpnn_fasta, "w") as output:
                 SeqIO.write(sequences_mpnn, output, "fasta")
+        """
+        # Read text file, then replace all slashes with colons
+        with open(mpnn_fasta, "r+") as f:
+            text = f.read()
+            text = text.replace("/", ":")
+            f.seek(0)
+            f.write(text)
+            f.truncate()
+        # I doubt we need to manually add "other" chains -- according to tutorials/examples, contig should always specify all chains (even if unchanged): [A1-30/6-6/B1-30/0 C1-100/0 D1-25/0 E1-123]
+
 
 def match_linker_length(trb_path):
     import re
