@@ -173,25 +173,19 @@ def do_cycling(cfg):
 
         #_____________ RUN ProteinMPNN_____________
         # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
-        log.info(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
+        protein_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""} \
+            {"--sampling_temp 0.1 --backbone_noise 0" if cfg.get("skipRfDiff", False) else ""} \
             {parseAdditionalArgs(cfg, "pass_to_mpnn")} \
-            --batch_size 1')
+            --batch_size 1'
+        
+        log.info(protein_cmd_str)
 
-        os.system(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
-            --jsonl_path {cfg.path_for_parsed_chains} \
-            --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
-            --chain_id_jsonl {cfg.path_for_assigned_chains} \
-            --out_folder {cfg.mpnn_out_dir} \
-            --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            {"--sampling_temp 0.3 --backbone_noise 1" if cfg.get("skipRfDiff", False) else ""} \
-            {parseAdditionalArgs(cfg, "pass_to_mpnn")} \
-            --batch_size 1')
+        os.system(protein_cmd_str)
 
         log.info("Preparing to empty af2 directory.")
         
