@@ -67,21 +67,17 @@ def runRFdiff(cfg):
     In this script data from con_hal_pdb_idx/complex_con_hal_pdb_idx and 'complex_con_ref_idx0' are used in helper functions
     See RFdiffusion git for details.
     """
-    log.info("Running runRFdiff")
-
-    log.info(f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
+    log.info("***************Running runRFdiff***************")
+    rfdiff_cmd_str = f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
           inference.output_prefix={cfg.rfdiff_out_path} \
           'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
-          -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}")
+          -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}"
+    log.info(rfdiff_cmd_str)
     
-    os.system(f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
-          inference.output_prefix={cfg.rfdiff_out_path} \
-          'contigmap.contigs={cfg.contig}' \
-          inference.num_designs={cfg.num_designs_rfdiff} \
-          -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}")
+    os.system(rfdiff_cmd_str)
     
-    log.info("After running RFdiffusion")
+    log.info("***************After running RFdiffusion***************")
 
 def rechainRFdiffPDBs(cfg):
     """
