@@ -24,7 +24,7 @@ scripts_folder = pathlib.Path(__file__).resolve().parent / "scripts"
 
 
 
-def generalPrep(cfg):
+def general_config_prep(cfg):
     log.info("Running generalPrep")
     os.makedirs(cfg.output_dir, exist_ok=True)
 
@@ -65,7 +65,7 @@ def generalPrep(cfg):
     # No need to return; cfg is mutable.
     
 
-def runRFdiff(cfg):
+def run_rfdiff(cfg):
     """
     RFdiffusion will generate new protein structures according to the contig specified
     INPUT: starting pdb, contig, number of structures to design
@@ -85,7 +85,7 @@ def runRFdiff(cfg):
     
     log.info("***************After running RFdiffusion***************")
 
-def rechainRFdiffPDBs(cfg):
+def rechain_rfdiff_pdbs(cfg):
     """
     RFdiffusion joins chain sequences together
     For contig "[A1-30/4-6/C1-30/0 D1-30/0 B1-30]" you get two chains.
@@ -103,7 +103,7 @@ def rechainRFdiffPDBs(cfg):
 
     log.info("After rechaining")
 
-def parseAdditionalArgs(cfg, group):
+def parse_additional_args(cfg, group):
     dodatniArgumenti = ""
     for k, v in (cfg.get(group, {}) or {}).items(): # or to allow for empty groups
         dodatniArgumenti += f" {k} {v}"
@@ -178,7 +178,7 @@ def do_cycling(cfg):
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
             {"--sampling_temp 0.1 --backbone_noise 0" if cfg.get("skipRfDiff", False) else ""} \
-            {parseAdditionalArgs(cfg, "pass_to_mpnn")} \
+            {parse_additional_args(cfg, "pass_to_mpnn")} \
             --batch_size 1'
         
         run_and_log(proteinMPNN_cmd_str)
@@ -212,7 +212,7 @@ def do_cycling(cfg):
                                 --msa-mode single_sequence \
                                 {fasta_file} {model_dir} \
                                 --model-order {cfg.model_order} \
-                                {parseAdditionalArgs(cfg, "pass_to_af")} \
+                                {parse_additional_args(cfg, "pass_to_af")} \
                                 --num-models {num_models}'
                                 )
             else: 
@@ -225,7 +225,7 @@ def do_cycling(cfg):
                                 --msa-mode single_sequence \
                                 {fasta_file} {model_dir} \
                                 --model-order {model_number} \
-                                {parseAdditionalArgs(cfg, "pass_to_af")} \
+                                {parse_additional_args(cfg, "pass_to_af")} \
                                 --num-models {num_models}'
                                 )
 
@@ -253,14 +253,14 @@ def final_operations(cfg):
     os.remove(scores_rg_path)
 
 
-def passConfigToRfdiff(cfg):
+def pass_config_to_rfdiff(cfg):
     """
     This function creates a new .yaml file with "inference", "potentials" etc. read from run.yaml. Also add defaults: - base \n - _self_
     Then, when calling RfDiff, add -cd [folder_with_this_created_config] -cn [name_of_created_config_file]
     """
     # Keep in mind that if passing through cmd, these parameters need to have ++ in front of them.
-
-    def keepOnlyGroups(pair):
+    # TODO: should everything go through the command line? Makes it a bit cleaner.
+    def keep_only_groups(pair):
         groupsToPassToRfDiff = cfg.pass_to_rfdiff # groups that should be passed to RfDiff
         key, value = pair
         if key not in groupsToPassToRfDiff:
@@ -269,8 +269,8 @@ def passConfigToRfdiff(cfg):
             return True
 
 
-    new_cfg = dict(filter(keepOnlyGroups, cfg.items()))
-    new_cfg["defaults"] = ["base", "_self_"] # is the base always the right thing to include? 
+    new_cfg = dict(filter(keep_only_groups, cfg.items()))
+    new_cfg["defaults"] = ["base", "_self_"] # TODO: is the base always the right thing to include? For symm it should be symmetry.
     with open_dict(new_cfg["inference"]):
         new_cfg["inference"]["input_pdb"] = cfg.pdb_path
 
@@ -289,12 +289,12 @@ def prosculptApp(cfg: DictConfig) -> None:
 
     #log.debug(f"Now in Hydra, cwd = {os.getcwd()}")
 
-    generalPrep(cfg)
+    general_config_prep(cfg)
 
     if not cfg.get("skipRfDiff", False):
-        passConfigToRfdiff(cfg)
-        runRFdiff(cfg)
-        rechainRFdiffPDBs(cfg)
+        pass_config_to_rfdiff(cfg)
+        run_rfdiff(cfg)
+        rechain_rfdiff_pdbs(cfg)
     else:
         log.info("*** Skipping RfDiff ***")
         # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
