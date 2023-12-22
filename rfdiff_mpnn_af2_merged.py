@@ -62,7 +62,6 @@ def generalPrep(cfg):
     for directory in [cfg.rfdiff_out_dir, cfg.mpnn_out_dir, cfg.af2_out_dir]:
         os.makedirs(directory, exist_ok=True)
     
-    log.info(cfg)
     # No need to return; cfg is mutable.
     
 
@@ -92,7 +91,7 @@ def rechainRFdiffPDBs(cfg):
     For contig "[A1-30/4-6/C1-30/0 D1-30/0 B1-30]" you get two chains.
     This is problematic because AF2 than folds this incorrectly as though D and B were also connected.
     To solve this chain IDs are changed using rechain.py. 
-    The script finds chainbreaks according to pyhisical distance between CA atoms.
+    The script finds chainbreaks according to physical distance between CA atoms.
     """ 
     log.info("Running rechainRFdiffPDBs")
     rf_pdbs = glob.glob(os.path.join(cfg.rfdiff_out_path, '*.pdb'))
@@ -119,7 +118,6 @@ def do_cycling(cfg):
         input_mpnn = cfg.rfdiff_out_dir # First cycle has this, other cycles overwrite this var
 
         if not cycle == 0: # All other cycles get starting PDBs from AF2
-            print("______________________________entering cycle_____________________________________")
             cycle_directory = os.path.join(cfg.output_dir, "2_1_cycle_directory")
             if os.path.exists(cycle_directory):
                 shutil.rmtree(cycle_directory)
@@ -233,7 +231,7 @@ def do_cycling(cfg):
 
         # msa single sequence makes sense for designed proteins
 
-def finalOperations(cfg):
+def final_operations(cfg):
     log.info("Final operations")
     json_directories = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
@@ -298,16 +296,16 @@ def prosculptApp(cfg: DictConfig) -> None:
         runRFdiff(cfg)
         rechainRFdiffPDBs(cfg)
     else:
-        print("*** Skipping RfDiff ***")
+        log.info("*** Skipping RfDiff ***")
         # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
         shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
 
     do_cycling(cfg)
-    finalOperations(cfg)
+    final_operations(cfg)
 
 
 if __name__ == "__main__":
     print("File: ", __file__)
     a = pathlib.Path(__file__).resolve().parent
-    print(f"Before running MYapp, cwd = {os.getcwd()}")
+    log.info(f"Before running MYapp, cwd = {os.getcwd()}")
     prosculptApp()
