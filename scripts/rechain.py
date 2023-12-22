@@ -1,3 +1,4 @@
+"""Pymol script to assign chain IDs based on chain breaks. Made by ajasja.ljubetic@gmail.com"""
 
 try:
     import pymol
