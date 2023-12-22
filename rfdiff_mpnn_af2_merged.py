@@ -11,10 +11,18 @@ import pathlib
 from omegaconf import open_dict
 
 
-
-
 log = logging.getLogger(__name__)
+
+def run_and_log(command, log_func=log.info, dry_run=False):
+    """Runs a command using os.system and also logs the command before running using log.info"""
+    if log_func:
+        log_func(command)
+    if not dry_run:
+        os.system(command)
+
 scripts_folder = pathlib.Path(__file__).resolve().parent / "scripts"
+
+
 
 def generalPrep(cfg):
     log.info("Running generalPrep")
@@ -22,7 +30,7 @@ def generalPrep(cfg):
 
     # We want to have all the params in the cfg struct. Thus, use we open_dict to be able to write new data.
     with open_dict(cfg):
-        cfg.output_dir = str(pathlib.Path(cfg.output_dir).resolve()) # Output dir MUST be absolute, otherwise ProtMPPN complains about missing seq_chain (upadte: it probably doesn't matter)
+        cfg.output_dir = str(pathlib.Path(cfg.output_dir).resolve()) # Output dir MUST be absolute, otherwise ProtMPPN complains about missing seq_chain (update: it probably doesn't matter)
         cfg.rfdiff_out_dir = os.path.join(cfg.output_dir, "1_rfdiff")
         cfg.mpnn_out_dir = os.path.join(cfg.output_dir, "2_mpnn")
         cfg.af2_out_dir = os.path.join(cfg.output_dir, "3_af2")
@@ -40,12 +48,13 @@ def generalPrep(cfg):
             cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.designable_residues}))
             log.info(f"Skipping RFdiff, only redesigning chains specified in designable_residues: {cfg.chains_to_design}")
 
-        # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(abeceda[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
-        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55
-        if cfg.chains_to_design == None:
+        # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(chain_letters[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
+        chain_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55
+        if cfg.chains_to_design == None: #TODO this will likely break for sym mode
             breaks = cfg.contig.count("/0 ") + 1
-            log.info(f"Chains to design (according to contig chain breaks): {' '.join(abeceda[:breaks])}")
-            cfg.chains_to_design = ' '.join(abeceda[:breaks])
+            cfg.chains_to_design = ' '.join(chain_letters[:breaks])
+            log.info(f"Chains to design (according to contig chain breaks): {cfg.chains_to_design}")
+            
 
 
 
@@ -55,7 +64,7 @@ def generalPrep(cfg):
     
     log.info(cfg)
     # No need to return; cfg is mutable.
-    #return(rfdiff_out_dir, mpnn_out_dir, af2_out_dir, rfdiff_out_path)
+    
 
 def runRFdiff(cfg):
     """
@@ -73,9 +82,7 @@ def runRFdiff(cfg):
           'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
           -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}"
-    log.info(rfdiff_cmd_str)
-    
-    os.system(rfdiff_cmd_str)
+    run_and_log(rfdiff_cmd_str)
     
     log.info("***************After running RFdiffusion***************")
 
@@ -90,10 +97,11 @@ def rechainRFdiffPDBs(cfg):
     log.info("Running rechainRFdiffPDBs")
     rf_pdbs = glob.glob(os.path.join(cfg.rfdiff_out_path, '*.pdb'))
     for pdb in rf_pdbs:
+        run_and_log(
+            f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} {pdb} {pdb} --chain_break_cutoff_A {cfg.chain_break_cutoff_A}'
+        )
+        
 
-        log.info(f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} {pdb} {pdb} --chain_break_cutoff_A {cfg.chain_break_cutoff_A}')
-
-        os.system(f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} {pdb} {pdb} --chain_break_cutoff_A {cfg.chain_break_cutoff_A}')
     log.info("After rechaining")
 
 def parseAdditionalArgs(cfg, group):
@@ -104,7 +112,6 @@ def parseAdditionalArgs(cfg, group):
 
 def do_cycling(cfg):
     log.info("Running do_cycling")
-    log.info("Entering the spinning loop of cycles")
     for cycle in range(cfg.af2_mpnn_cycles):
         print("cycleeeeee", cycle)
 
@@ -145,23 +152,20 @@ def do_cycling(cfg):
             trb_paths = os.path.join(cfg.rfdiff_out_dir, "*.trb")
         #endif
         # All cycles run the same commands
-        log.info(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
+        
+        run_and_log(
+            f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
             --input_path={input_mpnn} \
-            --output_path={cfg.path_for_parsed_chains}')
+            --output_path={cfg.path_for_parsed_chains}'       
+        )
 
-        os.system(f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
-            --input_path={input_mpnn} \
-            --output_path={cfg.path_for_parsed_chains}')
 
-        log.info(f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
+        run_and_log(
+            f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
                 --input_path={cfg.path_for_parsed_chains} \
                 --output_path={cfg.path_for_assigned_chains} \
-                --chain_list='{cfg.chains_to_design}'")
-
-        os.system(f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
-                --input_path={cfg.path_for_parsed_chains} \
-                --output_path={cfg.path_for_assigned_chains} \
-                --chain_list='{cfg.chains_to_design}'")
+                --chain_list='{cfg.chains_to_design}'"
+                )
 
         fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
         # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
@@ -169,7 +173,7 @@ def do_cycling(cfg):
 
         #_____________ RUN ProteinMPNN_____________
         # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
-        protein_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
+        proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
@@ -179,9 +183,7 @@ def do_cycling(cfg):
             {parseAdditionalArgs(cfg, "pass_to_mpnn")} \
             --batch_size 1'
         
-        log.info(protein_cmd_str)
-
-        os.system(protein_cmd_str)
+        run_and_log(proteinMPNN_cmd_str)
 
         log.info("Preparing to empty af2 directory.")
         
@@ -191,7 +193,7 @@ def do_cycling(cfg):
 
 
         #________________ RUN AF2______________
-        fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) #glob ni sorted po deafultu 
+        fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
         for fasta_file in fasta_files: # Number of fasta files corresponds to number of rfdiff models
             if cycle == 0:
                 rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
@@ -206,26 +208,30 @@ def do_cycling(cfg):
             model_order = str(cfg.model_order).split(",") # If only one number is passed, Hydra converts it to int
             num_models = len(model_order) #model order "1,2,3" -> num of models = 3
             if cycle == 0: #have to run af2 differently in first cycle 
-                os.system(f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                run_and_log(
+                    f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
                                 --model-type alphafold2_multimer_v3 \
                                 --msa-mode single_sequence \
                                 {fasta_file} {model_dir} \
                                 --model-order {cfg.model_order} \
                                 {parseAdditionalArgs(cfg, "pass_to_af")} \
-                                --num-models {num_models}')
+                                --num-models {num_models}'
+                                )
             else: 
                 for model_number in model_order:
                     if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
                         num_models = 1
-                        os.system(f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                        run_and_log(
+                            f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
                                 --model-type alphafold2_multimer_v3 \
                                 --msa-mode single_sequence \
                                 {fasta_file} {model_dir} \
                                 --model-order {model_number} \
                                 {parseAdditionalArgs(cfg, "pass_to_af")} \
-                                --num-models {num_models}')
+                                --num-models {num_models}'
+                                )
 
-        # msa single sequence makes sense for designed (no sense to aligbn to natural proteins)
+        # msa single sequence makes sense for designed proteins
 
 def finalOperations(cfg):
     log.info("Final operations")
@@ -238,8 +244,9 @@ def finalOperations(cfg):
         
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
-    os.system(f'{cfg.python_path} {scripts_folder / "scoring_rg_charge_sap.py"} \
-                {csv_path}')
+    run_and_log(
+        f'{cfg.python_path} {scripts_folder / "scoring_rg_charge_sap.py"} {csv_path}'
+        )
         
     scores_rg_path = os.path.join(cfg.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
     prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path)
@@ -265,7 +272,7 @@ def passConfigToRfdiff(cfg):
 
 
     new_cfg = dict(filter(keepOnlyGroups, cfg.items()))
-    new_cfg["defaults"] = ["base", "_self_"]
+    new_cfg["defaults"] = ["base", "_self_"] # is the base always the right thing to include? 
     with open_dict(new_cfg["inference"]):
         new_cfg["inference"]["input_pdb"] = cfg.pdb_path
 
@@ -279,15 +286,10 @@ def passConfigToRfdiff(cfg):
 
 @hydra.main(version_base=None, config_path="config", config_name="run")
 def prosculptApp(cfg: DictConfig) -> None:
-    log.info("The following config was passed: ")
-    log.info(cfg)
     log.info("Hydrić")
-    log.info(OmegaConf.to_yaml(cfg))
+    log.info("The following configuration was passed: \n" + OmegaConf.to_yaml(cfg))
 
-    log.info(f"Now in Hydra, cwd = {os.getcwd()}")
-
-    ## In order to pass the config to Rfdiff, create a new .yaml file with "inference", "potentials" etc. read from run.yaml. Also add defaults: - base \n - _self_
-    # Then, when calling RfDiff, add -cd [folder_with_this_created_config] -cn [name_of_created_config_file]
+    #log.debug(f"Now in Hydra, cwd = {os.getcwd()}")
 
     generalPrep(cfg)
 
@@ -307,6 +309,5 @@ def prosculptApp(cfg: DictConfig) -> None:
 if __name__ == "__main__":
     print("File: ", __file__)
     a = pathlib.Path(__file__).resolve().parent
-    print(a)
-    print(f"Before runnning MYapp, cwd = {os.getcwd()}")
+    print(f"Before running MYapp, cwd = {os.getcwd()}")
     prosculptApp()
