@@ -51,10 +51,14 @@ def general_config_prep(cfg):
         # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(chain_letters[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
         chain_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55
         if cfg.chains_to_design == None: #TODO this will likely break for sym mode
-            breaks = cfg.contig.count("/0 ") + 1
+
+            if 'symmetry' in cfg.inference:#if we are doing symmetry:
+                breaks = int(cfg.inference.symmetry[1:])
+            else:
+                breaks = cfg.contig.count("/0 ") + 1
             cfg.chains_to_design = ' '.join(chain_letters[:breaks])
             log.info(f"Chains to design (according to contig chain breaks): {cfg.chains_to_design}")
-            
+                
 
 
 
@@ -77,8 +81,7 @@ def run_rfdiff(cfg):
     """
     log.info("***************Running runRFdiff***************")
     rfdiff_cmd_str = f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
-          inference.output_prefix={cfg.rfdiff_out_path} \
-          'contigmap.contigs={cfg.contig}' \
+          inference.output_prefix={cfg.rfdiff_out_path} 'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
           -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}"
     run_and_log(rfdiff_cmd_str)
@@ -125,7 +128,7 @@ def do_cycling(cfg):
 
             af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
-            #Access all af2 models and put them in one intemediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
+            #Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
             for model_subdict in af2_model_subdicts: 
                 af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
                 for i, af2_pdb in enumerate(af2_pdbs):
@@ -177,7 +180,8 @@ def do_cycling(cfg):
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            {"--sampling_temp 0.1 --backbone_noise 0" if cfg.get("skipRfDiff", False) else ""} \
+            --sampling_temp {cfg.sampling_temp} \
+            --backbone_noise {cfg.backbone_noise} \
             {parse_additional_args(cfg, "pass_to_mpnn")} \
             --batch_size 1'
         
@@ -238,7 +242,10 @@ def final_operations(cfg):
     for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
         
         trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\d+)") #get 0 from model_0 using reg exp
-        prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path)
+        if 'pdb_path' in cfg:
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path)
+        else:
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None)
         
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
@@ -268,11 +275,11 @@ def pass_config_to_rfdiff(cfg):
         else:
             return True
 
-
     new_cfg = dict(filter(keep_only_groups, cfg.items()))
     new_cfg["defaults"] = ["base", "_self_"] # TODO: is the base always the right thing to include? For symm it should be symmetry.
-    with open_dict(new_cfg["inference"]):
-        new_cfg["inference"]["input_pdb"] = cfg.pdb_path
+    if 'pdb_path' in cfg:
+        with open_dict(new_cfg["inference"]):
+            new_cfg["inference"]["input_pdb"] = cfg.pdb_path
 
     log.info(f"Saving this config for RfDiff: {OmegaConf.to_yaml(new_cfg)}")
     # save to file

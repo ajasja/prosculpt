@@ -21,6 +21,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
         if not os.path.exists(trb_path):
             print("trb file does not exist, likely due to --skipRfDiff. Skipping statistics; RMSD and linker will be -1")
             return(-1, -1)
+
     
         with open(trb_path, 'rb') as f:
                 trb_dict = pickle.load(f)
@@ -39,10 +40,13 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
             residue_data_control = trb_dict['con_ref_idx0']
             residue_data_designed = trb_dict['con_hal_idx0']
 
+        designed_res = list(structure_designed.get_residues())       
 
-        designed_res = list(structure_designed.get_residues())
-        designed_res = [designed_res[ind]['CA'] for ind in residue_data_designed]
-        
+        if True not in trb_dict['inpaint_seq']:
+            designed_res = [ind['CA'] for ind in designed_res]
+        else:
+            designed_res = [designed_res[ind]['CA'] for ind in residue_data_designed]
+
         #printed_desi = [res.get_resname() for res in designed_res]
 
         #print(list(x == y for x, y in zip(printed_ref, printed_desi)))
@@ -57,10 +61,18 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
         io.save("af2_pdb_2.pdb")
 
         rmsd = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
-        if starting_pdb:
+        if starting_pdb != None:
             structure_control = parser.get_structure("control", starting_pdb)
             control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
-            control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
+            if True not in trb_dict['inpaint_seq']:
+                control_res = [ind['CA'] for ind in control_res]
+            else:
+                control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
+
+            if len(control_res)!=len(designed_res):
+                print("Fixed and moving atom lists differ in size") #for now, this is when input pdb and output are different length
+                return(-1, -1)
+
 
             superimposer = Superimposer()
             superimposer.set_atoms(control_res, designed_res)
@@ -235,12 +247,15 @@ def getChainResidOffsets(pdb_file, designable_residues):
                     con_hal_idx.append((chainLetter, r.get_id()[1]))
     return chainResidOffset, con_hal_idx
 
+
 def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
-    skipRfDiff = cfg.get("skipRfDiff", False) # Once updated to Py3.8, use `(skipRfDiff := cfg.get("skipRfDiff", False) and designable_residues = cfg.get("designable_residues", None)`
+    skipRfDiff = cfg.get("skipRfDiff", False)
     designable_residues = cfg.get("designable_residues", None)
 
     fixpos = {}
     pdb_files = Path(pdb_path).glob("*.pdb")
+
+    contig = cfg.contig
 
     for pdb_file in pdb_files:
         
@@ -250,7 +265,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
 
         # We need to renumber fixed resids: each chain should start with 1 
         chainResidOffset, con_hal_idx = getChainResidOffsets(pdb_file, designable_residues)
-
+        
         if not skipRfDiff:
             trb_file = pdb_file.with_suffix(".trb")
 
@@ -265,20 +280,26 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
             with open(trb_file, 'rb') as f:
                 trb_data = pickle.load(f)
 
-            # fixed_res should never be empty, otherwise ProteinMPNN will throw a KeyError fixed_position_dict[b['name']][letter]
-            # We need to set blank fixed_res for each generated chain (based on contig).
             contig = trb_data["config"]["contigmap"]["contigs"][0]
-            abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-            breaks = contig.count("/0 ") + 1
-            fixed_res = dict(zip(abeceda, [[] for _ in range(breaks)]))
-            print(f"Fixed res (according to contig chain breaks): {fixed_res}")
             
             if 'complex_con_hal_pdb_idx' in trb_data:
                 con_hal_idx = trb_data.get('complex_con_hal_pdb_idx', []) #con_hal_pdb_idx #complex_con_hal_pdb_idx
             else:
                 con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
             # Process con_hal_idx to extract chain ids and indices
-            
+
+        # fixed_res should never be empty, otherwise ProteinMPNN will throw a KeyError fixed_position_dict[b['name']][letter]
+        # We need to set blank fixed_res for each generated chain (based on contig).
+        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+        if 'symmetry' in cfg.inference: #if we find symmetry:
+            breaks = int(cfg.inference.symmetry[1:])
+        else:
+            breaks = contig.count("/0 ") + 1
+        fixed_res = dict(zip(abeceda, [[] for _ in range(breaks)]))
+        print(f"Fixed res (according to contig chain breaks): {fixed_res}")
+
+
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
         for chain, idx in con_hal_idx:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
@@ -288,6 +309,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
         print(f"Fixed res: ${fixed_res}")
             
         fixpos[pdb_basename] = fixed_res
+
         
          
     
