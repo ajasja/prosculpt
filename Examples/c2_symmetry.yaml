@@ -1,0 +1,48 @@
+# Config for the current run
+#pdb_path: /home/akonstantinova/december_2023/symmetry/yamls/p3p4.pdb # Path to input PDB file || null when building unconditionally
+output_dir: /home/akonstantinova/january_2024/symmetry/c2_out # Path to output directory
+contig: ['40-40'] # Contig to design
+num_designs_rfdiff: 1 # Number of designs to generate with RFdiffusion
+num_seq_per_target_mpnn: 1 # Number of sequences to generate per target with MPNN
+chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
+af2_mpnn_cycles: 1 # Not used yet?
+model_order: 4 # Choose specific models to cycle in af2-mpnn
+chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
+skipRfDiff: False
+
+defaults:
+  - installation
+  - _self_
+  - override hydra/launcher: submitit_slurm
+
+#pass_to_mpnn: # Groups to pass to proteinMPNN
+
+
+sampling_temp: 0.1
+backbone_noise: 0
+
+pass_to_rfdiff: # Groups to pass to RfDiff
+- inference
+- potentials
+
+
+
+# Symmetry to sample
+# Available symmetries:
+# - Cyclic symmetry (C_n) # call as c5
+# - Dihedral symmetry (D_n) # call as d5
+# - Tetrahedral symmetry # call as tetrahedral
+# - Octahedral symmetry # call as octahedral
+# - Icosahedral symmetry # call as icosahedral
+
+
+inference:
+  symmetry: c2
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+potentials:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+  # guiding_potentials: ["type:olig_contacts,weight_intra:1,weight_inter:0.1"]
+  # olig_intra_all: True
+  # olig_inter_all: True
+  # guide_scale: 2.0
+  # guide_decay: quadratic

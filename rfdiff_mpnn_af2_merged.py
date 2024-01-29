@@ -39,6 +39,7 @@ def general_config_prep(cfg):
         cfg.path_for_parsed_chains = os.path.join(cfg.mpnn_out_dir, "parsed_pdbs.jsonl")
         cfg.path_for_assigned_chains = os.path.join(cfg.mpnn_out_dir, "assigned_pdbs.jsonl")
         cfg.path_for_fixed_positions = os.path.join(cfg.mpnn_out_dir, "fixed_pdbs.jsonl")
+        cfg.path_for_tied_positions = os.path.join(cfg.mpnn_out_dir, "tied_pdbs.jsonl")
 
         cfg.fasta_dir = os.path.join(cfg.mpnn_out_dir, "seqs")
         cfg.rfdiff_pdb = os.path.join(cfg.rfdiff_out_path, '_0.pdb')
@@ -81,7 +82,8 @@ def run_rfdiff(cfg):
     """
     log.info("***************Running runRFdiff***************")
     rfdiff_cmd_str = f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
-          inference.output_prefix={cfg.rfdiff_out_path} 'contigmap.contigs={cfg.contig}' \
+          inference.output_prefix={cfg.rfdiff_out_path} \
+          'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
           -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}"
     run_and_log(rfdiff_cmd_str)
@@ -160,23 +162,33 @@ def do_cycling(cfg):
             --output_path={cfg.path_for_parsed_chains}'       
         )
 
-
-        run_and_log(
-            f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
-                --input_path={cfg.path_for_parsed_chains} \
-                --output_path={cfg.path_for_assigned_chains} \
-                --chain_list='{cfg.chains_to_design}'"
-                )
-
+        if cfg.chains_to_design:
+            run_and_log(
+                f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
+                    --input_path={cfg.path_for_parsed_chains} \
+                    --output_path={cfg.path_for_assigned_chains} \
+                    --chain_list='{cfg.chains_to_design}'"
+                    )
+            
         fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
         # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
-        log.info(f"Fixed positions path: {fixed_pos_path}")
+
+        if cfg.inference.symmetry:
+            run_and_log(
+                f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
+                --input_path={cfg.path_for_parsed_chains} \
+                --output_path={cfg.path_for_tied_positions} \
+                --homooligomer 1'    
+            )
+
+        log.info(f"running symmetry")
 
         #_____________ RUN ProteinMPNN_____________
         # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
         proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
+            {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry else ""} \
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \

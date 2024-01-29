@@ -12,7 +12,7 @@ import shutil
 from pathlib import Path
 
 
-def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):        
+def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path):        
     # First calculate RMSD between input protein and AF2 generated protein
     # Second calcualte number of total generated AA by RFDIFF 
     #   - if designing only in one location the number is equal linker length   
@@ -25,6 +25,8 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
     
         with open(trb_path, 'rb') as f:
                 trb_dict = pickle.load(f)
+
+
         parser = PDBParser(PERMISSIVE = 1)
         structure_designed = parser.get_structure("designed", af2_pdb)
 
@@ -42,10 +44,10 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
 
         designed_res = list(structure_designed.get_residues())       
 
-        if True not in trb_dict['inpaint_seq']:
-            designed_res = [ind['CA'] for ind in designed_res]
-        else:
+        if True in trb_dict['inpaint_seq']:
             designed_res = [designed_res[ind]['CA'] for ind in residue_data_designed]
+        else:
+            designed_res = [ind['CA'] for ind in designed_res]
 
         #printed_desi = [res.get_resname() for res in designed_res]
 
@@ -61,13 +63,13 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
         io.save("af2_pdb_2.pdb")
 
         rmsd = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
-        if starting_pdb != None:
+        if starting_pdb:
             structure_control = parser.get_structure("control", starting_pdb)
             control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
-            if True not in trb_dict['inpaint_seq']:
-                control_res = [ind['CA'] for ind in control_res]
-            else:
+            if True in trb_dict['inpaint_seq']:
                 control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
+            else:
+                control_res = [ind['CA'] for ind in control_res]
 
             if len(control_res)!=len(designed_res):
                 print("Fixed and moving atom lists differ in size") #for now, this is when input pdb and output are different length
@@ -79,6 +81,11 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb):
             superimposer.apply(structure_designed.get_atoms())
             rmsd = superimposer.rms
 
+        #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
+        if 'symmetry' in trb_dict['config']['inference']:
+            import homooligomer_rmsd
+            rmsd = homooligomer_rmsd.align_oligomers(af2_pdb, rfdiff_pdb_path)
+            return (round(rmsd, 1), linker_length)
 
         return (round(rmsd, 1), linker_length)
 
@@ -137,7 +144,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         #Extract relevant data. Files used: json file of specific af2 model, specific af2 pdb,  trb file of rfdiff model (1 for all AF2 models from same rfdiff pdb)  
         plddt_list = params['plddt']
         plddt = int(np.mean(plddt_list))
-        rmsd, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path)
+        rmsd, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path)
         pae = round((np.mean(params['pae'])), 2)
         
         #tracebility
