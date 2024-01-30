@@ -1,13 +1,7 @@
 import os
-from Bio.PDB import PDBParser, PDBIO, Superimposer, PPBuilder
-from Bio import SeqIO
-from Bio.Seq import Seq
-from Bio.PDB import CEAligner
-from Bio.PDB import MMCIFParser
-import scipy
-import numpy as np
+from Bio.PDB import PDBParser, PDBIO, Superimposer, Structure
 from scipy.spatial import distance
-import pandas as pd
+import numpy as np
 import argparse
 
 #we want to align corresponding chains in mobile and target structures
@@ -58,8 +52,24 @@ def chains_com_coords(chainlist):
         chains_dict[chainname]=chain_com
     return chains_dict
 
+#if set to true, saves aligned structures to a file
+def save_structures(structure_target, structure_mobile, rmsd):
+    io=PDBIO()
+    pdb_file = f"{os.path.basename(path_to_target)}_{os.path.basename(path_to_mobile)}_rmsd_{rmsd}.pdb"
+    ms = Structure.Structure("master")
+    i=0
+    for struct in [structure_target, structure_mobile]:
+        for mod in struct:
+            new_model=mod.copy()
+            new_model.id=i
+            # new_model.serial_num=i+1
+            i=i+1
+            ms.add(new_model)
+    io.set_structure(ms)
+    io.save(pdb_file)
 
-def align_oligomers(path_to_target, path_to_mobile):
+
+def align_oligomers(path_to_target, path_to_mobile, save_aligned=False):
     
     parser = PDBParser(PERMISSIVE=1)
     structure_target, structure_mobile = align_chain_A(path_to_target, path_to_mobile, parser)
@@ -101,6 +111,8 @@ def align_oligomers(path_to_target, path_to_mobile):
                 chain.id = rename_dict_2[old_name] 
     except KeyError:
         rmsd = -1
+        if save_aligned==True:
+            save_structures(structure_target, structure_mobile, rmsd) 
         return rmsd
     
     #get a list of residues for alignment for mobile structure
@@ -118,6 +130,9 @@ def align_oligomers(path_to_target, path_to_mobile):
     superimposer.apply(structure_mobile.get_atoms())
     rmsd = superimposer.rms
 
+    if save_aligned==True:
+        save_structures(structure_target, structure_mobile, rmsd)
+
     return rmsd
 
 
@@ -134,5 +149,5 @@ if __name__ == '__main__':
     path_to_mobile = args.path_to_mobile
     
     # Call the align_oligomers function with the parsed arguments
-    rmsd = align_oligomers(path_to_target, path_to_mobile)
-    print('rmsd: ',rmsd)
+    rmsd = align_oligomers(path_to_target, path_to_mobile, save_aligned=True)
+

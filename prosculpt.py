@@ -84,7 +84,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path)
         #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
         if 'symmetry' in trb_dict['config']['inference']:
             import homooligomer_rmsd
-            rmsd = homooligomer_rmsd.align_oligomers(af2_pdb, rfdiff_pdb_path)
+            rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb)
             return (round(rmsd, 1), linker_length)
 
         return (round(rmsd, 1), linker_length)
