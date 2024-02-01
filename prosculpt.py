@@ -11,6 +11,8 @@ import pandas as pd
 import shutil
 from pathlib import Path
 
+import homooligomer_rmsd
+
 
 def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path):        
     # First calculate RMSD between input protein and AF2 generated protein
@@ -83,10 +85,8 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path)
 
         #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
         if 'symmetry' in trb_dict['config']['inference']:
-            import homooligomer_rmsd
-            rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb)
-            return (round(rmsd, 1), linker_length)
-
+            rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
+ 
         return (round(rmsd, 1), linker_length)
 
 
@@ -114,7 +114,7 @@ def merge_csv(output_dir, output_csv, scores_csv):
     # save merged dataframe to csv file
     merged_df.to_csv(f'{os.path.join(output_dir, "final_output.csv")}', index=False)
 
-def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path):
+def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None):
 
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "") # add / to path to access json files within
@@ -137,15 +137,29 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         json_filename = os.path.basename(json_file)
         json_dirname = os.path.dirname(json_file)
         json_newname = os.path.join(json_dirname, json_filename.replace("scores", "unrelaxed"))
-        model_pdb_file = os.path.splitext(json_newname)[0] + '.pdb' #T_0.1__sample_2__score_0.5830__global_score_0.8339__seq_recovery_02000_unrelaxed_rank_004_alphafold2_multimer_v3_model_3_seed_000.pdb
-        
-        
+        model_pdb_file = os.path.splitext(json_newname)[0] + '.pdb' #T_0.1__sample_2__score_0.5830__global_score_0.8339__seq_recovery_02000_unrelaxed_rank_004_alphafold2_multimer_v3_model_3_seed_000.pdb        
 
         #Extract relevant data. Files used: json file of specific af2 model, specific af2 pdb,  trb file of rfdiff model (1 for all AF2 models from same rfdiff pdb)  
         plddt_list = params['plddt']
         plddt = int(np.mean(plddt_list))
         rmsd, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path)
         pae = round((np.mean(params['pae'])), 2)
+
+        #if we are doing symmetry we also want to add monomer rmsd to the output
+        if symmetry:
+            monomers_dirname = os.path.join(model_i, 'monomers')
+            print(monomers_dirname)
+            monomer_pdb_file = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(model_pdb_file))
+            print(monomer_pdb_file)
+            monomer_rmsd = homooligomer_rmsd.align_monomer(rfdiff_pdb_path, monomer_pdb_file, monomers_dirname, save_aligned=False)
+            monomer_params_json = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(json_file))
+            with open(monomer_params_json, 'r') as f:
+                monomer_params = json.load(f)
+
+            monomer_plddt_list = monomer_params['plddt']
+            monomer_plddt = int(np.mean(monomer_plddt_list))
+            #we are not doing pae for a monomer..?
+        
         
         #tracebility
         output_num = os.path.basename(output_dir)
@@ -182,6 +196,10 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
                 'af2_json' : json_file,
                 'af2_pdb' : model_pdb_file,
                 'path_rfdiff': rfdiff_pdb_path }  #MODEL PATH for scoring_rg_... #jsonfilename for traceability
+        
+        if symmetry:
+            dictionary['monomer_rmsd']=monomer_rmsd
+            dictionary['monomer_plddt']=monomer_plddt
 
         df = pd.DataFrame(dictionary, index=[0])
         path_csv = os.path.join(output_dir, "output.csv")
@@ -382,7 +400,7 @@ def read_fasta_file(fasta_file):
 
 def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         """
-            #function adds : for chainbraks and chain sequences of all other chains
+            #function adds : for chainbrakes and chain sequences of all other chains
         sequences_all_chains = get_chains_seq(pdb_file)
         sequences_other_chains = sequences_all_chains[1:] 
         #sequences of other chains because mpnn fasta has only chain A and no other chain seqs
@@ -398,14 +416,46 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         with open(mpnn_fasta, "w") as output:
                 SeqIO.write(sequences_mpnn, output, "fasta")
         """
+        # open with SeqIO
+        # skip first line #add comment, first line is original sequence 
+
+        # replace replace("/", ":")
+        # seq_dict {}
+        # drop duplicates
+        #     iterate over seq recods 
+        #     seqdic[seq.seq]=seq
+        # seqdict.values
+
+        # SeqIO.write(sequences, f"{fasta_file[:-3]}_monomers.fa", "fasta")
+
         # Read text file, then replace all slashes with colons
+        # i = 0
+        # seq_dict = {}
+        # for record in SeqIO.parse(mpnn_fasta, "fasta"):
+        #     if i==0:
+        #         i +=1
+        #         continue
+        #     i +=1
+        #     print(record.seq, record.description)
+        #     seq_dict[record.seq]=record.description
+
+        # print(seq_dict)
+        # sequences = []
+        # for record in SeqIO.parse(mpnn_fasta, "fasta"):
+        #     if record.description in seq_dict.values():
+        #         record.seq.replace('/', ':')
+        #         sequences.append(record)
+        # print(sequences)
+        # SeqIO.write(sequences, mpnn_fasta, "fasta")
+
+
         with open(mpnn_fasta, "r+") as f:
             text = f.read()
             text = text.replace("/", ":")
             f.seek(0)
             f.write(text)
             f.truncate()
-        # I doubt we need to manually add "other" chains -- according to tutorials/examples, contig should always specify all chains (even if unchanged): [A1-30/6-6/B1-30/0 C1-100/0 D1-25/0 E1-123]
+        # this is wrong> I doubt we need to manually add "other" chains -- according to tutorials/examples, contig should always specify all chains (even if unchanged): [A1-30/6-6/B1-30/0 C1-100/0 D1-25/0 E1-123]
 
 
 def match_linker_length(trb_path):

@@ -9,6 +9,7 @@ import re
 import shutil
 import pathlib
 from omegaconf import open_dict
+from Bio import SeqIO
 
 
 log = logging.getLogger(__name__)
@@ -181,7 +182,7 @@ def do_cycling(cfg):
                 --homooligomer 1'    
             )
 
-        log.info(f"running symmetry")
+            log.info(f"running symmetry")
 
         #_____________ RUN ProteinMPNN_____________
         # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
@@ -208,13 +209,36 @@ def do_cycling(cfg):
 
         #________________ RUN AF2______________
         fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
+
+
+        #if symmetry - make fasta file with monomer sequence only
+        for fasta_file in fasta_files:
+            if 'symmetry' in cfg.inference:
+                sequences=[]
+                for record in SeqIO.parse(fasta_file, "fasta"):
+                    record.seq = record.seq[:record.seq.find('/')]  
+                    idd = record.id            
+                    record.id = 'monomer_'+idd      
+                    descr = record.description
+                    record.description = 'monomer_'+descr
+                    sequences.append(record)
+                SeqIO.write(sequences, f"{fasta_file[:-3]}_monomer.fa", "fasta")
+        
+        fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) 
+
+
         for fasta_file in fasta_files: # Number of fasta files corresponds to number of rfdiff models
+            print('RUNNING FASTA ',fasta_file)
             if cycle == 0:
                 rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
             else:
                 rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "rf_", "(\d+)") #get 0 from rf_0__model_1__cycle_2__itr_0__.pdb
                 af2_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "model_", "(\d+)") #get 1 from rf_0__model_1__cycle_2__itr_0__.pdb
             model_dir = os.path.join(cfg.af2_out_dir, f"model_{rf_model_num}") #create name for af2 directory name: model_0
+
+            if 'monomer' in fasta_file: #if we are doing symmetry - make an extra directory for modeling monomers with af2
+                model_dir = os.path.join(model_dir,'monomers')
+                
             prosculpt.change_sequence_in_fasta(cfg.rfdiff_pdb, fasta_file)
             if not os.path.exists(model_dir):
                 os.makedirs(model_dir)
@@ -255,9 +279,9 @@ def final_operations(cfg):
         
         trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\d+)") #get 0 from model_0 using reg exp
         if 'pdb_path' in cfg:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path)
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry)
         else:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None)
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
         
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
