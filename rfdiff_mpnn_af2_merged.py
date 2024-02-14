@@ -136,13 +136,13 @@ def do_cycling(cfg):
                 af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
                 for i, af2_pdb in enumerate(af2_pdbs):
                     
-                    af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\d+)")
+                    af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\\d+)")
                     #if str(af_model_num) in args.af2_models:
                     # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
                     if cycle == 1:
-                        rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\d+)")
+                        rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
                         #else:
-                            #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
+                            #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
                     shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
                                 #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
                                 #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
@@ -174,7 +174,7 @@ def do_cycling(cfg):
         fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
         # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
 
-        if cfg.inference.symmetry:
+        if 'symmetry' in cfg.inference:
             run_and_log(
                 f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
                 --input_path={cfg.path_for_parsed_chains} \
@@ -189,7 +189,7 @@ def do_cycling(cfg):
         proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
-            {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry else ""} \
+            {"--tied_positions_jsonl "+cfg.path_for_tied_positions if 'symmetry' in cfg.inference else ""} \
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
@@ -230,10 +230,10 @@ def do_cycling(cfg):
         for fasta_file in fasta_files: # Number of fasta files corresponds to number of rfdiff models
             print('RUNNING FASTA ',fasta_file)
             if cycle == 0:
-                rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
+                rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\\d+)") #get 0 from _0.fa using reg exp
             else:
-                rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "rf_", "(\d+)") #get 0 from rf_0__model_1__cycle_2__itr_0__.pdb
-                af2_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "model_", "(\d+)") #get 1 from rf_0__model_1__cycle_2__itr_0__.pdb
+                rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "rf_", "(\\d+)") #get 0 from rf_0__model_1__cycle_2__itr_0__.pdb
+                af2_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "model_", "(\\d+)") #get 1 from rf_0__model_1__cycle_2__itr_0__.pdb
             model_dir = os.path.join(cfg.af2_out_dir, f"model_{rf_model_num}") #create name for af2 directory name: model_0
 
             if 'monomer' in fasta_file: #if we are doing symmetry - make an extra directory for modeling monomers with af2
@@ -277,12 +277,21 @@ def final_operations(cfg):
 
     for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
         
-        trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\d+)") #get 0 from model_0 using reg exp
-        if 'pdb_path' in cfg:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry)
+        trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\\d+)") #get 0 from model_0 using reg exp
+        if 'symmetry' in cfg.inference:
+            if 'pdb_path' in cfg:
+                log.info("Found cfg.pdb_path") #Just for debugging
+                prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry)
+            else:
+                log.info("Didn't find cfg.pdb_path") #Just for debugging
+                prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
         else:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
-        
+            if 'pdb_path' in cfg:
+                log.info("Found cfg.pdb_path") #Just for debugging
+                prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path)
+            else:
+                log.info("Didn't find cfg.pdb_path") #Just for debugging
+                prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None)
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
