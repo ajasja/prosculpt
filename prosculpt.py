@@ -85,7 +85,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path)
 
         #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
         if 'symmetry' in trb_dict['config']['inference']:
-            rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
+            rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, True, af2_pdb )
  
         return (round(rmsd, 1), linker_length)
 
@@ -148,18 +148,14 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         #if we are doing symmetry we also want to add monomer rmsd to the output
         if symmetry:
             monomers_dirname = os.path.join(model_i, 'monomers')
-            print(monomers_dirname)
             monomer_pdb_file = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(model_pdb_file))
-            print(monomer_pdb_file)
-            monomer_rmsd = homooligomer_rmsd.align_monomer(rfdiff_pdb_path, monomer_pdb_file, monomers_dirname, save_aligned=False)
+            monomer_rmsd = homooligomer_rmsd.align_monomer(rfdiff_pdb_path, monomer_pdb_file, save_aligned=False)
             monomer_params_json = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(json_file))
             with open(monomer_params_json, 'r') as f:
                 monomer_params = json.load(f)
 
             monomer_plddt_list = monomer_params['plddt']
-            monomer_plddt = int(np.mean(monomer_plddt_list))
-            #we are not doing pae for a monomer..?
-        
+            monomer_plddt = int(np.mean(monomer_plddt_list))        
         
         #tracebility
         output_num = os.path.basename(output_dir)
@@ -178,15 +174,17 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
             print(f"Error copying {model_pdb_file} to {new_pdb_file}: {e}")
 
         p = PDBParser()
+
         structure = p.get_structure("model_seq", new_pdb_path)
+    
         ppb = PPBuilder()
         
         seq = ""
         for pp in ppb.build_peptides(structure):
             seq += f":{pp.get_sequence().__str__()}"
 
-
-
+    
+            
         dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\d*\.\d+|-?\d+\.?\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\d*\.\d+|\d+\.?\d*)"),
                 'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\d*\.\d+|-?\d+\.?\d*)"),
@@ -416,46 +414,25 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         with open(mpnn_fasta, "w") as output:
                 SeqIO.write(sequences_mpnn, output, "fasta")
         """
-        # open with SeqIO
-        # skip first line #add comment, first line is original sequence 
+        i = 0
+        seq_dict = {}
+        for record in SeqIO.parse(mpnn_fasta, "fasta"):
+            if i==0:
+                i +=1
+                continue
+            i +=1
+            print(record.seq, record.description)
+            seq_dict[record.seq]=record.description
 
-        # replace replace("/", ":")
-        # seq_dict {}
-        # drop duplicates
-        #     iterate over seq recods 
-        #     seqdic[seq.seq]=seq
-        # seqdict.values
-
-        # SeqIO.write(sequences, f"{fasta_file[:-3]}_monomers.fa", "fasta")
-
-        # Read text file, then replace all slashes with colons
-        # i = 0
-        # seq_dict = {}
-        # for record in SeqIO.parse(mpnn_fasta, "fasta"):
-        #     if i==0:
-        #         i +=1
-        #         continue
-        #     i +=1
-        #     print(record.seq, record.description)
-        #     seq_dict[record.seq]=record.description
-
-        # print(seq_dict)
-        # sequences = []
-        # for record in SeqIO.parse(mpnn_fasta, "fasta"):
-        #     if record.description in seq_dict.values():
-        #         record.seq.replace('/', ':')
-        #         sequences.append(record)
-        # print(sequences)
-        # SeqIO.write(sequences, mpnn_fasta, "fasta")
-
-
-        with open(mpnn_fasta, "r+") as f:
-            text = f.read()
-            text = text.replace("/", ":")
-            f.seek(0)
-            f.write(text)
-            f.truncate()
-        # this is wrong> I doubt we need to manually add "other" chains -- according to tutorials/examples, contig should always specify all chains (even if unchanged): [A1-30/6-6/B1-30/0 C1-100/0 D1-25/0 E1-123]
+        print(seq_dict)
+        sequences = []
+        for record in SeqIO.parse(mpnn_fasta, "fasta"):
+            if record.description in seq_dict.values():
+                newseq = record.seq.replace('/', ':')
+                record.seq=newseq
+                sequences.append(record)
+        print(sequences)
+        SeqIO.write(sequences, mpnn_fasta, "fasta")
 
 
 def match_linker_length(trb_path):

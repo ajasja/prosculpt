@@ -209,7 +209,7 @@ def do_cycling(cfg):
 
         #________________ RUN AF2______________
         fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
-
+        print(fasta_files)
 
         #if symmetry - make fasta file with monomer sequence only
         for fasta_file in fasta_files:
@@ -225,6 +225,20 @@ def do_cycling(cfg):
                 SeqIO.write(sequences, f"{fasta_file[:-3]}_monomer.fa", "fasta")
         
         fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) 
+
+        monomers_fasta_dir = os.path.join(cfg.fasta_dir, 'monomers')
+        if not os.path.exists(monomers_fasta_dir):
+            os.makedirs(monomers_fasta_dir)
+
+        for file in fasta_files:
+            if 'monomer' in file:
+                shutil.move(file, os.path.join(os.path.dirname(file),'monomers',os.path.basename(file)))
+
+        fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
+        fasta_files += glob.glob(os.path.join(cfg.fasta_dir,'monomers', "*.fa"))
+        fasta_files = sorted(fasta_files)
+                
+        print(fasta_files)
 
 
         for fasta_file in fasta_files: # Number of fasta files corresponds to number of rfdiff models
@@ -275,6 +289,14 @@ def final_operations(cfg):
     log.info("Final operations")
     json_directories = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
+    print('do we already have csv files? If we need to re-run stats re have to delete them: ',os.listdir(cfg.output_dir) )
+    if 'output.csv' in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir+'/output.csv')
+    if 'scores_rg_charge_sap.csv' in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir+'/scores_rg_charge_sap.csv')
+    if 'final_output.csv' in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir+'/final_output.csv')
+
     for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
         
         trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\d+)") #get 0 from model_0 using reg exp
@@ -282,7 +304,7 @@ def final_operations(cfg):
             prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry)
         else:
             prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
-        
+            
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
@@ -334,17 +356,22 @@ def prosculptApp(cfg: DictConfig) -> None:
 
     general_config_prep(cfg)
 
-    if not cfg.get("skipRfDiff", False):
-        pass_config_to_rfdiff(cfg)
-        run_rfdiff(cfg)
-        rechain_rfdiff_pdbs(cfg)
-    else:
-        log.info("*** Skipping RfDiff ***")
-        # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
-        shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
+    if cfg.get('only_run_analysis', True):#only_run_analysis
+        print('***Skip everything, go to final operations***')
+        final_operations(cfg)
 
-    do_cycling(cfg)
-    final_operations(cfg)
+    else:
+        if not cfg.get("skipRfDiff", False):
+            pass_config_to_rfdiff(cfg)
+            run_rfdiff(cfg)
+            rechain_rfdiff_pdbs(cfg)
+        else:
+            log.info("*** Skipping RfDiff ***")
+            # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
+            shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
+
+        do_cycling(cfg)
+        final_operations(cfg)
 
 
 if __name__ == "__main__":

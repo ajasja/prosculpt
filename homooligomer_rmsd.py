@@ -47,20 +47,23 @@ def align_chain_A(path_to_target, path_to_mobile, parser):
 def chains_com_coords(chainlist):
     chains_dict = {}
     for i in range(len(chainlist)):
-        chainname = chainlist[i].get_id()
+        # chainname = chainlist[i].get_id()
         chain_com = chainlist[i].center_of_mass()
-        chains_dict[chainname]=chain_com
+        chains_dict[i]=chain_com
     return chains_dict
 
 #if set to true, saves aligned structures to a file
-def save_structures(structure_mobile, rmsd, output_dir):
+def save_structures(structure_mobile, path_to_target, path_to_mobile, rmsd, output_pdb):#dir->pdb; 
+    if output_pdb:
+        pdb_file = output_pdb
+    else:
+        pdb_file = f"{os.path.basename(path_to_target)}_{os.path.basename(path_to_mobile)}_rmsd_{rmsd}.pdb"
     io=PDBIO()
-    pdb_file = f"{output_dir}{os.path.basename(path_to_target)}_{os.path.basename(path_to_mobile)}_rmsd_{rmsd}.pdb"
     io.set_structure(structure_mobile)
     io.save(pdb_file)
 
 #if set to true, aligns a monomer to every chain of oligomer and returns the best rmsd
-def align_monomer(path_to_target, path_to_mobile, output_dir, save_aligned):
+def align_monomer(path_to_target, path_to_mobile, save_aligned,  output_pdb=None):
 
     parser = PDBParser(PERMISSIVE=1)
     structure_target = parser.get_structure("target", path_to_target)
@@ -79,27 +82,26 @@ def align_monomer(path_to_target, path_to_mobile, output_dir, save_aligned):
         superimposer.set_atoms(target_chain_res, mobile_chain_res)
         superimposer.apply(structure_mobile.get_atoms())
         list_rmsd_chains.append(superimposer.rms)
-
-    index_min = np.argmin(list_rmsd_chains)
-
-    #align chains with the best correspondence
-    target_chain_res = list(target_chains[index_min].get_residues())
-    target_chain_res = [ind['CA'] for ind in target_chain_res]
-
-    superimposer = Superimposer()
-    superimposer.set_atoms(target_chain_res, mobile_chain_res)
-    superimposer.apply(structure_mobile.get_atoms())
-    rmsd = superimposer.rms
+    rmsd = np.min(list_rmsd_chains)
     print('rmsd: ', rmsd)
-
+    
+    #align chains with the best correspondence (only aiign again so that we save the best-aligned option)
     if save_aligned==True:
-        save_structures(structure_mobile, rmsd,output_dir)
-
+        index_min = np.argmin(list_rmsd_chains)
+        target_chain_res = list(target_chains[index_min].get_residues())
+        target_chain_res = [ind['CA'] for ind in target_chain_res]
+        superimposer = Superimposer()
+        superimposer.set_atoms(target_chain_res, mobile_chain_res)
+        superimposer.apply(structure_mobile.get_atoms())
+        rmsd = superimposer.rms
+        save_structures(structure_mobile, path_to_target, path_to_mobile, rmsd,output_pdb)
+    
     return rmsd
 
 
-
-def align_oligomers(path_to_target, path_to_mobile, save_aligned):
+def align_oligomers(path_to_target, path_to_mobile, save_aligned, output_pdb=None):
+    print('output_pdb ',output_pdb)
+    print('path_to_target ',path_to_target)
     
     parser = PDBParser(PERMISSIVE=1)
     structure_target, structure_mobile = align_chain_A(path_to_target, path_to_mobile, parser)
@@ -116,42 +118,14 @@ def align_oligomers(path_to_target, path_to_mobile, save_aligned):
             dst = distance.euclidean(target_chains_com[key_rfdiff], mobile_chains_com[key_af])
             distances_array[-1].append(dst)
 
-    #get dictionaries of corresponding chain names 
+    #get dictionary of corresponding chain indexes 
     corresponding = np.argmin(distances_array, axis=1)
-    rename_dict_1 = {}
-    rename_dict_2 = {}
-    for i, j in zip(corresponding, range(len(corresponding))):
-        str1=list(target_chains_com.keys())
-        str2=list(mobile_chains_com.keys())
-        str3=[n.lower() for n in str2]
-        rename_dict_1[str1[i]]=str3[j]
-        rename_dict_2[str3[j]]=str2[j]
 
-    #rename chains of mobile structure
-    #if the structures are very different, multiple chains in mobile can be close to target 
-    #in that case, return rmsd = -1
-    try:
-        for model in structure_mobile:
-            for chain in model:
-                old_name = chain.get_id()
-                chain.id = rename_dict_1[old_name]
-        for model in structure_mobile:
-            for chain in model:
-                old_name = chain.get_id()
-                chain.id = rename_dict_2[old_name] 
-    except KeyError:
-        rmsd = -1
-        if save_aligned==True:
-            save_structures(structure_target, structure_mobile, rmsd) 
-        return rmsd
-    
-    #get a list of residues for alignment for mobile structure
     target_res_total = list(structure_target.get_residues())
     mobile_res_total = []
-    for i in list(structure_target.get_chains()):
-        for k in mobile_chains:
-            if k.id == i.id:
-                mobile_res_total += list(k.get_residues())   
+    for i in range(len(list(structure_target.get_chains()))):
+        k = list(structure_mobile.get_chains())[corresponding[i]]
+        mobile_res_total += list(k.get_residues())
     target_res_total = [ind['CA'] for ind in target_res_total]
     mobile_res_total = [ind['CA'] for ind in mobile_res_total]
 
@@ -159,9 +133,9 @@ def align_oligomers(path_to_target, path_to_mobile, save_aligned):
     superimposer.set_atoms(target_res_total, mobile_res_total)
     superimposer.apply(structure_mobile.get_atoms())
     rmsd = superimposer.rms
-    print(rmsd)
+    print('rmsd: ', rmsd)
     if save_aligned==True:
-        save_structures(structure_mobile, rmsd, output_dir)
+        save_structures(structure_mobile, path_to_target, path_to_mobile, rmsd, output_pdb)
 
     return rmsd
 
@@ -173,25 +147,25 @@ if __name__ == '__main__':
                         help='path to the pdb of target protein (the one to align to)')
     argparser.add_argument('--path_to_mobile', '-m',  type=str,
                         help='path to the pdb of mobile protein')
-    argparser.add_argument('--output_dir', '-out',  type=str, const='',
-                        help='directory to save a file with aligned mobile structure')
-    argparser.add_argument('--save_aligned', '-s',  type=bool, const=True, 
+    argparser.add_argument('--output_pdb', '-out', type=str, default=None,
+                        help='directory/filename - where to save a file with aligned mobile structure') #if we pass, then saves there; if we do not, then saves a combination of names of target and mobile
+    argparser.add_argument('--save_aligned', '-s',  type=bool, default=True, 
                         help='if you want to save the aligned mobile structure')
-    argparser.add_argument('--align_monomer', '-am',  type=bool, const=False,
+    argparser.add_argument('--align_monomer', '-am',  type=bool, default=False,
                         help='do you want to align a monomer?')
     
     # Parse the arguments
     args = argparser.parse_args()
     path_to_target = args.path_to_target
     path_to_mobile = args.path_to_mobile
-    output_dir = args.output_dir
+    output_pdb = args.output_pdb
     save_aligned = args.save_aligned
     ismonomer = args.align_monomer
     
     # Call the align_oligomers function with the parsed arguments
     if ismonomer:
-        rmsd = align_monomer(path_to_target, path_to_mobile,output_dir, save_aligned)
+        rmsd = align_monomer(path_to_target, path_to_mobile,output_pdb, save_aligned)
     else:
-        rmsd = align_oligomers(path_to_target, path_to_mobile,output_dir, save_aligned)
+        rmsd = align_oligomers(path_to_target, path_to_mobile,output_pdb, save_aligned)
     
 
