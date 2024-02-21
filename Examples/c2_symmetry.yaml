@@ -1,19 +1,20 @@
 # Config for the current run
 #pdb_path: /home/akonstantinova/december_2023/symmetry/yamls/p3p4.pdb # Path to input PDB file || null when building unconditionally
-output_dir: /home/akonstantinova/january_2024/symmetry/c2_out # Path to output directory
+output_dir:  Examples/Examples_out/c2_symmetry/ # Path to output directory
 contig: ['40-40'] # Contig to design
-num_designs_rfdiff: 1 # Number of designs to generate with RFdiffusion
-num_seq_per_target_mpnn: 1 # Number of sequences to generate per target with MPNN
+num_designs_rfdiff: 2 # Number of designs to generate with RFdiffusion
+num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
 chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
 af2_mpnn_cycles: 1 # Not used yet?
 model_order: 4 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 skipRfDiff: False
+use_a3m: False
 
 defaults:
   - installation
   - _self_
-  - override hydra/launcher: submitit_slurm
+  #- override hydra/launcher: submitit_slurm  #what is this?
 
 #pass_to_mpnn: # Groups to pass to proteinMPNN
 

@@ -1,14 +1,17 @@
 # Config for the current run
-pdb_path: /home/tsatler/RFdif/RFdiffusion/examples/input_pdbs/5TPN.pdb # Path to input PDB file || null when building unconditionally
-output_dir: Examples_out/ # Path to output directory
+pdb_path: Examples/input_data/5TPN.pdb # Path to input PDB file || null when building unconditionally
+output_dir: Examples/Examples_out/inpaintseq/ # Path to output directory
 contig: "[10-40/A163-181/10-40]" # Contig to design
-num_designs_rfdiff: 10 # Number of designs to generate with RFdiffusion
+num_designs_rfdiff: 2 # Number of designs to generate with RFdiffusion
 num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
 chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
 af2_mpnn_cycles: 1 # Not used yet?
 model_order: 1 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 
+sampling_temp: 0.1
+backbone_noise: 0.0
+use_a3m: False
 
 defaults:
   - installation
