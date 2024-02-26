@@ -148,7 +148,6 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
 
         #write the sequences to be modelled:
         for seq_num, sequence in enumerate(mpnn_sequences_list):
-            #f.write(">"+str(101+seq_num)+"\n") #write name of sequence starting at 101. This is what colabfold does
             f.write(">"+letters[seq_num]+"\n")
             sequence_line= "-"*sequences_limits[seq_num][0] #Add a gap for each position before the sequence
             sequence_line+=sequence  #add sequence
@@ -169,44 +168,30 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                 for line_id, line in enumerate(chain_alignment_file):
                     if line_id>=3: #skip first three lines, since they contain the original sequence.
                         if line[0] == ">":
-                            #f.write(line.split("\t")[0]+"\n")
                             f.write(line)
                         else:
                             table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
-                            #table=str.maketrans(string.ascii_lowercase, "-"*26) #This replaces lowercase characters with gaps
                             line_without_insertions=line.translate(table)
 
                             new_aligned_seq="-"*(len(mpnn_sequence_no_colons)-1)  #Make a gap sequence of the length of the sequence. Again, I don't know why -1.
                             for id, pos in enumerate(trb_dict["con_ref_pdb_idx"]):
                                 if pos[0]==chain: #If position chain corresponds to the chain we're looking at
-                                
+                            
                                     position_to_copy=trb_dict["con_ref_pdb_idx"][id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
-                                    new_aligned_seq= new_aligned_seq[:residue_data_designed[id]] + line_without_insertions[position_to_copy] +  new_aligned_seq[residue_data_designed[id]+1:] #This is the line if working with the deletion above 
+                                    new_aligned_seq= new_aligned_seq[:residue_data_designed[id]] + line_without_insertions[position_to_copy] +  new_aligned_seq[residue_data_designed[id]+1:] 
     
-                                    #new_aligned_seq= new_aligned_seq[:residue_data_designed[id]] + line[position_to_copy] +  new_aligned_seq[residue_data_designed[id]+1:] #This is the regular line
-
-                            #if len(new_aligned_seq)>len(mpnn_sequence_no_colons)-1:
-                            #    new_aligned_seq=new_aligned_seq[:len(mpnn_sequence_no_colons)-1] # Homogenize length with gaps?
-                            #elif len(new_aligned_seq)<len(mpnn_sequence_no_colons)-1:
-                            #    new_aligned_seq=new_aligned_seq+"-"*(len(mpnn_sequence_no_colons)-1-len(new_aligned_seq))
-
                             f.write(new_aligned_seq+"\n")
     
-    #delete empty lines and null bytes that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed because it slows everyhing down
+    #delete empty lines and null bytes that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed, but it doesn't really slow things that much
     with open(output,'r+') as output_file:
         with open(output+"_tmp", "w") as temp_file:
             for line in output_file:
                 if not line.isspace():
                     temp_file.write(line)
 
-    #with open(output+"_tmp","rb") as temp_file:
-    #    data=temp_file.read()
-    #data = data.rstrip(b'\x00')
-    #with open(output+"_tmp","wb") as temp_file:
-    #    temp_file.write(data)
     os.remove(output)
     os.rename(output+"_tmp",output)
-    shutil.copyfile(output, output+"_backup") #this is for debug only, to see the file before it goes to AF2
+    #shutil.copyfile(output, output+"_backup") #this is for debug only, to see the file before it goes to AF2
 
 
 
