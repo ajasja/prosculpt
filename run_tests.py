@@ -54,7 +54,7 @@ if not args.dry_run:
     os.system(f"sbatch -d afterany{jobs_string} -J test_check slurm_verify_tests.sh")
     
 
-with open("Examples/Examples_out/test_verification_output.txt","w") as output_file:
+with open("Examples/Examples_out/test_verification_output.txt","w+") as output_file:
     output_file.write("Started running tests: "+datetime.datetime.now().strftime('%d/%m/%y %H:%M:%S.%f')+"\n")
 
             

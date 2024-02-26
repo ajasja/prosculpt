@@ -180,8 +180,7 @@ def do_cycling(cfg):
                 --input_path={cfg.path_for_parsed_chains} \
                 --output_path={cfg.path_for_tied_positions} \
                 --homooligomer 1'    
-            )
-
+            )         
             log.info(f"running symmetry")
 
         #_____________ RUN ProteinMPNN_____________
@@ -245,29 +244,73 @@ def do_cycling(cfg):
 
             model_order = str(cfg.model_order).split(",") # If only one number is passed, Hydra converts it to int
             num_models = len(model_order) #model order "1,2,3" -> num of models = 3
-            if cycle == 0: #have to run af2 differently in first cycle 
-                run_and_log(
-                    f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
-                                --model-type alphafold2_multimer_v3 \
-                                --msa-mode single_sequence \
-                                {fasta_file} {model_dir} \
-                                --model-order {cfg.model_order} \
-                                {parse_additional_args(cfg, "pass_to_af")} \
-                                --num-models {num_models}'
-                                )
-            else: 
-                for model_number in model_order:
-                    if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
-                        num_models = 1
+
+            
+            if cfg.get("use_a3m", False): #If we're using a custom a3m, generate it for each sequence in the fasta
+                print("Generating custom msa files")
+                input_a3m_files=[]
+                with open(fasta_file) as fasta_f:
+                    a3m_filename=""
+                    for line in fasta_f:       
+                        if line[0]==">":
+                            a3m_filename= ("".join([ c if (c.isalnum()  or c ==".") else "_" for c in line[1:-1] ]))+".a3m"
+                        else:
+                            mpnn_seq=line
+                            trb_file=os.path.join(cfg.rfdiff_out_dir, "_"+str(rf_model_num)+".trb") #
+                            print (a3m_filename)
+                            custom_a3m_path=os.path.join(model_dir,a3m_filename)
+                            prosculpt.make_alignment_file(trb_file,mpnn_seq,cfg.a3m_dir,custom_a3m_path)
+                            input_a3m_files.append(custom_a3m_path)
+
+                for a3m_file in input_a3m_files:
+                    if cycle == 0: #have to run af2 differently in first cycle 
                         run_and_log(
                             f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
-                                --model-type alphafold2_multimer_v3 \
-                                --msa-mode single_sequence \
-                                {fasta_file} {model_dir} \
-                                --model-order {model_number} \
-                                {parse_additional_args(cfg, "pass_to_af")} \
-                                --num-models {num_models}'
-                                )
+                                        --model-type alphafold2_multimer_v3 \
+                                        --msa-mode mmseqs2_uniref_env \
+                                        {a3m_file} {model_dir} \
+                                        --model-order {cfg.model_order} \
+                                        {parse_additional_args(cfg, "pass_to_af")} \
+                                        --num-models {num_models}'
+                                        ) #changed from single_sequence
+                    else: 
+                        for model_number in model_order:
+                            if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
+                                num_models = 1
+                                run_and_log(
+                                    f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                                        --model-type alphafold2_multimer_v3 \
+                                        --msa-mode mmseqs2_uniref_env \
+                                        {a3m_file} {model_dir} \
+                                        --model-order {model_number} \
+                                        {parse_additional_args(cfg, "pass_to_af")} \
+                                        --num-models {num_models}'
+                                        ) #Changed from single_sequence
+
+            else:  #this is the normal mode of operations. Single sequence. 
+                if cycle == 0: #have to run af2 differently in first cycle 
+                    run_and_log(
+                        f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                                    --model-type alphafold2_multimer_v3 \
+                                    --msa-mode single_sequence \
+                                    {fasta_file} {model_dir} \
+                                    --model-order {cfg.model_order} \
+                                    {parse_additional_args(cfg, "pass_to_af")} \
+                                    --num-models {num_models}'
+                                    ) 
+                else: 
+                    for model_number in model_order:
+                        if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
+                            num_models = 1
+                            run_and_log(
+                                f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                                    --model-type alphafold2_multimer_v3 \
+                                    --msa-mode single_sequence \
+                                    {fasta_file} {model_dir} \
+                                    --model-order {model_number} \
+                                    {parse_additional_args(cfg, "pass_to_af")} \
+                                    --num-models {num_models}'
+                                    )#
 
         # msa single sequence makes sense for designed proteins
 
@@ -343,16 +386,20 @@ def prosculptApp(cfg: DictConfig) -> None:
 
     general_config_prep(cfg)
 
-    if not cfg.get("skipRfDiff", False):
-        pass_config_to_rfdiff(cfg)
-        run_rfdiff(cfg)
-        rechain_rfdiff_pdbs(cfg)
-    else:
-        log.info("*** Skipping RfDiff ***")
-        # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
-        shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
+    if not cfg.get("final_operations",False):
+        if not cfg.get("skipRfDiff", False):
+            pass_config_to_rfdiff(cfg)
+            run_rfdiff(cfg)
+            rechain_rfdiff_pdbs(cfg)
+        else:
+            log.info("*** Skipping RfDiff ***")
+            # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
+            shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
 
-    do_cycling(cfg)
+        do_cycling(cfg)
+    else:
+        log.info("*** Doing only final operations ***")
+    
     final_operations(cfg)
 
 
