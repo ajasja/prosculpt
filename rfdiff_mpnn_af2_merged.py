@@ -61,7 +61,7 @@ def general_config_prep(cfg):
             cfg.chains_to_design = ' '.join(chain_letters[:breaks])
             log.info(f"Chains to design (according to contig chain breaks): {cfg.chains_to_design}")
                 
-
+        
 
 
     
@@ -342,7 +342,7 @@ def final_operations(cfg):
         )
         
     scores_rg_path = os.path.join(cfg.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
-    prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path)
+    prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path, cfg.get("output_best", True), cfg.get("rmsd_threshold",3),cfg.get("plddt_threshold",90))
 
     os.remove(csv_path)
     os.remove(scores_rg_path)
@@ -386,7 +386,7 @@ def prosculptApp(cfg: DictConfig) -> None:
 
     general_config_prep(cfg)
 
-    if not cfg.get("final_operations",False):
+    if not cfg.get("final_ops_only",False):
         if not cfg.get("skipRfDiff", False):
             pass_config_to_rfdiff(cfg)
             run_rfdiff(cfg)

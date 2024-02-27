@@ -205,7 +205,7 @@ def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # 
     return match.group(1)
 
 
-def merge_csv(output_dir, output_csv, scores_csv):
+def merge_csv(output_dir, output_csv, scores_csv, output_best=True,rmsd_threshold=5,plddt_threshold=90):
     # read csv files
     df1 = pd.read_csv(scores_csv)
     df2 = pd.read_csv(output_csv)
@@ -217,6 +217,13 @@ def merge_csv(output_dir, output_csv, scores_csv):
 
     # save merged dataframe to csv file
     merged_df.to_csv(f'{os.path.join(output_dir, "final_output.csv")}', index=False)
+
+    # Select best ones and copy to another df
+    if (output_best):
+        best_df=merged_df[(merged_df["RMSD"] <= rmsd_threshold) | (merged_df["plddt"] >= plddt_threshold)] #select best based on thresholds
+        best_df.to_csv(f'{os.path.join(output_dir, "final_output_best.csv")}', index=False)
+
+
 
 def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None):
 
