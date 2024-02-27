@@ -155,7 +155,6 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
             f.write(sequence_line+"\n") #write padded sequence
 
         #now write the aligned sequences
-        
         for chain in used_chains:
             #LEt's get the correct file for this chain
             for file in os.listdir(alignments_path):
@@ -174,15 +173,15 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                             line_without_insertions=line.translate(table)
 
                             new_aligned_seq="-"*(len(mpnn_sequence_no_colons)-1)  #Make a gap sequence of the length of the sequence. Again, I don't know why -1.
-                            for id, pos in enumerate(trb_dict["con_ref_pdb_idx"]):
+                            for id, pos in enumerate(trb_dict["con_hal_pdb_idx"]):
                                 if pos[0]==chain: #If position chain corresponds to the chain we're looking at
                             
-                                    position_to_copy=trb_dict["con_ref_pdb_idx"][id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
+                                    position_to_copy=trb_dict["con_hal_pdb_idx"][id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
                                     new_aligned_seq= new_aligned_seq[:residue_data_designed[id]] + line_without_insertions[position_to_copy] +  new_aligned_seq[residue_data_designed[id]+1:] 
     
                             f.write(new_aligned_seq+"\n")
     
-    #delete empty lines and null bytes that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed, but it doesn't really slow things that much
+    #delete empty lines that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed, but it doesn't really slow things that much.
     with open(output,'r+') as output_file:
         with open(output+"_tmp", "w") as temp_file:
             for line in output_file:
