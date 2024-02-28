@@ -67,6 +67,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         rmsd = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
         if starting_pdb:
             structure_control = parser.get_structure("control", starting_pdb)
+            
             control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
             if True in trb_dict['inpaint_seq']:
                 control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
