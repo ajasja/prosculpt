@@ -351,7 +351,7 @@ def final_operations(cfg):
                 log.info("Didn't find cfg.pdb_path") #Just for debugging
                 prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
         else:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=None)
             
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
@@ -360,7 +360,7 @@ def final_operations(cfg):
         )
         
     scores_rg_path = os.path.join(cfg.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
-    prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path, cfg.get("output_best", True), cfg.get("rmsd_threshold",3),cfg.get("plddt_threshold",90))
+    prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path) #, cfg.get("output_best", True), cfg.get("rmsd_threshold",3),cfg.get("plddt_threshold",90) used for filtering. not needed now.
 
     os.remove(csv_path)
     os.remove(scores_rg_path)

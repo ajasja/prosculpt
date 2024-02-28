@@ -211,7 +211,7 @@ def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # 
     return match.group(1)
 
 
-def merge_csv(output_dir, output_csv, scores_csv, output_best=True,rmsd_threshold=5,plddt_threshold=90):
+def merge_csv(output_dir, output_csv, scores_csv): #, output_best=True,rmsd_threshold=5,plddt_threshold=90 parameters for the filtering
     # read csv files
     df1 = pd.read_csv(scores_csv)
     df2 = pd.read_csv(output_csv)
@@ -224,16 +224,17 @@ def merge_csv(output_dir, output_csv, scores_csv, output_best=True,rmsd_threshol
     # save merged dataframe to csv file
     merged_df.to_csv(f'{os.path.join(output_dir, "final_output.csv")}', index=False)
 
-    # Select best ones and copy to another df
-    if (output_best):
-        best_df=merged_df[(merged_df["RMSD"] <= rmsd_threshold) | (merged_df["plddt"] >= plddt_threshold)] #select best based on thresholds
-        best_df.to_csv(f'{os.path.join(output_dir, "final_output_best.csv")}', index=False)
 
-        dir_best_pdbs = os.path.join(output_dir, "best_pdbs")
-        os.makedirs(dir_best_pdbs, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
+    # Select best ones and copy to another csv. commented out for now    
+    #if (output_best):
+        #best_df=merged_df[(merged_df["RMSD"] <= rmsd_threshold) | (merged_df["plddt"] >= plddt_threshold)] #select best based on thresholds
+        #best_df.to_csv(f'{os.path.join(output_dir, "final_output_best.csv")}', index=False)
+
+        #dir_best_pdbs = os.path.join(output_dir, "best_pdbs")
+        #os.makedirs(dir_best_pdbs, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
         
-        for file in best_df["model_path"]:
-            shutil.copy(file,os.path.join(output_dir, "best_pdbs"))
+        #for file in best_df["model_path"]:
+        #    shutil.copy(file,os.path.join(output_dir, "best_pdbs"))
                 
 
 
