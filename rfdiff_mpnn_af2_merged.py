@@ -244,7 +244,7 @@ def do_cycling(cfg):
 
             model_order = str(cfg.model_order).split(",") # If only one number is passed, Hydra converts it to int
             num_models = len(model_order) #model order "1,2,3" -> num of models = 3
-
+            
             
             if cfg.get("use_a3m", False): #If we're using a custom a3m, generate it for each sequence in the fasta
                 print("Generating custom msa files")

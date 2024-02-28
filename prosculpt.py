@@ -230,13 +230,22 @@ def merge_csv(output_dir, output_csv, scores_csv, output_best=True,rmsd_threshol
         best_df=merged_df[(merged_df["RMSD"] <= rmsd_threshold) | (merged_df["plddt"] >= plddt_threshold)] #select best based on thresholds
         best_df.to_csv(f'{os.path.join(output_dir, "final_output_best.csv")}', index=False)
 
+        dir_best_pdbs = os.path.join(output_dir, "best_pdbs")
+        os.makedirs(dir_best_pdbs, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
+        
+        for file in best_df["model_path"]:
+            shutil.copy(file,os.path.join(output_dir, "best_pdbs"))
+                
+
 
 
 def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None):
 
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "") # add / to path to access json files within
-    dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "final_pdbs")
+
+    #dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "final_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
+    dir_renamed_pdb = os.path.join(output_dir, "final_pdbs")
     os.makedirs(dir_renamed_pdb, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
 
     trb_file = os.path.join(rfdiff_out_dir, f"_{trb_num}.trb") #name of corresponding trb file 
