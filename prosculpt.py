@@ -559,7 +559,7 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
                 record.seq=newseq
                 sequences.append(record)
         print(sequences)
-        SeqIO.write(sequences, mpnn_fasta, "fasta")
+        SeqIO.write(sequences, mpnn_fasta, "fasta-2line") #This needs to be fasta-2line for MSA code to work
 
 
 def match_linker_length(trb_path):
