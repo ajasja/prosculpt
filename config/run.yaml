@@ -29,9 +29,10 @@ pass_to_rfdiff: # Groups to pass to RfDiff
 # - Tetrahedral symmetry # call as tetrahedral
 # - Octahedral symmetry # call as octahedral
 # - Icosahedral symmetry # call as icosahedral
-#symmetry: c2
+
 
 inference:
+# symmetry: c2
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
 potentials:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
