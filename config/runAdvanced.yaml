@@ -16,7 +16,7 @@ designable_residues: [A8, A9, A10, A13, A85, B, C] # Residues to be redesigned w
 use_a3m: False  #If True this tells the program to make an alignment file from the given alignments.
 a3m_dir: /home/folivieri/prosculpt/uPar_epitope/alignments/ #If use_a3m is True, then you need to specify the location of the alignment files obtained from the colabfold server.
 
-final_ops_only: False  #Only run final operations. This is good if a previous run failed to run final ops.
+only_run_analysis: False  #Only run final operations. This is good if a previous run failed to run final ops. Default: False
 
 output_best: True #Whether to output a filtered output list. Default True if missing
 rmsd_threshold: 3 #rmsd threshold for filtered output. Default 3 if missing.

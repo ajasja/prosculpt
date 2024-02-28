@@ -82,7 +82,7 @@ def calculate_sap_score(pdb_file_path, chain="B"):
 parser = argparse.ArgumentParser(description='Calculate Rg, charge, and SAP score for a list of PDB models.')
 parser.add_argument('input_csv', type=str, help='Path to input CSV file')
 parser.add_argument('--output_dir', type=str, help='Path to output directory. If not provided, output files will be written to the same directory as the input CSV.')
-
+#add a flag minimize structure and overwrite the pdb. minimization before metrics
 # Parse command line arguments
 args = parser.parse_args()
 
@@ -114,9 +114,9 @@ for pdb in data['model_path']:
     structure = parser.get_structure('protein', pdb)
     chain = structure[0]['A']
     dictionary = {'model_path' : pdb,
-                  'rg': calculate_rg(chain),
-                  'charge': calculate_charge(chain, ph=7.4),
-                  'sap': calculate_sap_score(pdb, "A")}
+                'rg': calculate_rg(chain),
+                'charge': calculate_charge(chain, ph=7.4),
+                'sap': calculate_sap_score(pdb, "A")}
     df = pd.DataFrame(dictionary, index=[0])
 
     path_csv = os.path.join(output, "scores_rg_charge_sap.csv")
