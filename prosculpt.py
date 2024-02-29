@@ -50,12 +50,13 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
             residue_data_control = trb_dict['con_ref_idx0']
             residue_data_designed = trb_dict['con_hal_idx0']
 
-        all_designed_res = list(structure_designed.get_residues())       
+        all_designed_res = list(structure_designed.get_residues()) 
+        all_designed_res_ca= [ind['CA'] for ind in all_designed_res]     
         if True in trb_dict['inpaint_seq']:
-            designed_fixed_res = [all_designed_res[ind]['CA'] for ind in residue_data_designed]
-            designed_sculpted_res = [ind['CA'] for ind in all_designed_res if ind['CA'] not in designed_fixed_res]
+            designed_scaffold_res = [all_designed_res[ind]['CA'] for ind in residue_data_designed]
+            designed_sculpted_res = [ind['CA'] for ind in all_designed_res if ind['CA'] not in designed_scaffold_res]
         else:
-            designed_fixed_res = [ind['CA'] for ind in all_designed_res]
+            designed_scaffold_res = [ind['CA'] for ind in all_designed_res]
 
         #printed_desi = [res.get_resname() for res in designed_res]
 
@@ -69,33 +70,48 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         io=PDBIO()
         io.set_structure(structure_designed)
         io.save("af2_pdb_2.pdb")
-      
-        rmsd_fixed = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
+        rmsd=-1
+        rmsd_scaffold = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
         rmsd_sculpted = -1
         if starting_pdb:
-            structure_rfdiff = parser.get_structure("control", rfdiff_pdb_path)  
+            structure_rfdiff = parser.get_structure("control", rfdiff_pdb_path) 
+ 
             all_rfdiff_res = list(structure_rfdiff.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
+            all_rfdiff_res_ca= [ind['CA'] for ind in all_rfdiff_res]     
 
             if True in trb_dict['inpaint_seq']:
-                rfdiff_fixed_res = [all_rfdiff_res[ind]['CA'] for ind in residue_data_designed] #retrieve the residue with the corresponding index from rfdiff_res
-                rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_fixed_res]
+                rfdiff_scaffold_res = [all_rfdiff_res[ind]['CA'] for ind in residue_data_designed] #retrieve the residue with the corresponding index from rfdiff_res
+                rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_scaffold_res]
             else:
-                rfdiff_fixed_res = [ind['CA'] for ind in all_rfdiff_res]
+                rfdiff_scaffold_res = [ind['CA'] for ind in all_rfdiff_res]
 
-            if len(rfdiff_fixed_res)!=len(designed_fixed_res):
+            if len(rfdiff_scaffold_res)!=len(designed_scaffold_res):
                 print("Fixed and moving atom lists differ in size") #for now, this is when input pdb and output are different length
                 return(-1, -1)
-
-            superimposer = SVDSuperimposer()
-            rfdiff_fixed_coords = [a.coord for a in rfdiff_fixed_res]
-            designed_fixed_coords = [a.coord for a in designed_fixed_res]
-
-            rfdiff_fixed_coords = np.array(rfdiff_fixed_coords)
-            designed_fixed_coords = np.array(designed_fixed_coords)
             
-            superimposer.set(rfdiff_fixed_coords, designed_fixed_coords)
+            #Align all and get RMSD of all
+            superimposer = SVDSuperimposer()
+            rfdiff_all_coords = [a.coord for a in all_rfdiff_res_ca]
+            designed_all_coords = [a.coord for a in all_designed_res_ca]
+
+            rfdiff_all_coords = np.array(rfdiff_all_coords)
+            designed_all_coords = np.array(designed_all_coords)
+            
+            superimposer.set(rfdiff_all_coords, designed_all_coords)
             superimposer.run()
-            rmsd_fixed = get_rmsd_from_coords(rfdiff_fixed_coords, designed_fixed_coords, superimposer.rot, superimposer.tran)
+            rmsd = get_rmsd_from_coords(rfdiff_all_coords, designed_all_coords, superimposer.rot, superimposer.tran)
+
+            #Align only scaffold then get rmsd_scaffold and rmsd_sculpted (If any)
+            superimposer = SVDSuperimposer()
+            rfdiff_scaffold_coords = [a.coord for a in rfdiff_scaffold_res]
+            designed_scaffold_coords = [a.coord for a in designed_scaffold_res]
+
+            rfdiff_scaffold_coords = np.array(rfdiff_scaffold_coords)
+            designed_scaffold_coords = np.array(designed_scaffold_coords)
+            
+            superimposer.set(rfdiff_scaffold_coords, designed_scaffold_coords)
+            superimposer.run()
+            rmsd_scaffold = get_rmsd_from_coords(rfdiff_scaffold_coords, designed_scaffold_coords, superimposer.rot, superimposer.tran)
 
             if True in trb_dict['inpaint_seq']:
                 rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
@@ -109,9 +125,9 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
             
         if symmetry!=None:
-            rmsd_fixed = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
+            rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
  
-        return ((round(rmsd_fixed, 1),round(rmsd_sculpted, 1)), linker_length)
+        return ([round(rmsd, 1),round(rmsd_scaffold, 1),round(rmsd_sculpted, 1)], linker_length)
 
 
 def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
@@ -292,7 +308,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         #Extract relevant data. Files used: json file of specific af2 model, specific af2 pdb,  trb file of rfdiff model (1 for all AF2 models from same rfdiff pdb)  
         plddt_list = params['plddt']
         plddt = int(np.mean(plddt_list))
-        rmsd, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry)
+        rmsd_list, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry)
         pae = round((np.mean(params['pae'])), 2)
 
         #if we are doing symmetry we also want to add monomer rmsd to the output
@@ -312,7 +328,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         af2_model =  get_token_value(json_filename, '_model_', "(\\d*\\.\\d+|\\d+\\.?\\d*)")
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_fixed_{rmsd[0]}__rmsd_sculpted_{rmsd[1]}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
+        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_{rmsd_list[0]}__rmsd_scaffold_{rmsd_list[1]}__rmsd_sculpted_{rmsd_list[2]}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
             #out -> 00 -> number of task
             #rf -> 01 -> number of corresponding rf difff model
             #af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag 
@@ -337,7 +353,8 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
 
         dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
-                'RMSD_fixed': get_token_value(new_pdb_file, '__rmsd_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                'RMSD_scaffold': get_token_value(new_pdb_file, '__rmsd_scaffold_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_sculpted': get_token_value(new_pdb_file, '__rmsd_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'pae': get_token_value(new_pdb_file, '__pae_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'model_path': new_pdb_path,
@@ -381,7 +398,8 @@ def create_dataframe(path_to_files, output_dir): # path = r'content/*partial.pdb
         print(seq)
         dictionary = {'link_lenght': get_token_value(file_name, 'link_', "(\\d*\\.\\d+|\\d+\\.?\\d*)" ),
                 'plddt': get_token_value(file_name, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
-                'RMSD_fixed': get_token_value(file_name, '__rmsd_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                'RMSD': get_token_value(file_name, '__rmsd_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                'RMSD_scaffold': get_token_value(file_name, '__rmsd_scaffold_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_sculpted': get_token_value(file_name, '__rmsd_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'pae': get_token_value(file_name, '__pae_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'model_path': file_name,
@@ -467,10 +485,11 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
         # We need to set blank fixed_res for each generated chain (based on contig).
         abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
-        if 'symmetry' in cfg.inference: #if we find symmetry:
+        if cfg.inference.symmetry!=None: #if we find symmetry:
             breaks = int(cfg.inference.symmetry[1:])
         else:
             breaks = contig.count("/0 ") + 1
+
         fixed_res = dict(zip(abeceda, [[] for _ in range(breaks)]))
         print(f"Fixed res (according to contig chain breaks): {fixed_res}")
 

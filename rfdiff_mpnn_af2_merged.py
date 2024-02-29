@@ -50,13 +50,14 @@ def general_config_prep(cfg):
             cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.designable_residues}))
             log.info(f"Skipping RFdiff, only redesigning chains specified in designable_residues: {cfg.chains_to_design}")
 
-        
+        if 'symmetry' not in cfg.inference:
+            cfg.inference.symmetry=None
 
         # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(chain_letters[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
         chain_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55
         if cfg.chains_to_design == None: #TODO this will likely break for sym mode
 
-            if 'symmetry' in cfg.inference:#if we are doing symmetry:
+            if cfg.inference.symmetry!=None:#if we are doing symmetry:
                 breaks = int(cfg.inference.symmetry[1:])
             else:
                 breaks = cfg.contig.count("/0 ") + 1
@@ -176,7 +177,7 @@ def do_cycling(cfg):
         fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
         # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
 
-        if 'symmetry' in cfg.inference:
+        if cfg.inference.symmetry!=None:
             run_and_log(
                 f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
                 --input_path={cfg.path_for_parsed_chains} \
@@ -190,7 +191,7 @@ def do_cycling(cfg):
         proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
-            {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry else ""} \
+            {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry!=None else ""} \
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
@@ -214,7 +215,7 @@ def do_cycling(cfg):
 
         #if symmetry - make fasta file with monomer sequence only
         for fasta_file in fasta_files:
-            if 'symmetry' in cfg.inference:
+            if cfg.inference.symmetry!=None:
                 sequences=[]
                 for record in SeqIO.parse(fasta_file, "fasta"):
                     record.seq = record.seq[:record.seq.find('/')]  
