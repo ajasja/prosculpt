@@ -13,6 +13,7 @@ parser.add_argument('-d', '--dry-run', action="store_true", help="Do not run any
 
 
 args=parser.parse_args()
+os.makedirs("Examples/Examples_out/", exist_ok=True)
 
 if args.list:
     print("Available tests:")
