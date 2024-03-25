@@ -218,11 +218,12 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                             line_without_insertions=line.translate(table)
 
                             new_aligned_seq="-"*(len(mpnn_sequence_no_colons)-1)  #Make a gap sequence of the length of the sequence. Again, I don't know why -1.
+                            first_residue_in_trb=residue_data_control_1[0][1]
                             for id, pos in enumerate(residue_data_control_1):
                                 if pos[0]==chain: #If position chain corresponds to the chain we're looking at
                             
                                     position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
-                                    new_aligned_seq= new_aligned_seq[:residue_data_designed_0[id]] + line_without_insertions[position_to_copy] +  new_aligned_seq[residue_data_designed_0[id]+1:] 
+                                    new_aligned_seq= new_aligned_seq[:residue_data_designed_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_designed_0[id]+1:] 
     
                             f.write(new_aligned_seq+"\n")
     
