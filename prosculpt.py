@@ -10,11 +10,11 @@ import numpy as np
 import pandas as pd
 import shutil
 from pathlib import Path
-
+import string
 import homooligomer_rmsd
 
 
-def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path):        
+def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,symmetry):        
     # First calculate RMSD between input protein and AF2 generated protein
     # Second calcualte number of total generated AA by RFDIFF 
     #   - if designing only in one location the number is equal linker length   
@@ -67,6 +67,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path)
         rmsd = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
         if starting_pdb:
             structure_control = parser.get_structure("control", starting_pdb)
+            
             control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
             if True in trb_dict['inpaint_seq']:
                 control_res = [control_res[ind]['CA'] for ind in residue_data_control] #retrieve the residue with the corresponding index from control_res
@@ -84,10 +85,120 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path)
             rmsd = superimposer.rms
 
         #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
-        if 'symmetry' in trb_dict['config']['inference']:
+            
+        if symmetry!=None:
             rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
  
         return (round(rmsd, 1), linker_length)
+
+
+def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
+    with open(trb_path, 'rb') as f:
+                trb_dict = pickle.load(f)
+            
+    if 'complex_con_ref_idx0' in trb_dict:
+        residue_data_control_0 = trb_dict['complex_con_ref_idx0']
+        residue_data_designed_0 = trb_dict['complex_con_hal_idx0']
+        residue_data_control_1 = trb_dict['complex_con_ref_pdb_idx']
+        residue_data_designed_1 = trb_dict['complex_con_hal_pdb_idx']
+    else:
+        residue_data_control_0 = trb_dict['con_ref_idx0']
+        residue_data_designed_0 = trb_dict['con_hal_idx0']
+        residue_data_control_1 = trb_dict['con_ref_pdb_idx']
+        residue_data_designed_1 = trb_dict['con_hal_pdb_idx']
+    
+
+    mpnn_sequence_no_colons=mpnn_seq.replace(":","")
+
+    used_chains=list(set([i[0] for i in residue_data_control_1]))
+
+    mpnn_sequences_list=mpnn_seq.split(":")
+    sequences_limits=[]
+        
+    for seq_num, sequence in enumerate(mpnn_sequences_list):
+        seq_start=mpnn_sequence_no_colons.find(sequence)
+
+        if seq_num!=len(mpnn_sequences_list)-1:
+            next_sequence=mpnn_sequences_list[seq_num+1]
+            seq_end=mpnn_sequence_no_colons.find(next_sequence)
+        else:
+            seq_end=len(mpnn_sequence_no_colons)
+
+        sequences_limits.append((seq_start,seq_end))
+
+    with open(output, 'w') as f:
+        letters="ABCDEFGHIJKLMNOPQRSTUVWXYZ" #used for naming chains
+
+        #write the header line
+        first_line="#"
+        for seq in mpnn_sequences_list:
+            first_line+=str(len(seq))
+            if seq!=mpnn_sequences_list[len(mpnn_sequences_list)-1]:
+                first_line+=","
+        first_line+="\t" 
+        for seq in mpnn_sequences_list:
+            first_line+="1"
+            if seq!=mpnn_sequences_list[len(mpnn_sequences_list)-1]:
+                first_line+=","
+        f.write(first_line+"\n")
+
+        #write the whole sequence once
+        all_names=""
+        for seq_num, sequence in enumerate(mpnn_sequences_list):
+            #all_names+=str(101+seq_num)
+            all_names+=letters[seq_num]
+            if sequence!=mpnn_sequences_list[len(mpnn_sequences_list)-1]:
+                all_names+="\t" 
+
+        f.write(">"+all_names+"\n")      
+        f.write(mpnn_sequence_no_colons)                  
+
+        #write the sequences to be modelled:
+        for seq_num, sequence in enumerate(mpnn_sequences_list):
+            f.write(">"+letters[seq_num]+"\n")
+            sequence_line= "-"*sequences_limits[seq_num][0] #Add a gap for each position before the sequence
+            sequence_line+=sequence  #add sequence
+            sequence_line+= "-"*((len(mpnn_sequence_no_colons)-sequences_limits[seq_num][1])-1)#Add a gap for each position after the sequence. (why -1? Idk. It works. Probably to do with the limits being off by 1)
+            f.write(sequence_line+"\n") #write padded sequence
+
+        #now write the aligned sequences
+        for chain in used_chains:
+            #LEt's get the correct file for this chain
+            for file in os.listdir(alignments_path):
+                if "auth_"+chain in file or "Chain_"+chain in file:
+                    alignment_file=file
+                    print("Alignment file for chain "+chain+" is "+alignment_file)
+
+
+            with open(os.path.join(alignments_path,alignment_file), 'r') as chain_alignment_file:
+                for line_id, line in enumerate(chain_alignment_file):
+                    if line_id>=3: #skip first three lines, since they contain the original sequence.
+                        if line[0] == ">":
+                            f.write(line)
+                        else:
+                            table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
+                            line_without_insertions=line.translate(table)
+
+                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons)-1)  #Make a gap sequence of the length of the sequence. Again, I don't know why -1.
+                            for id, pos in enumerate(residue_data_control_1):
+                                if pos[0]==chain: #If position chain corresponds to the chain we're looking at
+                            
+                                    position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
+                                    new_aligned_seq= new_aligned_seq[:residue_data_designed_0[id]] + line_without_insertions[position_to_copy] +  new_aligned_seq[residue_data_designed_0[id]+1:] 
+    
+                            f.write(new_aligned_seq+"\n")
+    
+    #delete empty lines that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed, but it doesn't really slow things that much.
+    with open(output,'r+') as output_file:
+        with open(output+"_tmp", "w") as temp_file:
+            for line in output_file:
+                if not line.isspace():
+                    temp_file.write(line)
+
+    os.remove(output)
+    os.rename(output+"_tmp",output)
+    #shutil.copyfile(output, output+"_backup") #this is for debug only, to see the file before it goes to AF2
+
 
 
 
@@ -101,7 +212,7 @@ def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # 
     return match.group(1)
 
 
-def merge_csv(output_dir, output_csv, scores_csv):
+def merge_csv(output_dir, output_csv, scores_csv): #, output_best=True,rmsd_threshold=5,plddt_threshold=90 parameters for the filtering
     # read csv files
     df1 = pd.read_csv(scores_csv)
     df2 = pd.read_csv(output_csv)
@@ -114,11 +225,28 @@ def merge_csv(output_dir, output_csv, scores_csv):
     # save merged dataframe to csv file
     merged_df.to_csv(f'{os.path.join(output_dir, "final_output.csv")}', index=False)
 
+
+    # Select best ones and copy to another csv. commented out for now    
+    #if (output_best):
+        #best_df=merged_df[(merged_df["RMSD"] <= rmsd_threshold) | (merged_df["plddt"] >= plddt_threshold)] #select best based on thresholds
+        #best_df.to_csv(f'{os.path.join(output_dir, "final_output_best.csv")}', index=False)
+
+        #dir_best_pdbs = os.path.join(output_dir, "best_pdbs")
+        #os.makedirs(dir_best_pdbs, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
+        
+        #for file in best_df["model_path"]:
+        #    shutil.copy(file,os.path.join(output_dir, "best_pdbs"))
+                
+
+
+
 def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None):
 
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "") # add / to path to access json files within
-    dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "final_pdbs")
+
+    #dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "final_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
+    dir_renamed_pdb = os.path.join(output_dir, "final_pdbs")
     os.makedirs(dir_renamed_pdb, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
 
     trb_file = os.path.join(rfdiff_out_dir, f"_{trb_num}.trb") #name of corresponding trb file 
@@ -142,28 +270,24 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         #Extract relevant data. Files used: json file of specific af2 model, specific af2 pdb,  trb file of rfdiff model (1 for all AF2 models from same rfdiff pdb)  
         plddt_list = params['plddt']
         plddt = int(np.mean(plddt_list))
-        rmsd, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path)
+        rmsd, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry)
         pae = round((np.mean(params['pae'])), 2)
 
         #if we are doing symmetry we also want to add monomer rmsd to the output
         if symmetry:
             monomers_dirname = os.path.join(model_i, 'monomers')
-            print(monomers_dirname)
             monomer_pdb_file = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(model_pdb_file))
-            print(monomer_pdb_file)
-            monomer_rmsd = homooligomer_rmsd.align_monomer(rfdiff_pdb_path, monomer_pdb_file, monomers_dirname, save_aligned=False)
+            monomer_rmsd = homooligomer_rmsd.align_monomer(rfdiff_pdb_path, monomer_pdb_file, save_aligned=False)
             monomer_params_json = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(json_file))
             with open(monomer_params_json, 'r') as f:
                 monomer_params = json.load(f)
 
             monomer_plddt_list = monomer_params['plddt']
-            monomer_plddt = int(np.mean(monomer_plddt_list))
-            #we are not doing pae for a monomer..?
-        
+            monomer_plddt = int(np.mean(monomer_plddt_list))        
         
         #tracebility
         output_num = os.path.basename(output_dir)
-        af2_model =  get_token_value(json_filename, '_model_', "(\d*\.\d+|\d+\.?\d*)")
+        af2_model =  get_token_value(json_filename, '_model_', "(\\d*\\.\\d+|\\d+\\.?\\d*)")
 
         # Create a new name an copy te af2 model under that name into the output directory
         new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_{rmsd}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
@@ -178,7 +302,9 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
             print(f"Error copying {model_pdb_file} to {new_pdb_file}: {e}")
 
         p = PDBParser()
+
         structure = p.get_structure("model_seq", new_pdb_path)
+    
         ppb = PPBuilder()
         
         seq = ""
@@ -187,10 +313,10 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
 
 
 
-        dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\d*\.\d+|-?\d+\.?\d*)" ),
-                'plddt': get_token_value(new_pdb_file, '__plddt_', "(\d*\.\d+|\d+\.?\d*)"),
-                'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\d*\.\d+|-?\d+\.?\d*)"),
-                'pae': get_token_value(new_pdb_file, '__pae_', "(\d*\.\d+|\d+\.?\d*)"),
+        dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)" ),
+                'plddt': get_token_value(new_pdb_file, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
+                'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                'pae': get_token_value(new_pdb_file, '__pae_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'model_path': new_pdb_path,
                 'sequence' : seq[1:],
                 'af2_json' : json_file,
@@ -230,13 +356,13 @@ def create_dataframe(path_to_files, output_dir): # path = r'content/*partial.pdb
         for pp in ppb.build_peptides(structure):
             seq += f":{pp.get_sequence().__str__()}"
         print(seq)
-        dictionary = {'link_lenght': get_token_value(file_name, 'link_', "(\d*\.\d+|\d+\.?\d*)" ),
-                'plddt': get_token_value(file_name, '__plddt_', "(\d*\.\d+|\d+\.?\d*)"),
-                'RMSD': get_token_value(file_name, '__rmsd_', "(\d*\.\d+|\d+\.?\d*)"),
-                'pae': get_token_value(file_name, '__pae_', "(\d*\.\d+|\d+\.?\d*)"),
+        dictionary = {'link_lenght': get_token_value(file_name, 'link_', "(\\d*\\.\\d+|\\d+\\.?\\d*)" ),
+                'plddt': get_token_value(file_name, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
+                'RMSD': get_token_value(file_name, '__rmsd_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
+                'pae': get_token_value(file_name, '__pae_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'model_path': file_name,
                 'sequence' : seq,
-                'rfdiff model': get_token_value(file_name, '__rf_', "(\d*\.\d+|\d+\.?\d*)")}  #MODEL PATH for scoring_rg_... #jsonfilename for traceability
+                'rfdiff model': get_token_value(file_name, '__rf_', "(\\d*\\.\\d+|\\d+\\.?\\d*)")}  #MODEL PATH for scoring_rg_... #jsonfilename for traceability
         
         list_of_dicts.append(dictionary)
 
@@ -295,7 +421,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
             trb_file = pdb_file.with_suffix(".trb")
 
             if not trb_file.exists():
-                rf_model_num = get_token_value(os.path.basename(pdb_file), "rf_", "(\d+)")
+                rf_model_num = get_token_value(os.path.basename(pdb_file), "rf_", "(\\d+)")
                 trb_file = os.path.join(os.path.dirname(pdb_file), f"_{rf_model_num}.trb")
                 trb_file = trb_file.replace("2_1_cycle_directory", "1_rfdiff") 
                 print(f"TRB file not found for {pdb_basename}. CAUTION, using composed path")
@@ -416,46 +542,25 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         with open(mpnn_fasta, "w") as output:
                 SeqIO.write(sequences_mpnn, output, "fasta")
         """
-        # open with SeqIO
-        # skip first line #add comment, first line is original sequence 
+        i = 0
+        seq_dict = {}
+        for record in SeqIO.parse(mpnn_fasta, "fasta"):
+            if i==0:
+                i +=1
+                continue
+            i +=1
+            print(record.seq, record.description)
+            seq_dict[record.seq]=record.description
 
-        # replace replace("/", ":")
-        # seq_dict {}
-        # drop duplicates
-        #     iterate over seq recods 
-        #     seqdic[seq.seq]=seq
-        # seqdict.values
-
-        # SeqIO.write(sequences, f"{fasta_file[:-3]}_monomers.fa", "fasta")
-
-        # Read text file, then replace all slashes with colons
-        # i = 0
-        # seq_dict = {}
-        # for record in SeqIO.parse(mpnn_fasta, "fasta"):
-        #     if i==0:
-        #         i +=1
-        #         continue
-        #     i +=1
-        #     print(record.seq, record.description)
-        #     seq_dict[record.seq]=record.description
-
-        # print(seq_dict)
-        # sequences = []
-        # for record in SeqIO.parse(mpnn_fasta, "fasta"):
-        #     if record.description in seq_dict.values():
-        #         record.seq.replace('/', ':')
-        #         sequences.append(record)
-        # print(sequences)
-        # SeqIO.write(sequences, mpnn_fasta, "fasta")
-
-
-        with open(mpnn_fasta, "r+") as f:
-            text = f.read()
-            text = text.replace("/", ":")
-            f.seek(0)
-            f.write(text)
-            f.truncate()
-        # this is wrong> I doubt we need to manually add "other" chains -- according to tutorials/examples, contig should always specify all chains (even if unchanged): [A1-30/6-6/B1-30/0 C1-100/0 D1-25/0 E1-123]
+        print(seq_dict)
+        sequences = []
+        for record in SeqIO.parse(mpnn_fasta, "fasta"):
+            if record.description in seq_dict.values():
+                newseq = record.seq.replace('/', ':')
+                record.seq=newseq
+                sequences.append(record)
+        print(sequences)
+        SeqIO.write(sequences, mpnn_fasta, "fasta-2line") #This needs to be fasta-2line for MSA code to work
 
 
 def match_linker_length(trb_path):
@@ -466,11 +571,11 @@ def match_linker_length(trb_path):
 
     input_string = ' '.join(trb_dict['sampled_mask']) #' '.join(['A1-30/6-6/C1-30/0', 'D1-30/0', 'B1-30/0'])
 
-    pattern = r'(?<=/)(\d+)(?=-\d+/)'
+    pattern = r'(?<=/)(\\d+)(?=-\\d+/)'
     """
         (?<=/): Positive lookbehind assertion -> sub-pattern is preceded by a '/'.
-        (\d+): Capture group that matches one or more digits.
-        (?=-\d+/): Positive lookahead assertion -> sub-pattern is followed by a '-' and one or more digits, then a '/'.
+        (\\d+): Capture group that matches one or more digits.
+        (?=-\\d+/): Positive lookahead assertion -> sub-pattern is followed by a '-' and one or more digits, then a '/'.
     """
     match = re.search(pattern, input_string)
     if match:
@@ -485,6 +590,6 @@ def find_correct_trb(model_i):
     print(json_files)
     for json_file in json_files:
         json_filename = os.path.basename(json_file)
-        number_trb = get_token_value(json_filename, "_", "(\d+)(?=_)") # stop at first digit -> (?=_)
+        number_trb = get_token_value(json_filename, "_", "(\\d+)(?=_)") # stop at first digit -> (?=_)
         trb_file = os.path.join(f"_{number_trb}.trb")
     return trb_file
