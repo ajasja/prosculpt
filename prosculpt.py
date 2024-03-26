@@ -498,25 +498,21 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
         for chain, idx in con_hal_idx:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
-            fixed_res.setdefault(chain, list()).append(idx - chainResidOffset[chain]) 
+            if trb_data["inpaint_seq"][idx-1]: #skip residues with FALSE in the inpaint_seq array
+                fixed_res.setdefault(chain, list()).append(idx - chainResidOffset[chain]) 
             # RfDiff outputs multiple chains if contig has /0 (chain break)
 
         print(f"Fixed res: ${fixed_res}")
             
         fixpos[pdb_basename] = fixed_res
-
-        
-         
-    
+   
     #print("_________trb data____", trb_data)
-    
-    
+        
     # print("_________ fix pos_________", fixpos)
     file_path = os.path.join(out_path, "fixed_pdbs.jsonl")
     # Save the fixpos dict as a JSON file
     with open(file_path, "w") as outfile:
         json.dump(fixpos, outfile, cls=NumpyInt64Encoder)
-
 
     return file_path
 
