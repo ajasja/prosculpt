@@ -281,6 +281,7 @@ def merge_csv(output_dir, output_csv, scores_csv): #, output_best=True,rmsd_thre
 
 def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None):
 
+    
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "") # add / to path to access json files within
 
@@ -289,6 +290,13 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
     os.makedirs(dir_renamed_pdb, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
 
     trb_file = os.path.join(rfdiff_out_dir, f"_{trb_num}.trb") #name of corresponding trb file 
+    with open(trb_file, 'rb') as f:
+        trb_dict = pickle.load(f)
+    if 'complex_con_ref_idx0' in trb_dict:
+        residue_data_designed = trb_dict['complex_con_hal_idx0']
+    else:
+        residue_data_designed = trb_dict['con_hal_idx0']
+
     rfdiff_pdb_path = os.path.join(rfdiff_out_dir, f"_{trb_num}.pdb")
 
     json_files = glob.glob(os.path.join(model_i, 'T*000.json'))
@@ -309,6 +317,9 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         #Extract relevant data. Files used: json file of specific af2 model, specific af2 pdb,  trb file of rfdiff model (1 for all AF2 models from same rfdiff pdb)  
         plddt_list = params['plddt']
         plddt = int(np.mean(plddt_list))
+        plddt_sculpted_list=[plddt_list[i] for i in range(0,len(plddt_list)) if i not in residue_data_designed]
+        plddt_sculpted=int(np.mean(plddt_sculpted_list))
+
         rmsd_list, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry)
         pae = round((np.mean(params['pae'])), 2)
 
@@ -329,7 +340,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         af2_model =  get_token_value(json_filename, '_model_', "(\\d*\\.\\d+|\\d+\\.?\\d*)")
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__rmsd_{rmsd_list[0]}__rmsd_scaffold_{rmsd_list[1]}__rmsd_sculpted_{rmsd_list[2]}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
+        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]}__rmsd_scaffold_{rmsd_list[1]}__rmsd_sculpted_{rmsd_list[2]}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
             #out -> 00 -> number of task
             #rf -> 01 -> number of corresponding rf difff model
             #af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag 
@@ -354,6 +365,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
 
         dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
+                'plddt_sculpted': get_token_value(new_pdb_file, '__plddt_sculpted_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_scaffold': get_token_value(new_pdb_file, '__rmsd_scaffold_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_sculpted': get_token_value(new_pdb_file, '__rmsd_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
