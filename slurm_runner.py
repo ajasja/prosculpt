@@ -31,6 +31,9 @@ out_command_file = f"ps2slurm_{task_name}_{int(time.time())}.txt"
 
 with open(out_command_file, 'w') as f:
     for i in range(n):
+        if n>1:
+            let_argsv = sys.argv.copy()
+            let_argsv[3] += f"/{i:02d}"
         cmdline = " ".join(map(shlex.quote, args[1])) #join all arguments passed that aren't number of tasks or task name
         line = f"""python rfdiff_mpnn_af2_merged.py {cmdline}"""
         print(line, file=f)
@@ -38,6 +41,7 @@ with open(out_command_file, 'w') as f:
 print(f"Slurm command can be found in {out_command_file}")
 
 if not args[0].dry_run:
+    #Exclude is there because that node was working incredibly slow
     os.system(f"export GROUP_SIZE=1; sbatch --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} wrapper_slurm_array_job_group.sh {out_command_file}")
     print(f"Job {task_name} has been submitted to slurm".center(WIDTH, SYMBOL))
 else:
