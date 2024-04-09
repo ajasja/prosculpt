@@ -346,6 +346,7 @@ def final_operations(cfg):
     for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
         
         trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\\d+)") #get 0 from model_0 using reg exp
+
         if 'pdb_path' in cfg:
             prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry)
         else:

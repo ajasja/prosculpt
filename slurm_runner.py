@@ -32,7 +32,7 @@ out_command_file = f"ps2slurm_{task_name}_{int(time.time())}.txt"
 with open(out_command_file, 'w') as f:
     for i in range(n):
         cmdline = " ".join(map(shlex.quote, args[1])) #join all arguments passed that aren't number of tasks or task name
-        line = f"""python rfdiff_mpnn_af2_merged.py {cmdline}"""
+        line = f"""python /home/akonstantinova/prosculpt/rfdiff_mpnn_af2_merged.py {cmdline}"""
         print(line, file=f)
 
 print(f"Slurm command can be found in {out_command_file}")
