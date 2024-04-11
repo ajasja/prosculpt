@@ -157,6 +157,7 @@ def do_cycling(cfg):
             shutil.rmtree(cfg.mpnn_out_dir) # Remove MPNN dir so you can create new sequences
             os.makedirs(cfg.mpnn_out_dir, exist_ok=True) # Create it again
             trb_paths = os.path.join(cfg.rfdiff_out_dir, "*.trb")
+            print('trb_path is: ', trb_paths)
         #endif
         # All cycles run the same commands
         

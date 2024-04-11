@@ -31,23 +31,13 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         # Skip if trb does not exist
         if not os.path.exists(trb_path):
             print('skipping rfdiffusion, only RMSD is calculated')
-            #if there's skip_rfdiff then starting_pdb probably exists
-            structure_control = parser.get_structure("control", starting_pdb)
-            control_res = list(structure_control.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
-            control_res = [ind['CA'] for ind in control_res] #retrieve the residue with the corresponding index from control_res
-            designed_res = list(structure_designed.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
-            designed_res = [ind['CA'] for ind in designed_res] #retrieve the residue with the corresponding index from control_res
-            superimposer = Superimposer()
-            print(control_res)
-            print(designed_res)
-            superimposer.set_atoms(control_res, designed_res)
-            superimposer.apply(structure_designed.get_atoms())
-            rmsd = superimposer.rms
 
             if symmetry!=None:
-                rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
+                rmsd = homooligomer_rmsd.align_oligomers(starting_pdb, af2_pdb, save_aligned=False)
+            else:
+                rmsd = homooligomer_rmsd.align_monomer(starting_pdb, af2_pdb, save_aligned=False)
 
-            return([round(rmsd, 1),-1,-1,-1])
+            return([round(rmsd, 1),-1,-1],-1)
 
     
         with open(trb_path, 'rb') as f:
@@ -383,10 +373,10 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
             seq += f":{pp.get_sequence().__str__()}"
 
 
-
+        print('new_pdb_file', new_pdb_file)
         dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
-                'plddt_sculpted': get_token_value(new_pdb_file, '__plddt_sculpted_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
+                'plddt_sculpted': get_token_value(new_pdb_file, '__plddt_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_scaffold': get_token_value(new_pdb_file, '__rmsd_scaffold_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_sculpted': get_token_value(new_pdb_file, '__rmsd_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
@@ -622,9 +612,9 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         i = 0
         seq_dict = {}
         for record in SeqIO.parse(mpnn_fasta, "fasta"):
-            if i==0:
-                i +=1
-                continue
+            # if i==0:
+            #     i +=1
+            #     continue
             i +=1
             print(record.seq, record.description)
             seq_dict[record.seq]=record.description

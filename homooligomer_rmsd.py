@@ -85,7 +85,7 @@ def align_monomer(path_to_target, path_to_mobile, save_aligned,  output_pdb=None
     rmsd = np.min(list_rmsd_chains)
     print('rmsd: ', rmsd)
     
-    #align chains with the best correspondence (only aiign again so that we save the best-aligned option)
+    #align chains with the best correspondence (only align again so that we save the best-aligned option)
     if save_aligned==True:
         index_min = np.argmin(list_rmsd_chains)
         target_chain_res = list(target_chains[index_min].get_residues())
