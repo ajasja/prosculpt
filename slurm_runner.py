@@ -31,11 +31,9 @@ out_command_file = f"ps2slurm_{task_name}_{int(time.time())}.txt"
 
 with open(out_command_file, 'w') as f:
     for i in range(n):
-        let_argsv = args
-        if i>0:
-          let_argsv[1][0]=let_argsv[1][0][:-2]
-        let_argsv[1][0] += f"{i:02d}"
-        cmdline = " ".join(map(shlex.quote, let_argsv[1])) #join all arguments passed that aren't number of tasks or task name
+        let_argsv = args[1].copy()
+        let_argsv[0] += f"{i:02d}"
+        cmdline = " ".join(map(shlex.quote, let_argsv)) #join all arguments passed that aren't number of tasks or task name
         line = f"""python /home/akonstantinova/prosculpt/rfdiff_mpnn_af2_merged.py {cmdline}"""
         print(line, file=f)
 
