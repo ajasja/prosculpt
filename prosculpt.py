@@ -305,8 +305,8 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
     except FileNotFoundError:
         print('could not find trb_file, probably due to SkipRFdiff=True')
 
-        json_files = glob.glob(os.path.join(model_i, 'T*000.json'))
-        rfdiff_pdb_path = os.path.join(rfdiff_out_dir, f"_{trb_num}.pdb")
+    json_files = glob.glob(os.path.join(model_i, 'T*000.json'))
+    rfdiff_pdb_path = os.path.join(rfdiff_out_dir, f"_{trb_num}.pdb")
 
     for json_file in json_files: #in af2 model_i directory for T_...json file in [all T_...json files] 
         # This is done for each model_i directory therefore for each rfdiff pdb 
