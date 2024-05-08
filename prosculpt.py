@@ -349,9 +349,11 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         #tracebility
         output_num = os.path.basename(output_dir)
         af2_model =  get_token_value(json_filename, '_model_', "(\\d*\\.\\d+|\\d+\\.?\\d*)")
+        mpnn_sample =  get_token_value(json_filename, '_sample_', "(\\d*\\.\\d+|\\d+\\.?\\d*)")
+        task_id=os.environ.get('SLURM_ARRAY_TASK_ID', 1)
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]}__rmsd_scaffold_{rmsd_list[1]}__rmsd_sculpted_{rmsd_list[2]}__pae_{pae}__out_{output_num}__rf_{trb_num}__af_model_{af2_model}_.pdb"
+        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]}__rmsd_scaffold_{rmsd_list[1]}__rmsd_sculpted_{rmsd_list[2]}__pae_{pae}__out_{output_num}_.pdb"
             #out -> 00 -> number of task
             #rf -> 01 -> number of corresponding rf difff model
             #af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag 
@@ -374,7 +376,8 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
 
 
         print('new_pdb_file', new_pdb_file)
-        dictionary = {'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)" ),
+        dictionary = {'id': f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}",
+                'link_lenght': get_token_value(new_pdb_file, 'link_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)" ),
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'plddt_sculpted': get_token_value(new_pdb_file, '__plddt_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
