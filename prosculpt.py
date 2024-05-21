@@ -615,9 +615,9 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         i = 0
         seq_dict = {}
         for record in SeqIO.parse(mpnn_fasta, "fasta"):
-            # if i==0:
-            #     i +=1
-            #     continue
+            if i==0:
+                i +=1
+                continue
             i +=1
             print(record.seq, record.description)
             seq_dict[record.seq]=record.description
