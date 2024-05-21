@@ -198,6 +198,8 @@ def do_cycling(cfg):
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
             --sampling_temp {cfg.sampling_temp} \
             --backbone_noise {cfg.backbone_noise} \
+            --use_soluble_model  \
+            --omit_AAs {cfg.omit_AAs} \
             {parse_additional_args(cfg, "pass_to_mpnn")} \
             --batch_size 1'
         
