@@ -53,6 +53,9 @@ def general_config_prep(cfg):
         if 'symmetry' not in cfg.inference:
             cfg.inference.symmetry=None
 
+        if 'omit_AAs' not in cfg:
+            cfg.omit_AAs="X" #This is the default also in proteinMPNN
+
         # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(chain_letters[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
         chain_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55
         if cfg.chains_to_design == None: #TODO this will likely break for sym mode

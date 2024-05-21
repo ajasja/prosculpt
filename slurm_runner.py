@@ -33,6 +33,8 @@ with open(out_command_file, 'w') as f:
     for i in range(n):
         let_argsv = args[1].copy()
         if "output_dir" in let_argsv[0]:
+            if let_argsv[0][-1:]!="/":
+                let_argsv[0]+="/"
             let_argsv[0] += f"{i:02d}"
         cmdline = " ".join(map(shlex.quote, let_argsv)) #join all arguments passed that aren't number of tasks or task name
         line = f"""python rfdiff_mpnn_af2_merged.py {cmdline}"""
