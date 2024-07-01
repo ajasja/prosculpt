@@ -20,6 +20,7 @@ print("".center(WIDTH, SYMBOL))
 print("Please make sure your first argument was the number of concurrent jobs you want to run and the second argument was the desired name of the slurm task. After that, add the arguments that will be passed as-is to the _merged script.")
 print("".center(WIDTH, SYMBOL))
 
+slurm_runner_path= os.path.dirname(os.path.realpath(__file__))
 
 n = int(args[0].num_tasks)
 task_name = args[0].name
@@ -32,12 +33,13 @@ out_command_file = f"ps2slurm_{task_name}_{int(time.time())}.txt"
 with open(out_command_file, 'w') as f:
     for i in range(n):
         let_argsv = args[1].copy()
-        if "output_dir" in let_argsv[0]:
-            if let_argsv[0][-1:]!="/":
-                let_argsv[0]+="/"
-            let_argsv[0] += f"{i:02d}"
+        if len(let_argsv)>0:
+            if "output_dir" in let_argsv[0]:
+                if let_argsv[0][-1:]!="/":
+                    let_argsv[0]+="/"
+                let_argsv[0] += f"{i:02d}"
         cmdline = " ".join(map(shlex.quote, let_argsv)) #join all arguments passed that aren't number of tasks or task name
-        line = f"""python rfdiff_mpnn_af2_merged.py {cmdline}"""
+        line = f"""python {slurm_runner_path}/rfdiff_mpnn_af2_merged.py {cmdline}"""
         print(line, file=f)
 
 print(f"Slurm command can be found in {out_command_file}")
