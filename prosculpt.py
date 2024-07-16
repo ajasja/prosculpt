@@ -201,7 +201,7 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
             f.write(">"+letters[seq_num]+"\n")
             sequence_line= "-"*sequences_limits[seq_num][0] #Add a gap for each position before the sequence
             sequence_line+=sequence  #add sequence
-            sequence_line+= "-"*((len(mpnn_sequence_no_colons)-sequences_limits[seq_num][1])-1)#Add a gap for each position after the sequence. (why -1? Idk. It works. Probably to do with the limits being off by 1)
+            sequence_line+= "-"*((len(mpnn_sequence_no_colons)-sequences_limits[seq_num][1])-1)#Add a gap for each position after the sequence. (-1 is because the line comes with \n at the end.)
             f.write(sequence_line+"\n") #write padded sequence
 
         #now write the aligned sequences
@@ -222,8 +222,9 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                             table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
                             line_without_insertions=line.translate(table)
 
-                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons)-1)  #Make a gap sequence of the length of the sequence. Again, I don't know why -1.
-                            first_residue_in_trb=residue_data_control_1[0][1]
+                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons)-1)  #Make a gap sequence of the length of the sequence. -1 is because the line comes with \n at the end.
+                            trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
+                            first_residue_in_trb=trb_chain[0][1]
                             for id, pos in enumerate(residue_data_control_1):
                                 if pos[0]==chain: #If position chain corresponds to the chain we're looking at
                             
