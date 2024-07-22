@@ -10,6 +10,7 @@ import shutil
 import pathlib
 from omegaconf import open_dict
 from Bio import SeqIO
+from Bio.PDB import PDBParser
 
 
 log = logging.getLogger(__name__)
@@ -111,7 +112,36 @@ def rechain_rfdiff_pdbs(cfg):
         run_and_log(
             f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} {pdb} {pdb} --chain_break_cutoff_A {cfg.chain_break_cutoff_A}'
         )
-        
+
+        """
+        When using potentials sometimes there were very disordered structures and a lot of chainbreaks
+        This broke things down the line
+        I am writing a fix for a symmetry case, do we need it for other things?
+        If there are more chains then intended in symmetry, makes a folder for wrong oligomers and moves them there
+        They're not processed further
+        """
+        if cfg.inference.symmetry!=None:
+            print(cfg.inference.symmetry)
+            if 'tetrahedral' in cfg.inference.symmetry:
+                n_chains_intended = 4
+            elif 'icosahedral' in cfg.inference.symmetry:
+                n_chains_intended = 20
+            elif 'octahedral' in cfg.inference.symmetry:
+                n_chains_intended = 8
+            else:
+                n_chains_intended = int(cfg.inference.symmetry[1:])
+            
+            print(n_chains_intended)
+
+            n_chains_actual = len([i for i in PDBParser().get_structure('rechained', pdb).get_chains()])
+
+            if n_chains_actual != n_chains_intended:
+                log.info(f'intended N chains: {n_chains_intended}, actual N: {n_chains_actual}; moving structure to "disordered" folder')
+                disordered_dir = os.path.join(cfg.rfdiff_out_path, 'disordered')
+                print(disordered_dir)
+                if not os.path.exists(disordered_dir):
+                    os.makedirs(disordered_dir)
+                shutil.move(pdb, disordered_dir)
 
     log.info("After rechaining")
 
@@ -357,8 +387,7 @@ def final_operations(cfg):
             prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry)
         else:
             prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
-            
-                
+                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
         f'{cfg.python_path} {scripts_folder / "scoring_rg_charge_sap.py"} {csv_path}'

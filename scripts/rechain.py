@@ -76,7 +76,6 @@ if __name__ == '__main__':
     parser.add_argument('in_name', help='Input file name')
     parser.add_argument('out_name', help='Output file name')
     parser.add_argument('--chain_break_cutoff_A', type=float, default=2, help='Chain break cutoff in angstroms (default: 2)')
-
     
     # Parse the arguments
     args = parser.parse_args()
