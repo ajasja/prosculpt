@@ -22,6 +22,7 @@ print("Please make sure your first argument was the number of concurrent jobs yo
 print("".center(WIDTH, SYMBOL))
 
 slurm_runner_path= os.path.dirname(os.path.realpath(__file__))
+current_path= os.getcwd()
 
 n = int(args[0].num_tasks)
 task_name = args[0].name
@@ -32,7 +33,7 @@ if task_name[:11] == "output_dir=":
 out_command_file = f"ps2slurm_{task_name}_{int(time.time())}.txt"
 
 with open(out_command_file, 'w') as f:
-    for i in range(n):
+    for i in range(1,n+1):
         let_argsv = args[1].copy()
 
         output_argn=-1
@@ -47,7 +48,8 @@ with open(out_command_file, 'w') as f:
                     let_argsv[output_argn]+="/"
                 let_argsv[output_argn] += f"{i:02d}"
             else:  #if not, it is in the yaml file. Read it and modify it if there are more than 1 task
-                with open(os.path.join(slurm_runner_path,let_argsv[config_file_folder_argn],(let_argsv[config_file_name_argn])+".yaml"), "r") as yaml_file:
+                #with open(os.path.join(slurm_runner_path,let_argsv[config_file_folder_argn],(let_argsv[config_file_name_argn])+".yaml"), "r") as yaml_file:
+                with open(os.path.join(current_path,let_argsv[config_file_folder_argn],(let_argsv[config_file_name_argn])+".yaml"), "r") as yaml_file:
                     data = yaml.safe_load(yaml_file)
                 output_dir=data["output_dir"]
                 if output_dir[-1:]!="/":
@@ -64,7 +66,7 @@ print(f"Slurm command can be found in {out_command_file}")
 
 if not args[0].dry_run:
     #Exclude is there because that node was working incredibly slow
-    os.system(f"export GROUP_SIZE=1; sbatch --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} wrapper_slurm_array_job_group.sh {out_command_file}")
+    os.system(f"export GROUP_SIZE=1; sbatch --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}")
     print(f"Job {task_name} has been submitted to slurm".center(WIDTH, SYMBOL))
 else:
     print("Command wasn't run because --dry-run was active.")
