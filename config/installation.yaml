@@ -4,6 +4,7 @@ inference_path_rfdiff: /home/tsatler/RFdif/RFdiffusion/scripts/run_inference.py
 python_path_mpnn: /home/tsatler/anaconda3/envs/mlfold/bin/python
 pymol_python_path: /home/aljubetic/conda/envs/pyro/bin/python
 mpnn_installation_path: /home/tsatler/ProteinMPNN
+
 python_path_af2: /home/aljubetic/AF2/CF2.3/colabfold-conda/bin/python
 
 af_setup_path: /home/aljubetic/bin/set_up_AF2.3.sh

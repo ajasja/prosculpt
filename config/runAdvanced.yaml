@@ -13,6 +13,15 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 skipRfDiff: True # Whether to skip RfDiff and only redesign a few residues with ProteinMPNN and AF
 designable_residues: [A8, A9, A10, A13, A85, B, C] # Residues to be redesigned when skipRfDiff == True. Also add letters of all other chains in the PDB you wish to have in the end structure.
 
+use_a3m: False  #If True this tells the program to make an alignment file from the given alignments.
+a3m_dir: /home/folivieri/prosculpt/uPar_epitope/alignments/ #If use_a3m is True, then you need to specify the location of the alignment files obtained from the colabfold server.
+
+only_run_analysis: False  #Only run final operations. This is good if a previous run failed to run final ops. Default: False
+
+output_best: True #Whether to output a filtered output list. Default True if missing
+rmsd_threshold: 3 #rmsd threshold for filtered output. Default 3 if missing.
+plddt_threshold: 90 #plddt threshold for filtered output. Default 90 if missing.
+
 
 defaults:
   - installation
@@ -38,9 +47,10 @@ pass_to_af: # additional arguments and values to pass to AlphaFold
 # - Tetrahedral symmetry # call as tetrahedral
 # - Octahedral symmetry # call as octahedral
 # - Icosahedral symmetry # call as icosahedral
-#symmetry: c2
+
 
 inference:
+# symmetry: c2          #This needs to be here, inside inference
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
 potentials:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
