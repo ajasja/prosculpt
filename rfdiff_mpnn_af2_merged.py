@@ -221,7 +221,7 @@ def do_cycling(cfg):
 
         #if symmetry - make fasta file with monomer sequence only
         for fasta_file in fasta_files:
-            if cfg.inference.symmetry!=None:
+            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):
                 sequences=[]
                 for record in SeqIO.parse(fasta_file, "fasta"):
                     record.seq = record.seq[:record.seq.find('/')]  
@@ -354,9 +354,9 @@ def final_operations(cfg):
         trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\\d+)") #get 0 from model_0 using reg exp
 
         if 'pdb_path' in cfg:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry)
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
         else:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
             
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function

@@ -20,7 +20,7 @@ def get_rmsd_from_coords(native_coords, model_coords, rot, tran):
     RMSD = np.sqrt(sum(sum(diff**2))/native_coords.shape[0])
     return RMSD
 
-def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,symmetry):        
+def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,symmetry, model_monomer):        
     # First calculate RMSD between input protein and AF2 generated protein
     # Second calcualte number of total generated AA by RFDIFF 
     #   - if designing only in one location the number is equal linker length  
@@ -32,7 +32,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         if not os.path.exists(trb_path):
             print('skipping rfdiffusion, only RMSD is calculated')
 
-            if symmetry!=None:
+            if symmetry!=None or model_monomer:
                 rmsd = homooligomer_rmsd.align_oligomers(starting_pdb, af2_pdb, save_aligned=False)
             else:
                 rmsd = homooligomer_rmsd.align_monomer(starting_pdb, af2_pdb, save_aligned=False)
@@ -150,7 +150,8 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
         residue_data_control_1 = trb_dict['con_ref_pdb_idx']
         residue_data_designed_1 = trb_dict['con_hal_pdb_idx']
     
-
+    if mpnn_seq[-1:] =="\n":
+        mpnn_seq=mpnn_seq[:-1]
     mpnn_sequence_no_colons=mpnn_seq.replace(":","")
 
     used_chains=list(set([i[0] for i in residue_data_control_1]))
@@ -194,14 +195,14 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                 all_names+="\t" 
 
         f.write(">"+all_names+"\n")      
-        f.write(mpnn_sequence_no_colons)                  
+        f.write(mpnn_sequence_no_colons+"\n")                  
 
         #write the sequences to be modelled:
         for seq_num, sequence in enumerate(mpnn_sequences_list):
             f.write(">"+letters[seq_num]+"\n")
             sequence_line= "-"*sequences_limits[seq_num][0] #Add a gap for each position before the sequence
             sequence_line+=sequence  #add sequence
-            sequence_line+= "-"*((len(mpnn_sequence_no_colons)-sequences_limits[seq_num][1])-1)#Add a gap for each position after the sequence. (-1 is because the line comes with \n at the end.)
+            sequence_line+= "-"*((len(mpnn_sequence_no_colons)-sequences_limits[seq_num][1]))#Add a gap for each position after the sequence. 
             f.write(sequence_line+"\n") #write padded sequence
 
         #now write the aligned sequences
@@ -222,7 +223,7 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                             table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
                             line_without_insertions=line.translate(table)
 
-                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons)-1)  #Make a gap sequence of the length of the sequence. -1 is because the line comes with \n at the end.
+                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons))  #Make a gap sequence of the length of the sequence..
                             trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
                             first_residue_in_trb=trb_chain[0][1]
                             for id, pos in enumerate(residue_data_control_1):
@@ -285,7 +286,7 @@ def merge_csv(output_dir, output_csv, scores_csv): #, output_best=True,rmsd_thre
 
 
 
-def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None):
+def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False):
 
     
     # Preparing paths to acces correct files
@@ -332,10 +333,10 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         except NameError:
             plddt_sculpted=-1
 
-        rmsd_list, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry)
+        rmsd_list, linker_length = calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry, model_monomer)
         pae = round((np.mean(params['pae'])), 2)
 
-        #if we are doing symmetry we also want to add monomer rmsd to the output
+        #if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
         if symmetry:
             monomers_dirname = os.path.join(model_i, 'monomers')
             monomer_pdb_file = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(model_pdb_file))
@@ -345,7 +346,36 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
                 monomer_params = json.load(f)
 
             monomer_plddt_list = monomer_params['plddt']
-            monomer_plddt = int(np.mean(monomer_plddt_list))        
+            monomer_plddt = int(np.mean(monomer_plddt_list))
+        
+        if model_monomer:
+            monomers_dirname = os.path.join(model_i, 'monomers')
+            monomer_pdb_file = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(model_pdb_file))
+
+            parser = PDBParser(PERMISSIVE=1)
+
+            structure_target = parser.get_structure("target", rfdiff_pdb_path)
+            structure_mobile = parser.get_structure("mobile", monomer_pdb_file)
+            
+            target_chain = list(structure_target.get_chains())[0]
+            mobile_chain_res = list(structure_mobile.get_residues())
+            mobile_chain_res = [ind['CA'] for ind in mobile_chain_res]
+            list_rmsd_chains = []
+            
+            target_chain_res = list(target_chain.get_residues())
+            target_chain_res = [ind['CA'] for ind in target_chain_res]
+
+            superimposer = Superimposer()
+            superimposer.set_atoms(target_chain_res, mobile_chain_res)
+            superimposer.apply(structure_mobile.get_atoms())
+            list_rmsd_chains.append(superimposer.rms)
+            monomer_rmsd = np.min(list_rmsd_chains)
+            monomer_params_json = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(json_file))
+            with open(monomer_params_json, 'r') as f:
+                monomer_params = json.load(f)
+
+            monomer_plddt_list = monomer_params['plddt']
+            monomer_plddt = int(np.mean(monomer_plddt_list))
         
         #tracebility
         output_num = os.path.basename(output_dir)
@@ -391,7 +421,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
                 'af2_pdb' : model_pdb_file,
                 'path_rfdiff': rfdiff_pdb_path }  #MODEL PATH for scoring_rg_... #jsonfilename for traceability
         
-        if symmetry:
+        if symmetry or model_monomer:
             dictionary['monomer_rmsd']=monomer_rmsd
             dictionary['monomer_plddt']=monomer_plddt
 
