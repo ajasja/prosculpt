@@ -239,7 +239,8 @@ def do_cycling(cfg):
             os.makedirs(monomers_fasta_dir)
 
         for file in fasta_files:
-            if 'monomer' in file:
+            if 'monomer' in os.path.basename(file):
+                print("moving monomer file: "+file) #just for DEBUG
                 shutil.move(file, os.path.join(os.path.dirname(file),'monomers',os.path.basename(file)))
 
         fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
@@ -258,7 +259,7 @@ def do_cycling(cfg):
                 af2_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "model_", "(\\d+)") #get 1 from rf_0__model_1__cycle_2__itr_0__.pdb
             model_dir = os.path.join(cfg.af2_out_dir, f"model_{rf_model_num}") #create name for af2 directory name: model_0
 
-            if 'monomer' in fasta_file: #if we are doing symmetry - make an extra directory for modeling monomers with af2
+            if 'monomer' in os.path.basename(fasta_file): #if we are doing symmetry - make an extra directory for modeling monomers with af2
                 model_dir = os.path.join(model_dir,'monomers')
                 
             prosculpt.change_sequence_in_fasta(cfg.rfdiff_pdb, fasta_file)
