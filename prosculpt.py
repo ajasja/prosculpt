@@ -26,7 +26,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
     #   - if designing only in one location the number is equal linker length  
      
         parser = PDBParser(PERMISSIVE = 1)
-        structure_af2 = parser.get_structure("designed", af2_pdb)
+        structure_af2 = parser.get_structure("af2", af2_pdb)
 
         # Skip if trb does not exist
         if not os.path.exists(trb_path):
@@ -51,9 +51,13 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         
         #selected_residues_data will hold the information only of those residues that were selected from the reference structure to be used in the final design
         if 'complex_con_ref_idx0' in trb_dict:
-            selected_residues_data = trb_dict['complex_con_hal_idx0'] 
+            selected_residues_data = trb_dict['complex_con_hal_idx0']
+            selected_residues_in_fixed_chains =trb_dict['receptor_con_hal_idx0']
+            selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
         else:
-            selected_residues_data = trb_dict['con_hal_idx0'] 
+            selected_residues_data = trb_dict['con_hal_idx0']
+            selected_residues_in_fixed_chains =[]
+            selected_residues_in_designed_chains=selected_residues_data
 
         all_af2_res = list(structure_af2.get_residues()) 
         all_af2_res_ca= [ind['CA'] for ind in all_af2_res]     
@@ -61,12 +65,11 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         if True in trb_dict['inpaint_seq']:
             af2_scaffold_res = [all_af2_res[ind]['CA'] for ind in selected_residues_data]
             af2_sculpted_res = [ind['CA'] for ind in all_af2_res if ind['CA'] not in af2_scaffold_res]
-        else: #This will only trigger when designing without a reference structure
-            af2_scaffold_res = [ind['CA'] for ind in all_af2_res]
+            
+        else: 
+            af2_scaffold_res = [ind['CA'] for ind in all_af2_res] #This will only trigger when designing without a reference structure. I'm not sure this should be af2_scaffold instead of af2_sculpted
 
-        #printed_desi = [res.get_resname() for res in designed_res]
-        #print(list(x == y for x, y in zip(printed_ref, printed_desi)))
-        
+               
         trb_help = list(trb_dict['inpaint_str'])
         linker_indeces = [boolean for boolean in trb_help if boolean == False] #calculate linker length here - convenient
         linker_length = len(linker_indeces)
@@ -97,35 +100,35 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         #Align all and get RMSD of all
         superimposer = SVDSuperimposer()
         rfdiff_all_coords = [a.coord for a in all_rfdiff_res_ca]
-        designed_all_coords = [a.coord for a in all_af2_res_ca]
+        af2_all_coords = [a.coord for a in all_af2_res_ca]
 
         rfdiff_all_coords = np.array(rfdiff_all_coords)
-        designed_all_coords = np.array(designed_all_coords)
+        af2_all_coords = np.array(af2_all_coords)
         
-        superimposer.set(rfdiff_all_coords, designed_all_coords)
+        superimposer.set(rfdiff_all_coords, af2_all_coords)
         superimposer.run()
-        rmsd = get_rmsd_from_coords(rfdiff_all_coords, designed_all_coords, superimposer.rot, superimposer.tran)
+        rmsd = get_rmsd_from_coords(rfdiff_all_coords, af2_all_coords, superimposer.rot, superimposer.tran)
 
         #Align only scaffold then get rmsd_scaffold and rmsd_sculpted (If any)
         superimposer = SVDSuperimposer()
         rfdiff_scaffold_coords = [a.coord for a in rfdiff_scaffold_res]
-        designed_scaffold_coords = [a.coord for a in af2_scaffold_res]
+        af2_scaffold_coords = [a.coord for a in af2_scaffold_res]
 
         rfdiff_scaffold_coords = np.array(rfdiff_scaffold_coords)
-        designed_scaffold_coords = np.array(designed_scaffold_coords)
+        af2_scaffold_coords = np.array(af2_scaffold_coords)
         
-        superimposer.set(rfdiff_scaffold_coords, designed_scaffold_coords)
+        superimposer.set(rfdiff_scaffold_coords, af2_scaffold_coords)
         superimposer.run()
-        rmsd_scaffold = get_rmsd_from_coords(rfdiff_scaffold_coords, designed_scaffold_coords, superimposer.rot, superimposer.tran)
+        rmsd_scaffold = get_rmsd_from_coords(rfdiff_scaffold_coords, af2_scaffold_coords, superimposer.rot, superimposer.tran)
 
         if True in trb_dict['inpaint_seq']:
             rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
-            designed_sculpted_coords = [a.coord for a in af2_sculpted_res]
+            af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
 
             rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
-            designed_sculpted_coords = np.array(designed_sculpted_coords)
+            af2_sculpted_coords = np.array(af2_sculpted_coords)
 
-            rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, designed_sculpted_coords, superimposer.rot, superimposer.tran)
+            rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
 
     #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
             
@@ -141,14 +144,14 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
             
     if 'complex_con_ref_idx0' in trb_dict:
         residue_data_control_0 = trb_dict['complex_con_ref_idx0']
-        residue_data_designed_0 = trb_dict['complex_con_hal_idx0']
+        residue_data_af2_0 = trb_dict['complex_con_hal_idx0']
         residue_data_control_1 = trb_dict['complex_con_ref_pdb_idx']
-        residue_data_designed_1 = trb_dict['complex_con_hal_pdb_idx']
+        residue_data_af2_1 = trb_dict['complex_con_hal_pdb_idx']
     else:
         residue_data_control_0 = trb_dict['con_ref_idx0']
-        residue_data_designed_0 = trb_dict['con_hal_idx0']
+        residue_data_af2_0 = trb_dict['con_hal_idx0']
         residue_data_control_1 = trb_dict['con_ref_pdb_idx']
-        residue_data_designed_1 = trb_dict['con_hal_pdb_idx']
+        residue_data_af2_1 = trb_dict['con_hal_pdb_idx']
     
     if mpnn_seq[-1:] =="\n":
         mpnn_seq=mpnn_seq[:-1]
@@ -230,7 +233,7 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                                 if pos[0]==chain: #If position chain corresponds to the chain we're looking at
                             
                                     position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
-                                    new_aligned_seq= new_aligned_seq[:residue_data_designed_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_designed_0[id]+1:] 
+                                    new_aligned_seq= new_aligned_seq[:residue_data_af2_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_af2_0[id]+1:] 
     
                             f.write(new_aligned_seq+"\n")
     
@@ -301,9 +304,9 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         with open(trb_file, 'rb') as f:
             trb_dict = pickle.load(f)
         if 'complex_con_ref_idx0' in trb_dict:
-            residue_data_designed = trb_dict['complex_con_hal_idx0']
+            residue_data_af2 = trb_dict['complex_con_hal_idx0']
         else:
-            residue_data_designed = trb_dict['con_hal_idx0']
+            residue_data_af2 = trb_dict['con_hal_idx0']
     except FileNotFoundError:
         print('could not find trb_file, probably due to SkipRFdiff=True')
 
@@ -328,7 +331,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         plddt = int(np.mean(plddt_list))
 
         try:
-            plddt_sculpted_list=[plddt_list[i] for i in range(0,len(plddt_list)) if i not in residue_data_designed]
+            plddt_sculpted_list=[plddt_list[i] for i in range(0,len(plddt_list)) if i not in residue_data_af2]
             plddt_sculpted=int(np.mean(plddt_sculpted_list))
         except NameError:
             plddt_sculpted=-1
