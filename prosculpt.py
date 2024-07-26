@@ -26,7 +26,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
     #   - if designing only in one location the number is equal linker length  
      
         parser = PDBParser(PERMISSIVE = 1)
-        structure_designed = parser.get_structure("designed", af2_pdb)
+        structure_af2 = parser.get_structure("designed", af2_pdb)
 
         # Skip if trb does not exist
         if not os.path.exists(trb_path):
@@ -44,27 +44,27 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
                 trb_dict = pickle.load(f)
 
         # Get different data from trb file depending on the fact if designing a monomer (one chain) or heteromer
-        # complex_con_rex_idx present only if designing heteromer
+        # complex_con_rex_idx present only if there are chains that are completely fixed.
         # Data structure: con_ref_idx0 = [0, 1, 3, 3, ...] 
         #   Info: array of input pdb AA indices starting 0 (con_ref_pdb_idx), and where they are in the output pdb (con_hal_pdb_idx)
         #   In complex_con_hal_idx0 there is no chain info however RFDIFF changes pdb indeces to go from 1 to n (e.g. 1st AA in chain B has idx 34)
+        
+        #selected_residues_data will hold the information only of those residues that were selected from the reference structure to be used in the final design
         if 'complex_con_ref_idx0' in trb_dict:
-            residue_data_control = trb_dict['complex_con_ref_idx0']
-            residue_data_designed = trb_dict['complex_con_hal_idx0']
+            selected_residues_data = trb_dict['complex_con_hal_idx0'] 
         else:
-            residue_data_control = trb_dict['con_ref_idx0']
-            residue_data_designed = trb_dict['con_hal_idx0']
+            selected_residues_data = trb_dict['con_hal_idx0'] 
 
-        all_designed_res = list(structure_designed.get_residues()) 
-        all_designed_res_ca= [ind['CA'] for ind in all_designed_res]     
+        all_af2_res = list(structure_af2.get_residues()) 
+        all_af2_res_ca= [ind['CA'] for ind in all_af2_res]     
+
         if True in trb_dict['inpaint_seq']:
-            designed_scaffold_res = [all_designed_res[ind]['CA'] for ind in residue_data_designed]
-            designed_sculpted_res = [ind['CA'] for ind in all_designed_res if ind['CA'] not in designed_scaffold_res]
-        else:
-            designed_scaffold_res = [ind['CA'] for ind in all_designed_res]
+            af2_scaffold_res = [all_af2_res[ind]['CA'] for ind in selected_residues_data]
+            af2_sculpted_res = [ind['CA'] for ind in all_af2_res if ind['CA'] not in af2_scaffold_res]
+        else: #This will only trigger when designing without a reference structure
+            af2_scaffold_res = [ind['CA'] for ind in all_af2_res]
 
         #printed_desi = [res.get_resname() for res in designed_res]
-
         #print(list(x == y for x, y in zip(printed_ref, printed_desi)))
         
         trb_help = list(trb_dict['inpaint_str'])
@@ -72,9 +72,9 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         linker_length = len(linker_indeces)
 
 
-        io=PDBIO()
-        io.set_structure(structure_designed)
-        io.save("af2_pdb_2.pdb")
+        #io=PDBIO()    
+        #io.set_structure(structure_af2)
+        #io.save("af2_pdb_2.pdb") #This is not necessary and might be slowing down everything a bit.
         rmsd=-1
         rmsd_scaffold = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
         rmsd_sculpted = -1
@@ -85,19 +85,19 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         all_rfdiff_res_ca= [ind['CA'] for ind in all_rfdiff_res]     
 
         if True in trb_dict['inpaint_seq']:
-            rfdiff_scaffold_res = [all_rfdiff_res[ind]['CA'] for ind in residue_data_designed] #retrieve the residue with the corresponding index from rfdiff_res
+            rfdiff_scaffold_res = [all_rfdiff_res[ind]['CA'] for ind in selected_residues_data] #retrieve the residue with the corresponding index from rfdiff_res
             rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_scaffold_res]
         else:
             rfdiff_scaffold_res = [ind['CA'] for ind in all_rfdiff_res]
 
-        if len(rfdiff_scaffold_res)!=len(designed_scaffold_res):
+        if len(rfdiff_scaffold_res)!=len(af2_scaffold_res):
             print("Fixed and moving atom lists differ in size") #for now, this is when input pdb and output are different length
             return(-1, -1)
         
         #Align all and get RMSD of all
         superimposer = SVDSuperimposer()
         rfdiff_all_coords = [a.coord for a in all_rfdiff_res_ca]
-        designed_all_coords = [a.coord for a in all_designed_res_ca]
+        designed_all_coords = [a.coord for a in all_af2_res_ca]
 
         rfdiff_all_coords = np.array(rfdiff_all_coords)
         designed_all_coords = np.array(designed_all_coords)
@@ -109,7 +109,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         #Align only scaffold then get rmsd_scaffold and rmsd_sculpted (If any)
         superimposer = SVDSuperimposer()
         rfdiff_scaffold_coords = [a.coord for a in rfdiff_scaffold_res]
-        designed_scaffold_coords = [a.coord for a in designed_scaffold_res]
+        designed_scaffold_coords = [a.coord for a in af2_scaffold_res]
 
         rfdiff_scaffold_coords = np.array(rfdiff_scaffold_coords)
         designed_scaffold_coords = np.array(designed_scaffold_coords)
@@ -120,7 +120,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
 
         if True in trb_dict['inpaint_seq']:
             rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
-            designed_sculpted_coords = [a.coord for a in designed_sculpted_res]
+            designed_sculpted_coords = [a.coord for a in af2_sculpted_res]
 
             rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
             designed_sculpted_coords = np.array(designed_sculpted_coords)
