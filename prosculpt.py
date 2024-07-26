@@ -124,11 +124,9 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         af2_fixed_chain_coords=np.array([a.coord for a in af2_fixed_chain_res])
         af2_scaffold_res_in_designed_chains_coords=np.array([a.coord for a in af2_scaffold_res_in_designed_chains])
 
-        if len(rfdiff_fixed_chain_coords)==0: #there are no fixed chains
-            print("NO FIXED CHAINS")
+        if len(rfdiff_fixed_chain_coords)==0: #there are no fixed chains)
             superimposer.set(rfdiff_scaffold_coords, af2_scaffold_coords)       
         else:
-            print("FIXED CHAINS")
             superimposer.set(rfdiff_fixed_chain_coords, af2_fixed_chain_coords)
            
         
