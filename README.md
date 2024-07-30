@@ -45,7 +45,7 @@ python slurm_runner.py 2 testniNikelj output_dir=ZZtest/IZ_PAJPLAJNA/nikelj "con
 Please note that the arguments to be passed forward to RfDiff need to be prefixed with `++`.
 
 ## Running using config files
-You can use `run.yaml` config file for all the arguments (add `-cd directoryOfYourConfigFile -cn configFilenameWithoutExtension` as **the last two** arguments). If using `slurm_runner.py`, always pass the output_dir as a command line argument (this way, it will add new subfolders for the concurrent tasks).
+You can use `run.yaml` config file for all the arguments (add `-cd directoryOfYourConfigFile -cn configFilenameWithoutExtension` as **the last two** arguments).
 
 ### Example: passing the args through a config file
 In the folder `mySuperNewProtein`, you have the config (based on run.yaml) named `rHelix5.yaml`. 
@@ -65,6 +65,11 @@ Add `skipRfDiff: True` and `designable_residues: [A8, A9, A10, A13, A85, B, C]` 
 
 In order to actually produce diverse results, `--sampling_temp` and `--backbone_noise` passed to ProteinMPNN are increased to `0.3` and `1`, respectively.  
 _TODO: Make this configurable (maybe a similar trick to how we create a config file for RfDiff, pass it to ProteinMPNN)._
+
+## Working with natural proteins
+Natural proteins require AF2 to work with multiple sequence alignments. In order to obtain good results when working with natural proteins, the option "use_a3m" needs to be set to True. This option requires MSAs for each chain in the reference structure. To obtain these MSAs just run each chain in the reference structure separately through AF2 and use the A3M file it produces. Each file needs to contain within the name "Chain_X" where X is the chain ID of the corresponding chain in the reference structure file. These alignment files need to be placed together in a directory and the "a3m_dir" option needs to be set to this directory in the yaml config file or passed through command line. 
+
+Prosculpt generates new "partial alignment" files for each design where natural proteins are modelled using MSAs and designed proteins (or designed portions of hybrid proteins) are not.
 
 ## Inputs: 
 Most input parameters are documented in the `run.yaml` config file. However, here's some additional info about them:

@@ -12,7 +12,6 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 skipRfDiff: False # Whether to skip RfDiff and only redesign a few residues with ProteinMPNN and AF
 designable_residues: [A8, A9, A10, A13, A85, B, C] # Residues to be redesigned when skipRfDiff == True. Also add letters of all other chains in the PDB you wish to have in the end structure.
 
-
 defaults:
   - installation
   - _self_
@@ -36,3 +35,5 @@ inference:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
 potentials:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+contigmap:
+  inpaint_seq: [A229-237/A430] # Without quotes! RfDiff expects contigs as lists, not as strings.
