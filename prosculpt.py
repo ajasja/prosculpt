@@ -124,15 +124,16 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         af2_fixed_chain_coords=np.array([a.coord for a in af2_fixed_chain_res])
         af2_motif_res_coords=np.array([a.coord for a in af2_motif_res])
 
-        if len(rfdiff_fixed_chain_coords)==0: #there are no fixed chains)
-            superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)       
+        if len(rfdiff_fixed_chain_coords)==0: #(there are no fixed chains)
+            superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
+            superimposer.run() 
         else:
             superimposer.set(rfdiff_fixed_chain_coords, af2_fixed_chain_coords)
-           
-        
-        superimposer.run()
+            superimposer.run()
+            rmsd_fixed_chains = get_rmsd_from_coords(rfdiff_fixed_chain_coords, af2_fixed_chain_coords, superimposer.rot, superimposer.tran)
+
         rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
-        rmsd_fixed_chains = get_rmsd_from_coords(rfdiff_fixed_chain_coords, af2_fixed_chain_coords, superimposer.rot, superimposer.tran)
+        
 
         if True in trb_dict['inpaint_seq']:
             rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
@@ -263,8 +264,6 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
     #shutil.copyfile(output, output+"_backup") #this is for debug only, to see the file before it goes to AF2
 
 
-
-
 def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # (-?\d*\.\d+|-?\d+\.?\d*) to allow negative RMSD (-1 = undefined)
     """returns value next to token"""
     import re
@@ -275,7 +274,7 @@ def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # 
     return match.group(1)
 
 
-def merge_csv(output_dir, output_csv, scores_csv): #, output_best=True,rmsd_threshold=5,plddt_threshold=90 parameters for the filtering
+def merge_csv(output_dir, output_csv, scores_csv): 
     # read csv files
     df1 = pd.read_csv(scores_csv)
     df2 = pd.read_csv(output_csv)
