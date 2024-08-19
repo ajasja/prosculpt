@@ -63,14 +63,11 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         all_af2_res = list(structure_af2.get_residues()) 
         all_af2_res_ca= [ind['CA'] for ind in all_af2_res]     
 
-        if True in trb_dict['inpaint_seq']:  #This means there are at least some fixed residues, therefore separate fixed and non-fixed
-            af2_all_fixed_res = [all_af2_res[ind]['CA'] for ind in selected_residues_data]
-            af2_sculpted_res = [ind['CA'] for ind in all_af2_res if ind['CA'] not in af2_all_fixed_res]
-            af2_fixed_chain_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
-            af2_motif_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_designed_chains] 
-        else: 
-            af2_all_fixed_res = [ind['CA'] for ind in all_af2_res] #shouldn't this be sculpted? This triggers when there are no fixed residues
-
+        af2_all_fixed_res = [all_af2_res[ind]['CA'] for ind in selected_residues_data]
+        af2_sculpted_res = [ind['CA'] for ind in all_af2_res if ind['CA'] not in af2_all_fixed_res]
+        af2_fixed_chain_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
+        af2_motif_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_designed_chains] 
+        
                
         trb_help = list(trb_dict['inpaint_str'])
         linker_indeces = [boolean for boolean in trb_help if boolean == False] #calculate linker length here - convenient
@@ -90,17 +87,15 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         all_rfdiff_res = list(structure_rfdiff.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
         all_rfdiff_res_ca= [ind['CA'] for ind in all_rfdiff_res]     
 
-        if True in trb_dict['inpaint_seq']:
-            rmsd_all_fixed_res = [all_rfdiff_res[ind]['CA'] for ind in selected_residues_data] #retrieve the residue with the corresponding index from rfdiff_res
-            rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rmsd_all_fixed_res]
-            rfdiff_fixed_chain_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
-            rfdiff_motif_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_designed_chains]
+        rfdiff_all_fixed_res = [all_rfdiff_res[ind]['CA'] for ind in selected_residues_data] #retrieve the residue with the corresponding index from rfdiff_res
+        rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_all_fixed_res]
+        rfdiff_fixed_chain_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
+        rfdiff_motif_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_designed_chains]
 
-        else:
-            rmsd_all_fixed_res = [ind['CA'] for ind in all_rfdiff_res]
 
-        if len(rmsd_all_fixed_res)!=len(af2_all_fixed_res):
+        if len(rfdiff_all_fixed_res)!=len(af2_all_fixed_res):
             print("Fixed and moving atom lists differ in size") #for now, this is when input pdb and output are different length
+            print(rfdiff_all_fixed_res,af2_all_fixed_res)
             return(-1, -1)
         
         #Align all and get RMSD of all
@@ -115,7 +110,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         #Align all reference residues if there are no fixed chains. Otherwise, align only fixed chains.  (Very nice because fully fixed chains should be a stable reference)
         #then get rmsd_all_fixed and rmsd_sculpted (If any)
         superimposer = SVDSuperimposer()
-        rfdiff_all_fixed_coords = np.array([a.coord for a in rmsd_all_fixed_res])
+        rfdiff_all_fixed_coords = np.array([a.coord for a in rfdiff_all_fixed_res])
         af2_all_fixed_coords = np.array([a.coord for a in af2_all_fixed_res])
 
         rfdiff_fixed_chain_coords=np.array([a.coord for a in rfdiff_fixed_chain_res])
@@ -125,17 +120,18 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         af2_motif_res_coords=np.array([a.coord for a in af2_motif_res])
 
         if len(rfdiff_fixed_chain_coords)==0: #(there are no fixed chains)
-            superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
-            superimposer.run() 
+            if len(rfdiff_all_fixed_coords)!=0: #(There are no fixed residues at all)
+                superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
+                superimposer.run() 
+                rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
         else:
             superimposer.set(rfdiff_fixed_chain_coords, af2_fixed_chain_coords)
             superimposer.run()
             rmsd_fixed_chains = get_rmsd_from_coords(rfdiff_fixed_chain_coords, af2_fixed_chain_coords, superimposer.rot, superimposer.tran)
-
-        rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
+            rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
         
 
-        if True in trb_dict['inpaint_seq']:
+        if True in trb_dict['inpaint_seq']: #There are non-redesigned models
             rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
             af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
 
@@ -143,7 +139,8 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
             af2_sculpted_coords = np.array(af2_sculpted_coords)
 
             rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
-            rmsd_motif = get_rmsd_from_coords(rfdiff_motif_res_coords, af2_motif_res_coords, superimposer.rot, superimposer.tran)
+            if (len(rfdiff_motif_res_coords)!=0):
+                rmsd_motif = get_rmsd_from_coords(rfdiff_motif_res_coords, af2_motif_res_coords, superimposer.rot, superimposer.tran)
 
     #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
             
