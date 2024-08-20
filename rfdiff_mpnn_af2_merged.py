@@ -251,7 +251,7 @@ def do_cycling(cfg):
 
         #if symmetry - make fasta file with monomer sequence only
         for fasta_file in fasta_files:
-            if cfg.inference.symmetry!=None:
+            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):
                 sequences=[]
                 for record in SeqIO.parse(fasta_file, "fasta"):
                     record.seq = record.seq[:record.seq.find('/')]  
@@ -269,7 +269,8 @@ def do_cycling(cfg):
             os.makedirs(monomers_fasta_dir)
 
         for file in fasta_files:
-            if 'monomer' in file:
+            if 'monomer' in os.path.basename(file):
+                print("moving monomer file: "+file) #just for DEBUG
                 shutil.move(file, os.path.join(os.path.dirname(file),'monomers',os.path.basename(file)))
 
         fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
@@ -288,7 +289,7 @@ def do_cycling(cfg):
                 af2_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "model_", "(\\d+)") #get 1 from rf_0__model_1__cycle_2__itr_0__.pdb
             model_dir = os.path.join(cfg.af2_out_dir, f"model_{rf_model_num}") #create name for af2 directory name: model_0
 
-            if 'monomer' in fasta_file: #if we are doing symmetry - make an extra directory for modeling monomers with af2
+            if 'monomer' in os.path.basename(fasta_file): #if we are doing symmetry - make an extra directory for modeling monomers with af2
                 model_dir = os.path.join(model_dir,'monomers')
                 
             prosculpt.change_sequence_in_fasta(cfg.rfdiff_pdb, fasta_file)
@@ -384,10 +385,11 @@ def final_operations(cfg):
         trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\\d+)") #get 0 from model_0 using reg exp
 
         if 'pdb_path' in cfg:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry)
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
         else:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry)
-                 
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
+            
+                
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
         f'{cfg.python_path} {scripts_folder / "scoring_rg_charge_sap.py"} {csv_path}'

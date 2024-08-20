@@ -20,19 +20,19 @@ def get_rmsd_from_coords(native_coords, model_coords, rot, tran):
     RMSD = np.sqrt(sum(sum(diff**2))/native_coords.shape[0])
     return RMSD
 
-def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,symmetry):        
+def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,symmetry, model_monomer):        
     # First calculate RMSD between input protein and AF2 generated protein
     # Second calcualte number of total generated AA by RFDIFF 
     #   - if designing only in one location the number is equal linker length  
      
         parser = PDBParser(PERMISSIVE = 1)
-        structure_designed = parser.get_structure("designed", af2_pdb)
+        structure_af2 = parser.get_structure("af2", af2_pdb)
 
         # Skip if trb does not exist
         if not os.path.exists(trb_path):
             print('skipping rfdiffusion, only RMSD is calculated')
 
-            if symmetry!=None:
+            if symmetry!=None or model_monomer:
                 rmsd = homooligomer_rmsd.align_oligomers(starting_pdb, af2_pdb, save_aligned=False)
             else:
                 rmsd = homooligomer_rmsd.align_monomer(starting_pdb, af2_pdb, save_aligned=False)
@@ -44,95 +44,110 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
                 trb_dict = pickle.load(f)
 
         # Get different data from trb file depending on the fact if designing a monomer (one chain) or heteromer
-        # complex_con_rex_idx present only if designing heteromer
+        # complex_con_rex_idx present only if there are chains that are completely fixed.
         # Data structure: con_ref_idx0 = [0, 1, 3, 3, ...] 
         #   Info: array of input pdb AA indices starting 0 (con_ref_pdb_idx), and where they are in the output pdb (con_hal_pdb_idx)
         #   In complex_con_hal_idx0 there is no chain info however RFDIFF changes pdb indeces to go from 1 to n (e.g. 1st AA in chain B has idx 34)
-        if 'complex_con_ref_idx0' in trb_dict:
-            residue_data_control = trb_dict['complex_con_ref_idx0']
-            residue_data_designed = trb_dict['complex_con_hal_idx0']
-        else:
-            residue_data_control = trb_dict['con_ref_idx0']
-            residue_data_designed = trb_dict['con_hal_idx0']
-
-        all_designed_res = list(structure_designed.get_residues()) 
-        all_designed_res_ca= [ind['CA'] for ind in all_designed_res]     
-        if True in trb_dict['inpaint_seq']:
-            designed_scaffold_res = [all_designed_res[ind]['CA'] for ind in residue_data_designed]
-            designed_sculpted_res = [ind['CA'] for ind in all_designed_res if ind['CA'] not in designed_scaffold_res]
-        else:
-            designed_scaffold_res = [ind['CA'] for ind in all_designed_res]
-
-        #printed_desi = [res.get_resname() for res in designed_res]
-
-        #print(list(x == y for x, y in zip(printed_ref, printed_desi)))
         
+        #selected_residues_data will hold the information only of those residues that were selected from the reference structure to be used in the final design
+        if 'complex_con_ref_idx0' in trb_dict:
+            selected_residues_data = trb_dict['complex_con_hal_idx0']
+            selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
+            #selected_residues_in_fixed_chains=trb_dict['receptor_con_hal_idx0'] #This actually doesn't work and I think it's a bug in RFDiff
+            selected_residues_in_fixed_chains=[res for res in selected_residues_data if res not in selected_residues_in_designed_chains]
+        else:
+            selected_residues_data = trb_dict['con_hal_idx0']
+            selected_residues_in_fixed_chains=[]
+            selected_residues_in_designed_chains=selected_residues_data
+
+        all_af2_res = list(structure_af2.get_residues()) 
+        all_af2_res_ca= [ind['CA'] for ind in all_af2_res]     
+
+        af2_all_fixed_res = [all_af2_res[ind]['CA'] for ind in selected_residues_data]
+        af2_sculpted_res = [ind['CA'] for ind in all_af2_res if ind['CA'] not in af2_all_fixed_res]
+        af2_fixed_chain_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
+        af2_motif_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_designed_chains] 
+        
+               
         trb_help = list(trb_dict['inpaint_str'])
         linker_indeces = [boolean for boolean in trb_help if boolean == False] #calculate linker length here - convenient
         linker_length = len(linker_indeces)
 
-
-        io=PDBIO()
-        io.set_structure(structure_designed)
-        io.save("af2_pdb_2.pdb")
+        #io=PDBIO()    
+        #io.set_structure(structure_af2)
+        #io.save("af2_pdb_2.pdb") #This is not necessary and might be slowing down everything a bit.
         rmsd=-1
-        rmsd_scaffold = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
+        rmsd_all_fixed = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
         rmsd_sculpted = -1
+        rmsd_fixed_chains = -1
+        rmsd_motif = -1
         # if starting_pdb:
         structure_rfdiff = parser.get_structure("control", rfdiff_pdb_path) 
 
         all_rfdiff_res = list(structure_rfdiff.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
         all_rfdiff_res_ca= [ind['CA'] for ind in all_rfdiff_res]     
 
-        if True in trb_dict['inpaint_seq']:
-            rfdiff_scaffold_res = [all_rfdiff_res[ind]['CA'] for ind in residue_data_designed] #retrieve the residue with the corresponding index from rfdiff_res
-            rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_scaffold_res]
-        else:
-            rfdiff_scaffold_res = [ind['CA'] for ind in all_rfdiff_res]
+        rfdiff_all_fixed_res = [all_rfdiff_res[ind]['CA'] for ind in selected_residues_data] #retrieve the residue with the corresponding index from rfdiff_res
+        rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_all_fixed_res]
+        rfdiff_fixed_chain_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
+        rfdiff_motif_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_designed_chains]
 
-        if len(rfdiff_scaffold_res)!=len(designed_scaffold_res):
+
+        if len(rfdiff_all_fixed_res)!=len(af2_all_fixed_res):
             print("Fixed and moving atom lists differ in size") #for now, this is when input pdb and output are different length
+            print(rfdiff_all_fixed_res,af2_all_fixed_res)
             return(-1, -1)
         
         #Align all and get RMSD of all
         superimposer = SVDSuperimposer()
-        rfdiff_all_coords = [a.coord for a in all_rfdiff_res_ca]
-        designed_all_coords = [a.coord for a in all_designed_res_ca]
-
-        rfdiff_all_coords = np.array(rfdiff_all_coords)
-        designed_all_coords = np.array(designed_all_coords)
-        
-        superimposer.set(rfdiff_all_coords, designed_all_coords)
+        rfdiff_all_coords =  np.array([a.coord for a in all_rfdiff_res_ca])
+        af2_all_coords =  np.array([a.coord for a in all_af2_res_ca])
+              
+        superimposer.set(rfdiff_all_coords, af2_all_coords)
         superimposer.run()
-        rmsd = get_rmsd_from_coords(rfdiff_all_coords, designed_all_coords, superimposer.rot, superimposer.tran)
+        rmsd = get_rmsd_from_coords(rfdiff_all_coords, af2_all_coords, superimposer.rot, superimposer.tran)
 
-        #Align only scaffold then get rmsd_scaffold and rmsd_sculpted (If any)
+        #Align all reference residues if there are no fixed chains. Otherwise, align only fixed chains.  (Very nice because fully fixed chains should be a stable reference)
+        #then get rmsd_all_fixed and rmsd_sculpted (If any)
         superimposer = SVDSuperimposer()
-        rfdiff_scaffold_coords = [a.coord for a in rfdiff_scaffold_res]
-        designed_scaffold_coords = [a.coord for a in designed_scaffold_res]
+        rfdiff_all_fixed_coords = np.array([a.coord for a in rfdiff_all_fixed_res])
+        af2_all_fixed_coords = np.array([a.coord for a in af2_all_fixed_res])
 
-        rfdiff_scaffold_coords = np.array(rfdiff_scaffold_coords)
-        designed_scaffold_coords = np.array(designed_scaffold_coords)
+        rfdiff_fixed_chain_coords=np.array([a.coord for a in rfdiff_fixed_chain_res])
+        rfdiff_motif_res_coords=np.array([a.coord for a in rfdiff_motif_res])
+
+        af2_fixed_chain_coords=np.array([a.coord for a in af2_fixed_chain_res])
+        af2_motif_res_coords=np.array([a.coord for a in af2_motif_res])
+
+        if len(rfdiff_fixed_chain_coords)==0: #(there are no fixed chains)
+            if len(rfdiff_all_fixed_coords)!=0: #(There are no fixed residues at all)
+                superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
+                superimposer.run() 
+                rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
+        else:
+            superimposer.set(rfdiff_fixed_chain_coords, af2_fixed_chain_coords)
+            superimposer.run()
+            rmsd_fixed_chains = get_rmsd_from_coords(rfdiff_fixed_chain_coords, af2_fixed_chain_coords, superimposer.rot, superimposer.tran)
+            rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
         
-        superimposer.set(rfdiff_scaffold_coords, designed_scaffold_coords)
-        superimposer.run()
-        rmsd_scaffold = get_rmsd_from_coords(rfdiff_scaffold_coords, designed_scaffold_coords, superimposer.rot, superimposer.tran)
 
-        if True in trb_dict['inpaint_seq']:
+        if True in trb_dict['inpaint_seq']: #There are non-redesigned models
             rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
-            designed_sculpted_coords = [a.coord for a in designed_sculpted_res]
+            af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
 
             rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
-            designed_sculpted_coords = np.array(designed_sculpted_coords)
+            af2_sculpted_coords = np.array(af2_sculpted_coords)
 
-            rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, designed_sculpted_coords, superimposer.rot, superimposer.tran)
+            rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
+            if (len(rfdiff_motif_res_coords)!=0):
+                rmsd_motif = get_rmsd_from_coords(rfdiff_motif_res_coords, af2_motif_res_coords, superimposer.rot, superimposer.tran)
 
     #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
             
         if symmetry!=None:
             rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
  
-        return ([round(rmsd, 1),round(rmsd_scaffold, 1),round(rmsd_sculpted, 1)], linker_length)
+        return ([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),round(rmsd_fixed_chains, 1),round(rmsd_motif, 1)],  linker_length)
 
 
 def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
@@ -140,17 +155,18 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                 trb_dict = pickle.load(f)
             
     if 'complex_con_ref_idx0' in trb_dict:
-        residue_data_control_0 = trb_dict['complex_con_ref_idx0']
-        residue_data_designed_0 = trb_dict['complex_con_hal_idx0']
+        #residue_data_control_0 = trb_dict['complex_con_ref_idx0'] 
+        residue_data_af2_0 = trb_dict['complex_con_hal_idx0']
         residue_data_control_1 = trb_dict['complex_con_ref_pdb_idx']
-        residue_data_designed_1 = trb_dict['complex_con_hal_pdb_idx']
+        #residue_data_af2_1 = trb_dict['complex_con_hal_pdb_idx']
     else:
-        residue_data_control_0 = trb_dict['con_ref_idx0']
-        residue_data_designed_0 = trb_dict['con_hal_idx0']
+        #residue_data_control_0 = trb_dict['con_ref_idx0']
+        residue_data_af2_0 = trb_dict['con_hal_idx0']
         residue_data_control_1 = trb_dict['con_ref_pdb_idx']
-        residue_data_designed_1 = trb_dict['con_hal_pdb_idx']
+        #residue_data_af2_1 = trb_dict['con_hal_pdb_idx']
     
-
+    if mpnn_seq[-1:] =="\n":
+        mpnn_seq=mpnn_seq[:-1]
     mpnn_sequence_no_colons=mpnn_seq.replace(":","")
 
     used_chains=list(set([i[0] for i in residue_data_control_1]))
@@ -194,14 +210,14 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                 all_names+="\t" 
 
         f.write(">"+all_names+"\n")      
-        f.write(mpnn_sequence_no_colons)                  
+        f.write(mpnn_sequence_no_colons+"\n")                  
 
         #write the sequences to be modelled:
         for seq_num, sequence in enumerate(mpnn_sequences_list):
             f.write(">"+letters[seq_num]+"\n")
             sequence_line= "-"*sequences_limits[seq_num][0] #Add a gap for each position before the sequence
             sequence_line+=sequence  #add sequence
-            sequence_line+= "-"*((len(mpnn_sequence_no_colons)-sequences_limits[seq_num][1])-1)#Add a gap for each position after the sequence. (-1 is because the line comes with \n at the end.)
+            sequence_line+= "-"*((len(mpnn_sequence_no_colons)-sequences_limits[seq_num][1]))#Add a gap for each position after the sequence. 
             f.write(sequence_line+"\n") #write padded sequence
 
         #now write the aligned sequences
@@ -222,14 +238,14 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
                             table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
                             line_without_insertions=line.translate(table)
 
-                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons)-1)  #Make a gap sequence of the length of the sequence. -1 is because the line comes with \n at the end.
+                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons))  #Make a gap sequence of the length of the sequence..
                             trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
                             first_residue_in_trb=trb_chain[0][1]
                             for id, pos in enumerate(residue_data_control_1):
                                 if pos[0]==chain: #If position chain corresponds to the chain we're looking at
                             
                                     position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
-                                    new_aligned_seq= new_aligned_seq[:residue_data_designed_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_designed_0[id]+1:] 
+                                    new_aligned_seq= new_aligned_seq[:residue_data_af2_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_af2_0[id]+1:] 
     
                             f.write(new_aligned_seq+"\n")
     
@@ -245,8 +261,6 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
     #shutil.copyfile(output, output+"_backup") #this is for debug only, to see the file before it goes to AF2
 
 
-
-
 def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # (-?\d*\.\d+|-?\d+\.?\d*) to allow negative RMSD (-1 = undefined)
     """returns value next to token"""
     import re
@@ -257,7 +271,7 @@ def get_token_value(astr, token, regular_expression): #"(\d*\.\d+|\d+\.?\d*)" # 
     return match.group(1)
 
 
-def merge_csv(output_dir, output_csv, scores_csv): #, output_best=True,rmsd_threshold=5,plddt_threshold=90 parameters for the filtering
+def merge_csv(output_dir, output_csv, scores_csv): 
     # read csv files
     df1 = pd.read_csv(scores_csv)
     df2 = pd.read_csv(output_csv)
@@ -285,7 +299,7 @@ def merge_csv(output_dir, output_csv, scores_csv): #, output_best=True,rmsd_thre
 
 
 
-def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None):
+def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False):
 
     
     # Preparing paths to acces correct files
@@ -300,9 +314,9 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         with open(trb_file, 'rb') as f:
             trb_dict = pickle.load(f)
         if 'complex_con_ref_idx0' in trb_dict:
-            residue_data_designed = trb_dict['complex_con_hal_idx0']
+            residue_data_af2 = trb_dict['complex_con_hal_idx0']
         else:
-            residue_data_designed = trb_dict['con_hal_idx0']
+            residue_data_af2 = trb_dict['con_hal_idx0']
     except FileNotFoundError:
         print('could not find trb_file, probably due to SkipRFdiff=True')
 
@@ -327,15 +341,15 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         plddt = int(np.mean(plddt_list))
 
         try:
-            plddt_sculpted_list=[plddt_list[i] for i in range(0,len(plddt_list)) if i not in residue_data_designed]
+            plddt_sculpted_list=[plddt_list[i] for i in range(0,len(plddt_list)) if i not in residue_data_af2]
             plddt_sculpted=int(np.mean(plddt_sculpted_list))
         except NameError:
             plddt_sculpted=-1
 
-        rmsd_list, linker_length	= calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry)
+        rmsd_list, linker_length = calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry, model_monomer)
         pae = round((np.mean(params['pae'])), 2)
 
-        #if we are doing symmetry we also want to add monomer rmsd to the output
+        #if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
         if symmetry:
             monomers_dirname = os.path.join(model_i, 'monomers')
             monomer_pdb_file = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(model_pdb_file))
@@ -345,7 +359,36 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
                 monomer_params = json.load(f)
 
             monomer_plddt_list = monomer_params['plddt']
-            monomer_plddt = int(np.mean(monomer_plddt_list))        
+            monomer_plddt = int(np.mean(monomer_plddt_list))
+        
+        if model_monomer:
+            monomers_dirname = os.path.join(model_i, 'monomers')
+            monomer_pdb_file = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(model_pdb_file))
+
+            parser = PDBParser(PERMISSIVE=1)
+
+            structure_target = parser.get_structure("target", rfdiff_pdb_path)
+            structure_mobile = parser.get_structure("mobile", monomer_pdb_file)
+            
+            target_chain = list(structure_target.get_chains())[0]
+            mobile_chain_res = list(structure_mobile.get_residues())
+            mobile_chain_res = [ind['CA'] for ind in mobile_chain_res]
+            list_rmsd_chains = []
+            
+            target_chain_res = list(target_chain.get_residues())
+            target_chain_res = [ind['CA'] for ind in target_chain_res]
+
+            superimposer = Superimposer()
+            superimposer.set_atoms(target_chain_res, mobile_chain_res)
+            superimposer.apply(structure_mobile.get_atoms())
+            list_rmsd_chains.append(superimposer.rms)
+            monomer_rmsd = np.min(list_rmsd_chains)
+            monomer_params_json = os.path.join(monomers_dirname, 'monomer_'+os.path.basename(json_file))
+            with open(monomer_params_json, 'r') as f:
+                monomer_params = json.load(f)
+
+            monomer_plddt_list = monomer_params['plddt']
+            monomer_plddt = int(np.mean(monomer_plddt_list))
         
         #tracebility
         output_num = os.path.basename(output_dir)
@@ -354,7 +397,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         task_id=os.environ.get('SLURM_ARRAY_TASK_ID', 1)
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]}__rmsd_scaffold_{rmsd_list[1]}__rmsd_sculpted_{rmsd_list[2]}__pae_{pae}__out_{output_num}_.pdb"
+        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]}__rmsd_sculpted_{rmsd_list[2]}__rmsd_fixedchains_{rmsd_list[3]}__rmsd_motif_{rmsd_list[4]}__pae_{pae}__out_{output_num}_.pdb"
             #out -> 00 -> number of task
             #rf -> 01 -> number of corresponding rf difff model
             #af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag 
@@ -382,8 +425,10 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
                 'plddt': get_token_value(new_pdb_file, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'plddt_sculpted': get_token_value(new_pdb_file, '__plddt_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD': get_token_value(new_pdb_file, '__rmsd_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
-                'RMSD_scaffold': get_token_value(new_pdb_file, '__rmsd_scaffold_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                #'Rmsd_all_fixed': get_token_value(new_pdb_file, '__rmsd_all_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_sculpted': get_token_value(new_pdb_file, '__rmsd_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                'RMSD_fixed_chains': get_token_value(new_pdb_file, '__rmsd_fixedchains_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                'RMSD_motif': get_token_value(new_pdb_file, '__rmsd_motif_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'pae': get_token_value(new_pdb_file, '__pae_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'model_path': new_pdb_path,
                 'sequence' : seq[1:],
@@ -391,7 +436,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
                 'af2_pdb' : model_pdb_file,
                 'path_rfdiff': rfdiff_pdb_path }  #MODEL PATH for scoring_rg_... #jsonfilename for traceability
         
-        if symmetry:
+        if symmetry or model_monomer:
             dictionary['monomer_rmsd']=monomer_rmsd
             dictionary['monomer_plddt']=monomer_plddt
 
@@ -427,7 +472,7 @@ def create_dataframe(path_to_files, output_dir): # path = r'content/*partial.pdb
         dictionary = {'link_lenght': get_token_value(file_name, 'link_', "(\\d*\\.\\d+|\\d+\\.?\\d*)" ),
                 'plddt': get_token_value(file_name, '__plddt_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'RMSD': get_token_value(file_name, '__rmsd_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
-                'RMSD_scaffold': get_token_value(file_name, '__rmsd_scaffold_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                #'Rmsd_all_fixed': get_token_value(file_name, '__rmsd_all_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_sculpted': get_token_value(file_name, '__rmsd_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'pae': get_token_value(file_name, '__pae_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
                 'model_path': file_name,
