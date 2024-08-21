@@ -1,5 +1,6 @@
 from omegaconf import DictConfig, OmegaConf
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import os
 from hydra.utils import get_original_cwd, to_absolute_path
 import logging
@@ -66,11 +67,7 @@ def general_config_prep(cfg):
                 breaks = cfg.contig.count("/0 ") + 1
             cfg.chains_to_design = ' '.join(chain_letters[:breaks])
             log.info(f"Chains to design (according to contig chain breaks): {cfg.chains_to_design}")
-                
-        
 
-
-    
     for directory in [cfg.rfdiff_out_dir, cfg.mpnn_out_dir, cfg.af2_out_dir]:
         os.makedirs(directory, exist_ok=True)
     
@@ -409,6 +406,10 @@ def prosculptApp(cfg: DictConfig) -> None:
     #log.debug(f"Now in Hydra, cwd = {os.getcwd()}")
 
     general_config_prep(cfg)
+    config = HydraConfig.get()
+    config_name = config.job.config_name
+    config_path = [path["path"] for path in config.runtime.config_sources if path["schema"] == "file"][1]
+    shutil.copy(os.path.join(config_path,config_name+'.yaml'), os.path.join(cfg.output_dir, f"input.yaml"))
 
     if cfg.get('only_run_analysis',False):#only_run_analysis
         print('***Skip everything, go to final operations***')
