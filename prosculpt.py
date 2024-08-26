@@ -53,7 +53,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         if 'complex_con_ref_idx0' in trb_dict:
             selected_residues_data = trb_dict['complex_con_hal_idx0']
             selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
-            if selected_residues_in_designed_chains == [] and trb_dict.config.contigmap.provide_seq!=None:
+            if len(selected_residues_in_designed_chains) == 0 and trb_dict.config.contigmap.provide_seq!=None:
                     selected_residues_in_designed_chains=np.where([a != b for a, b in zip(trb_dict["inpaint_seq"], trb_dict["inpaint_str"])])[0] #if this works...
                     print(f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {selected_residues_in_designed_chains}")
                     #print(selected_residues_in_designed_chains)
@@ -535,7 +535,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
         fixed_res = {}
 
         # We need to renumber fixed resids: each chain should start with 1 
-        chainResidOffset, con_hal_idx = getChainResidOffsets(pdb_file, designable_residues)
+        chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(pdb_file, designable_residues)
         
         if not skipRfDiff:
             trb_file = pdb_file.with_suffix(".trb")
@@ -573,7 +573,11 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
 
 
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
-        for chain, idx in con_hal_idx:
+        #for chain, idx in con_hal_idx: #ByFederico: this is a test. Since we're already filtering by inpaint_seq we don't need to use the 
+                                        #prefiltered con_hal_idx and we can use the full one that we recomputed before. This is necessary for the case with 
+                                        #Partial diffusion and a provided seq to mantain. This way we can pass those residues as fixed which for some reason
+                                        #RFDiff doesn't. This might be broken as hell. 
+        for chain, idx in con_hal_pdb_idx_complete:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
             if not skipRfDiff:
                 if trb_data["inpaint_seq"][idx-1]: #skip residues with FALSE in the inpaint_seq array
