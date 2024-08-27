@@ -1,5 +1,6 @@
 from omegaconf import DictConfig, OmegaConf
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import os
 from hydra.utils import get_original_cwd, to_absolute_path
 import logging
@@ -9,6 +10,7 @@ import re
 import shutil
 import pathlib
 from omegaconf import open_dict
+from Bio import SeqIO
 
 
 log = logging.getLogger(__name__)
@@ -39,6 +41,7 @@ def general_config_prep(cfg):
         cfg.path_for_parsed_chains = os.path.join(cfg.mpnn_out_dir, "parsed_pdbs.jsonl")
         cfg.path_for_assigned_chains = os.path.join(cfg.mpnn_out_dir, "assigned_pdbs.jsonl")
         cfg.path_for_fixed_positions = os.path.join(cfg.mpnn_out_dir, "fixed_pdbs.jsonl")
+        cfg.path_for_tied_positions = os.path.join(cfg.mpnn_out_dir, "tied_pdbs.jsonl")
 
         cfg.fasta_dir = os.path.join(cfg.mpnn_out_dir, "seqs")
         cfg.rfdiff_pdb = os.path.join(cfg.rfdiff_out_path, '_0.pdb')
@@ -48,17 +51,23 @@ def general_config_prep(cfg):
             cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.designable_residues}))
             log.info(f"Skipping RFdiff, only redesigning chains specified in designable_residues: {cfg.chains_to_design}")
 
+        if 'symmetry' not in cfg.inference:
+            cfg.inference.symmetry=None
+
+        if 'omit_AAs' not in cfg:
+            cfg.omit_AAs="X" #This is the default also in proteinMPNN
+
         # I suggest the following: count("/0", contig) -> chains_to_design = " ".join(chain_letters[:count]), unless specified (in run.yaml, it should be null, None or sth similar)
         chain_letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" # What happens after 26 chains? RfDiff only supports up to 26 chains: https://github.com/RosettaCommons/RFdiffusion/blob/ba8446eae0fb80c121829a67d3464772cc827f01/rfdiffusion/contigs.py#L40C29-L40C55
         if cfg.chains_to_design == None: #TODO this will likely break for sym mode
-            breaks = cfg.contig.count("/0 ") + 1
+
+            if cfg.inference.symmetry!=None:#if we are doing symmetry:
+                breaks = int(cfg.inference.symmetry[1:])
+            else:
+                breaks = cfg.contig.count("/0 ") + 1
             cfg.chains_to_design = ' '.join(chain_letters[:breaks])
             log.info(f"Chains to design (according to contig chain breaks): {cfg.chains_to_design}")
-            
 
-
-
-    
     for directory in [cfg.rfdiff_out_dir, cfg.mpnn_out_dir, cfg.af2_out_dir]:
         os.makedirs(directory, exist_ok=True)
     
@@ -125,18 +134,18 @@ def do_cycling(cfg):
 
             af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
-            #Access all af2 models and put them in one intemediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
+            #Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
             for model_subdict in af2_model_subdicts: 
                 af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
                 for i, af2_pdb in enumerate(af2_pdbs):
                     
-                    af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\d+)")
+                    af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\\d+)")
                     #if str(af_model_num) in args.af2_models:
                     # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
                     if cycle == 1:
-                        rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\d+)")
+                        rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
                         #else:
-                            #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
+                            #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
                     shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
                                 #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
                                 #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
@@ -148,6 +157,7 @@ def do_cycling(cfg):
             shutil.rmtree(cfg.mpnn_out_dir) # Remove MPNN dir so you can create new sequences
             os.makedirs(cfg.mpnn_out_dir, exist_ok=True) # Create it again
             trb_paths = os.path.join(cfg.rfdiff_out_dir, "*.trb")
+            print('trb_path is: ', trb_paths)
         #endif
         # All cycles run the same commands
         
@@ -157,27 +167,39 @@ def do_cycling(cfg):
             --output_path={cfg.path_for_parsed_chains}'       
         )
 
-
-        run_and_log(
-            f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
-                --input_path={cfg.path_for_parsed_chains} \
-                --output_path={cfg.path_for_assigned_chains} \
-                --chain_list='{cfg.chains_to_design}'"
-                )
-
+        if cfg.chains_to_design:
+            run_and_log(
+                f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
+                    --input_path={cfg.path_for_parsed_chains} \
+                    --output_path={cfg.path_for_assigned_chains} \
+                    --chain_list='{cfg.chains_to_design}'"
+                    )
+            
         fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
         # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
-        log.info(f"Fixed positions path: {fixed_pos_path}")
+
+        if cfg.inference.symmetry!=None:
+            run_and_log(
+                f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
+                --input_path={cfg.path_for_parsed_chains} \
+                --output_path={cfg.path_for_tied_positions} \
+                --homooligomer 1'    
+            )         
+            log.info(f"running symmetry")
 
         #_____________ RUN ProteinMPNN_____________
         # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
         proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
+            {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry!=None else ""} \
             --chain_id_jsonl {cfg.path_for_assigned_chains} \
             --out_folder {cfg.mpnn_out_dir} \
             --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            {"--sampling_temp 0.1 --backbone_noise 0" if cfg.get("skipRfDiff", False) else ""} \
+            --sampling_temp {cfg.sampling_temp} \
+            --backbone_noise {cfg.backbone_noise} \
+            --use_soluble_model  \
+            --omit_AAs {cfg.omit_AAs} \
             {parse_additional_args(cfg, "pass_to_mpnn")} \
             --batch_size 1'
         
@@ -192,42 +214,124 @@ def do_cycling(cfg):
 
         #________________ RUN AF2______________
         fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
+        print(fasta_files)
+
+        #if symmetry - make fasta file with monomer sequence only
+        for fasta_file in fasta_files:
+            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):
+                sequences=[]
+                for record in SeqIO.parse(fasta_file, "fasta"):
+                    record.seq = record.seq[:record.seq.find('/')]  
+                    idd = record.id            
+                    record.id = 'monomer_'+idd      
+                    descr = record.description
+                    record.description = 'monomer_'+descr
+                    sequences.append(record)
+                SeqIO.write(sequences, f"{fasta_file[:-3]}_monomer.fa", "fasta")
+        
+        fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) 
+
+        monomers_fasta_dir = os.path.join(cfg.fasta_dir, 'monomers')
+        if not os.path.exists(monomers_fasta_dir):
+            os.makedirs(monomers_fasta_dir)
+
+        for file in fasta_files:
+            if 'monomer' in os.path.basename(file):
+                print("moving monomer file: "+file) #just for DEBUG
+                shutil.move(file, os.path.join(os.path.dirname(file),'monomers',os.path.basename(file)))
+
+        fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
+        fasta_files += glob.glob(os.path.join(cfg.fasta_dir,'monomers', "*.fa"))
+        fasta_files = sorted(fasta_files)
+                
+        print(fasta_files)
+
+
         for fasta_file in fasta_files: # Number of fasta files corresponds to number of rfdiff models
+            print('RUNNING FASTA ',fasta_file)
             if cycle == 0:
-                rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\d+)") #get 0 from _0.fa using reg exp
+                rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "_", "(\\d+)") #get 0 from _0.fa using reg exp
             else:
-                rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "rf_", "(\d+)") #get 0 from rf_0__model_1__cycle_2__itr_0__.pdb
-                af2_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "model_", "(\d+)") #get 1 from rf_0__model_1__cycle_2__itr_0__.pdb
+                rf_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "rf_", "(\\d+)") #get 0 from rf_0__model_1__cycle_2__itr_0__.pdb
+                af2_model_num = prosculpt.get_token_value(os.path.basename(fasta_file), "model_", "(\\d+)") #get 1 from rf_0__model_1__cycle_2__itr_0__.pdb
             model_dir = os.path.join(cfg.af2_out_dir, f"model_{rf_model_num}") #create name for af2 directory name: model_0
+
+            if 'monomer' in os.path.basename(fasta_file): #if we are doing symmetry - make an extra directory for modeling monomers with af2
+                model_dir = os.path.join(model_dir,'monomers')
+                
             prosculpt.change_sequence_in_fasta(cfg.rfdiff_pdb, fasta_file)
             if not os.path.exists(model_dir):
                 os.makedirs(model_dir)
 
             model_order = str(cfg.model_order).split(",") # If only one number is passed, Hydra converts it to int
             num_models = len(model_order) #model order "1,2,3" -> num of models = 3
-            if cycle == 0: #have to run af2 differently in first cycle 
-                run_and_log(
-                    f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
-                                --model-type alphafold2_multimer_v3 \
-                                --msa-mode single_sequence \
-                                {fasta_file} {model_dir} \
-                                --model-order {cfg.model_order} \
-                                {parse_additional_args(cfg, "pass_to_af")} \
-                                --num-models {num_models}'
-                                )
-            else: 
-                for model_number in model_order:
-                    if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
-                        num_models = 1
+            
+            
+            if cfg.get("use_a3m", False): #If we're using a custom a3m, generate it for each sequence in the fasta
+                print("Generating custom msa files")
+                input_a3m_files=[]
+                with open(fasta_file) as fasta_f:
+                    a3m_filename=""
+                    for line in fasta_f:       
+                        if line[0]==">":
+                            a3m_filename= ("".join([ c if (c.isalnum()  or c ==".") else "_" for c in line[1:-1] ]))+".a3m"
+                        else:
+                            mpnn_seq=line
+                            trb_file=os.path.join(cfg.rfdiff_out_dir, "_"+str(rf_model_num)+".trb") #
+                            print (a3m_filename)
+                            custom_a3m_path=os.path.join(model_dir,a3m_filename)
+                            prosculpt.make_alignment_file(trb_file,mpnn_seq,cfg.a3m_dir,custom_a3m_path)
+                            input_a3m_files.append(custom_a3m_path)
+
+                for a3m_file in input_a3m_files:
+                    if cycle == 0: #have to run af2 differently in first cycle 
                         run_and_log(
                             f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
-                                --model-type alphafold2_multimer_v3 \
-                                --msa-mode single_sequence \
-                                {fasta_file} {model_dir} \
-                                --model-order {model_number} \
-                                {parse_additional_args(cfg, "pass_to_af")} \
-                                --num-models {num_models}'
-                                )
+                                        --model-type alphafold2_multimer_v3 \
+                                        --msa-mode mmseqs2_uniref_env \
+                                        {a3m_file} {model_dir} \
+                                        --model-order {cfg.model_order} \
+                                        {parse_additional_args(cfg, "pass_to_af")} \
+                                        --num-models {num_models}'
+                                        ) #changed from single_sequence
+                    else: 
+                        for model_number in model_order:
+                            if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
+                                num_models = 1
+                                run_and_log(
+                                    f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                                        --model-type alphafold2_multimer_v3 \
+                                        --msa-mode mmseqs2_uniref_env \
+                                        {a3m_file} {model_dir} \
+                                        --model-order {model_number} \
+                                        {parse_additional_args(cfg, "pass_to_af")} \
+                                        --num-models {num_models}'
+                                        ) #Changed from single_sequence
+
+            else:  #this is the normal mode of operations. Single sequence. 
+                if cycle == 0: #have to run af2 differently in first cycle 
+                    run_and_log(
+                        f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                                    --model-type alphafold2_multimer_v3 \
+                                    --msa-mode single_sequence \
+                                    {fasta_file} {model_dir} \
+                                    --model-order {cfg.model_order} \
+                                    {parse_additional_args(cfg, "pass_to_af")} \
+                                    --num-models {num_models}'
+                                    ) 
+                else: 
+                    for model_number in model_order:
+                        if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
+                            num_models = 1
+                            run_and_log(
+                                f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                                    --model-type alphafold2_multimer_v3 \
+                                    --msa-mode single_sequence \
+                                    {fasta_file} {model_dir} \
+                                    --model-order {model_number} \
+                                    {parse_additional_args(cfg, "pass_to_af")} \
+                                    --num-models {num_models}'
+                                    )#
 
         # msa single sequence makes sense for designed proteins
 
@@ -235,11 +339,23 @@ def final_operations(cfg):
     log.info("Final operations")
     json_directories = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
+    print('do we already have csv files? If we need to re-run stats re have to delete them: ',os.listdir(cfg.output_dir) )
+    if 'output.csv' in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir+'/output.csv')
+    if 'scores_rg_charge_sap.csv' in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir+'/scores_rg_charge_sap.csv')
+    if 'final_output.csv' in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir+'/final_output.csv')
+
     for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
         
-        trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\d+)") #get 0 from model_0 using reg exp
-        prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path)
-        
+        trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\\d+)") #get 0 from model_0 using reg exp
+
+        if 'pdb_path' in cfg:
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
+        else:
+            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
+            
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
@@ -247,7 +363,7 @@ def final_operations(cfg):
         )
         
     scores_rg_path = os.path.join(cfg.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
-    prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path)
+    prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path) #, cfg.get("output_best", True), cfg.get("rmsd_threshold",3),cfg.get("plddt_threshold",90) used for filtering. not needed now.
 
     os.remove(csv_path)
     os.remove(scores_rg_path)
@@ -268,11 +384,11 @@ def pass_config_to_rfdiff(cfg):
         else:
             return True
 
-
     new_cfg = dict(filter(keep_only_groups, cfg.items()))
     new_cfg["defaults"] = ["base", "_self_"] # TODO: is the base always the right thing to include? For symm it should be symmetry.
-    with open_dict(new_cfg["inference"]):
-        new_cfg["inference"]["input_pdb"] = cfg.pdb_path
+    if 'pdb_path' in cfg:
+        with open_dict(new_cfg["inference"]):
+            new_cfg["inference"]["input_pdb"] = cfg.pdb_path
 
     log.info(f"Saving this config for RfDiff: {OmegaConf.to_yaml(new_cfg)}")
     # save to file
@@ -290,18 +406,27 @@ def prosculptApp(cfg: DictConfig) -> None:
     #log.debug(f"Now in Hydra, cwd = {os.getcwd()}")
 
     general_config_prep(cfg)
+    config = HydraConfig.get()
+    config_name = config.job.config_name
+    config_path = [path["path"] for path in config.runtime.config_sources if path["schema"] == "file"][1]
+    shutil.copy(os.path.join(config_path,config_name+'.yaml'), os.path.join(cfg.output_dir, f"input.yaml"))
 
-    if not cfg.get("skipRfDiff", False):
-        pass_config_to_rfdiff(cfg)
-        run_rfdiff(cfg)
-        rechain_rfdiff_pdbs(cfg)
+    if cfg.get('only_run_analysis',False):#only_run_analysis
+        print('***Skip everything, go to final operations***')
+        final_operations(cfg)
+
     else:
-        log.info("*** Skipping RfDiff ***")
-        # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
-        shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
+        if not cfg.get("skipRfDiff", False):
+            pass_config_to_rfdiff(cfg)
+            run_rfdiff(cfg)
+            rechain_rfdiff_pdbs(cfg)
+        else:
+            log.info("*** Skipping RfDiff ***")
+            # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
+            shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
 
-    do_cycling(cfg)
-    final_operations(cfg)
+        do_cycling(cfg)
+        final_operations(cfg)
 
 
 if __name__ == "__main__":

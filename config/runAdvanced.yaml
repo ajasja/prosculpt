@@ -13,6 +13,13 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 skipRfDiff: True # Whether to skip RfDiff and only redesign a few residues with ProteinMPNN and AF
 designable_residues: [A8, A9, A10, A13, A85, B, C] # Residues to be redesigned when skipRfDiff == True. Also add letters of all other chains in the PDB you wish to have in the end structure.
 
+use_a3m: False  #If True, partial alignment will be used for natural proteins
+a3m_dir: /home/folivieri/prosculpt/uPar_epitope/alignments/ #Location of the alignment files used for the partial alignment
+
+model_monomer: False #Whether to compare designed chains to a model of itself in abscense of other proteins.
+
+only_run_analysis: False  #Only run final operations. This is good if a previous run failed to run final ops. Default: False
+
 
 defaults:
   - installation
@@ -21,6 +28,7 @@ defaults:
 pass_to_rfdiff: # Groups to pass to RfDiff
 - inference
 - potentials
+- contigmap
 
 pass_to_mpnn: # additional arguments and values to pass to ProteinMPNN
   --omit_AAs: "ACDEFGHIKLMNPQRSTVWY"
@@ -30,7 +38,6 @@ pass_to_af: # additional arguments and values to pass to AlphaFold
   --templates: ""
   --custom-template-path: /home/user/mhc/
 
-
 # Symmetry to sample
 # Available symmetries:
 # - Cyclic symmetry (C_n) # call as c5
@@ -38,9 +45,10 @@ pass_to_af: # additional arguments and values to pass to AlphaFold
 # - Tetrahedral symmetry # call as tetrahedral
 # - Octahedral symmetry # call as octahedral
 # - Icosahedral symmetry # call as icosahedral
-#symmetry: c2
+
 
 inference:
+# symmetry: c2          #This needs to be here, inside inference
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
 potentials:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
