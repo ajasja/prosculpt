@@ -14,6 +14,8 @@ with open(os.path.join(directory,"test_verification_output.txt"), "a+") as outpu
         if test_folder!="final_pdbs":
             if os.path.isdir(os.path.join(directory,test_folder)):
                 if os.path.isdir(os.path.join(directory,test_folder,"00")): #Check if 00 folder exists. Not sure what triggers this folder to exist or not.
+                    ## ANSWER: Folder number is defined in slurm_runner.py where writing out_command_file (it overwrites the output_dir specified in config, by adding the number. I think it is necessary for making multiple models parallelly). 
+                    ## This folder is then created in rfdiff_mpnn_af2_merged.py general_config_prep(), which is the first function called in the script.
                     final_output_path=os.path.join(directory,test_folder,"00","final_output.csv")
                 else:
                     final_output_path=os.path.join(directory,test_folder,"final_output.csv")

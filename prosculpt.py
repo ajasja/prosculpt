@@ -53,7 +53,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         if 'complex_con_ref_idx0' in trb_dict:
             selected_residues_data = trb_dict['complex_con_hal_idx0']
             selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
-            if len(selected_residues_in_designed_chains) == 0 and trb_dict.config.contigmap.provide_seq!=None:
+            if len(selected_residues_in_designed_chains) == 0 and trb_dict["config"]["contigmap"]["provide_seq"]!=None:
                     selected_residues_in_designed_chains=np.where([a != b for a, b in zip(trb_dict["inpaint_seq"], trb_dict["inpaint_str"])])[0] #if this works...
                     print(f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {selected_residues_in_designed_chains}")
                     #print(selected_residues_in_designed_chains)
