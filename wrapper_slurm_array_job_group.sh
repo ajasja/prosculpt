@@ -13,6 +13,7 @@ do
     echo "Hello from job $SLURM_JOB_ID on $(hostname) at $(date)"
     echo "PWD:"
     pwd
+    echo "which python? $(which python)"
     echo ""
     J=$(($SLURM_ARRAY_TASK_ID * $GROUP_SIZE + $I - $GROUP_SIZE))
     CMD=$(sed -n "${J}p" $1)

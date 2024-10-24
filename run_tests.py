@@ -42,8 +42,12 @@ for test_file in test_file_list:
             if "Submitted batch job" in line:
                 print(line)
                 slurm_job_list.append(line.split("job ")[1])
+        if process_output.returncode!=0:
+            print(f"ERROR {test_file}:")
+            for line in process_output.stderr.split("\n"):
+                print(line)
 
-#print(slurm_job_list)
+print(f"Slurm job list: {slurm_job_list}")
 #Queue up the test verifier after all jobs have ended
 jobs_string=""
 for id, job in enumerate(slurm_job_list):
