@@ -398,6 +398,25 @@ def pass_config_to_rfdiff(cfg):
 
     pass
 
+import time
+TIMEMEASURES = {}
+TIMECALC = time.time()
+PREVIOUS_MESSAGE = "Before app start"
+def dtimelog(message, final=False):
+    global TIMECALC
+    global PREVIOUS_MESSAGE
+    dt = round(time.time()-TIMECALC, 1)
+    log.warning(f"* * * {PREVIOUS_MESSAGE} lasted {dt} s. Running {message} * * *")
+    TIMEMEASURES[PREVIOUS_MESSAGE] = dt
+    PREVIOUS_MESSAGE = message
+    TIMECALC = time.time()
+    
+    if final:
+        # Print all measures one per line
+        for k,v in TIMEMEASURES.items():
+            log.warning(f"{k} lasted {v} s.")
+
+
 @hydra.main(version_base=None, config_path="config", config_name="run")
 def prosculptApp(cfg: DictConfig) -> None:
     log.info("Hydrić")
@@ -405,6 +424,7 @@ def prosculptApp(cfg: DictConfig) -> None:
 
     #log.debug(f"Now in Hydra, cwd = {os.getcwd()}")
 
+    dtimelog("general_config_prep")
     general_config_prep(cfg)
     config = HydraConfig.get()
     config_name = config.job.config_name
@@ -413,20 +433,28 @@ def prosculptApp(cfg: DictConfig) -> None:
 
     if cfg.get('only_run_analysis',False):#only_run_analysis
         print('***Skip everything, go to final operations***')
+        dtimelog("only final_operations")
         final_operations(cfg)
 
     else:
         if not cfg.get("skipRfDiff", False):
+            dtimelog("pass_config_to_rfdiff")
             pass_config_to_rfdiff(cfg)
+            dtimelog("run_rfdiff")
             run_rfdiff(cfg)
+            dtimelog("rechain_rfdiff_pdbs")
             rechain_rfdiff_pdbs(cfg)
         else:
             log.info("*** Skipping RfDiff ***")
+            dtimelog("skipping RfDiff")
             # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
             shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
 
+        dtimelog("do_cycling")
         do_cycling(cfg)
+        dtimelog("final_operations")
         final_operations(cfg)
+        dtimelog("Finished", True)
 
 
 if __name__ == "__main__":
