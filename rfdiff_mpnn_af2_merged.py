@@ -106,7 +106,7 @@ def rechain_rfdiff_pdbs(cfg):
     rf_pdbs = glob.glob(os.path.join(cfg.rfdiff_out_path, '*.pdb'))
     for pdb in rf_pdbs:
         run_and_log(
-            f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} {pdb} {pdb} --chain_break_cutoff_A {cfg.chain_break_cutoff_A}'
+            f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} "{pdb}" "{pdb}" --chain_break_cutoff_A {cfg.chain_break_cutoff_A}'
         )
         
 
