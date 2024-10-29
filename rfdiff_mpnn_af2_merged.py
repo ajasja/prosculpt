@@ -189,7 +189,7 @@ def do_cycling(cfg):
                         af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\\d+)")
                         #if str(af_model_num) in args.af2_models:
                         # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
-                        if cycle == 1:
+                        if cycle >= 1:
                             rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
                             #else:
                                 #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
