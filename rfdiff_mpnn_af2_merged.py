@@ -118,6 +118,14 @@ def parse_additional_args(cfg, group):
         dodatniArgumenti += f" {k} {v}"
     return(dodatniArgumenti)
 
+error_messages = ["blank", "Am Anfang", "Just before entering next cycle (before deleting cycle_dir)", "Deleted cycle_dir, then crashed. New wasn't created yet.", "New empty cycle_dir, but is_af_corrupted=1", "New empty cycle_dir and is_af_corrupted=0", "Empty cycle_dir, just after saving is_af_corrupted=0", "Now created a dir, but haven't saved is_af_corrupted to 0 yet.", "Created dir & set is_af_corrupted to 0.", "9: This one is nasty! Already moved from af to cycle_dir, but haven't saved iteration number yet. After restart, one file will be lost (overwritten). TODO: Use alternative checkpointing.", "10: Moved and saved iteration number.", "Removed MPNN dir", "After parse_multiple_cahins", "After proteinMPNN", "Saved is_af_corrupted to 1, but haven't removed the af dir yet", "15: AF is now corrupted and empty.", "One file written to /monomers. On restart, will it overwrite it with the same one?", "Uh-oh, it crashed just prior to running AF.", "18: Now it crashed just after running AF for one fasta file.", "19: Well, now it crashed after running AF for all fasta files. But before saving cycle checkpoint! Expected restart result: just re-run it, without copying/moving anything in the cycle_dir", "20: Crashed just before updating cycle checkpoint.", "21: Finished all cycles; before final_ops"]
+def throw(id, cycle=0):
+    log.info(f"Wanna crash? {id} ?= {crash_at_error} in cycle {cycle} ?= {crash_at_cycle}")
+    if id == crash_at_error and cycle == crash_at_cycle:
+        msg = error_messages[id]
+        log.critical(f"Forced crash at {id}: {msg} in cycle {cycle}")
+        raise Exception(f"Forced crash at {id}: {msg} in cycle {cycle}") 
+
 def save_checkpoint(folder, piece, value):
     with open(os.path.join(folder, f"checkpoint_{piece}.txt"), "w") as f:
         f.write(str(value))
@@ -148,28 +156,42 @@ def do_cycling(cfg):
 
         trb_paths = None
         input_mpnn = cfg.rfdiff_out_dir # First cycle has this, other cycles overwrite this var
+        throw(1, cycle)
 
         if not cycle == 0: # All other cycles get starting PDBs from AF2
+            print(f"Cycle is not 0: {cycle}")
             cycle_directory = os.path.join(cfg.output_dir, "2_1_cycle_directory")
             if cycle != start_cycle:
+                print(f"Cycle is not start_cycle: {start_cycle}")
+                throw(2, cycle)
                 if os.path.exists(cycle_directory):
                     shutil.rmtree(cycle_directory) # We should not remove it on restart
+                    throw(3, cycle)
                 os.makedirs(cycle_directory, exist_ok=True)
+                throw(4, cycle)
                 save_checkpoint(cfg.output_dir, "is_af_corrupted", 0) ## AF folder is ok to move its files to cycle_folder and cycle_folder is empty (ready for new files).
                 is_af_corrupted = 0
+                throw(5, cycle)
             elif os.path.exists(cycle_directory):
+                print(f"Cycle is start_cycle: {start_cycle} and cycle_dir exists")
                 with os.scandir(cycle_directory) as it:
                     with os.scandir(cycle_directory) as it:
                         if not any(it):
                             log.warning(f"Cycling directory is empty on restart. Restarted at {start_cycle}, now doing cycle {cycle} up to {cfg.af2_mpnn_cycles}. However, AF status is still set to corrupted {is_af_corrupted}. Assuming new (complete) data is in AF_dir && cycle_dir had been cleared just prior to crash (before moving new files into it). Setting is_af_corrupted to 0.")
                             is_af_corrupted = 0
                             save_checkpoint(cfg.output_dir, "is_af_corrupted", 0) 
+                            throw(6, cycle)
             else: # cycle >= 1, cycle == start_cycle (on restart), cycle_dir doesn't exist
+                print(f"Cycle is start_cycle: {start_cycle} and cycle_dir doesn't exist")
                 log.warning(f"Cycling directory doesn't even exist on restart. This can only occur if the job was terminated during clearing the cycling_dir. Restarted at {start_cycle}, now doing cycle {cycle} up to {cfg.af2_mpnn_cycles}. However, AF status is still set to corrupted {is_af_corrupted}. Assuming new (complete) data is in AF_dir && cycle_dir was being cleared during the crash (before re-creating it and moving new files into it). Setting is_af_corrupted to 0.")
                 os.makedirs(cycle_directory, exist_ok=True)
+                throw(7, cycle)
                 is_af_corrupted = 0
                 save_checkpoint(cfg.output_dir, "is_af_corrupted", 0) 
-
+                throw(8, cycle)
+            print(f"Nada: {cycle}")
+            throw(20, cycle)
+            save_checkpoint(cfg.output_dir, "cycle", cycle) # At this point, cycling_dir is ready to accept new AF files. On restart, it will proceed from the correct cycle. 
             if not is_af_corrupted:
                 af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
@@ -192,12 +214,15 @@ def do_cycling(cfg):
                                     #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
                                     #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
                                     # is it maybe possible to filter best ranked by af2 from the itr numbers?
+                        throw(9, cycle)
                         save_checkpoint(model_subdict, "iteration", i+1) # I hope both `move` and `write` commands finish writing the file when a job is terminated!
                         ## CHECKPOINTING: Alternative: on restart, check files -> regex -> itr_i -> max -> continue from there
+                        throw(10, cycle)
 
             input_mpnn = cycle_directory
 
             shutil.rmtree(cfg.mpnn_out_dir) # Remove MPNN dir so you can create new sequences
+            throw(11, cycle)
             os.makedirs(cfg.mpnn_out_dir, exist_ok=True) # Create it again
             trb_paths = os.path.join(cfg.rfdiff_out_dir, "*.trb")
             print('trb_path is: ', trb_paths)
@@ -210,6 +235,7 @@ def do_cycling(cfg):
             --input_path={input_mpnn} \
             --output_path={cfg.path_for_parsed_chains}'       
         )
+        throw(12, cycle)
 
         if cfg.chains_to_design:
             run_and_log(
@@ -249,14 +275,17 @@ def do_cycling(cfg):
             --batch_size 1'
         
         run_and_log(proteinMPNN_cmd_str)
+        throw(13, cycle)
 
         log.info("Preparing to empty af2 directory.")
         dtimelog(f"Cycle {cycle} preparation for af2")
         
         # af2 directory must be empty
         save_checkpoint(cfg.output_dir, "is_af_corrupted", 1) ## AF folder is soon going to be in such a state that .pdb files should not be moved on restart (because you would have two different cycles in the same cycle_folder)
+        throw(14, cycle)
         shutil.rmtree(cfg.af2_out_dir)
         os.makedirs(cfg.af2_out_dir, exist_ok=True)
+        throw(15, cycle)
 
 
         #________________ RUN AF2______________
@@ -280,6 +309,7 @@ def do_cycling(cfg):
                     sequences.append(record)
                 SeqIO.write(sequences, os.path.join(os.path.dirname(fasta_file), "monomers", f"{os.path.basename(fasta_file)[:-3]}_monomer.fa"), "fasta") # It must be written to the correct subfolder already to prevent duplication on job restart (CHECKPOINTING): _monomer_monomer.fa
                 print("File written to /monomers subfolder. "+fasta_file) #just for DEBUG 
+                throw(16, cycle)
 
         fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
         fasta_files += glob.glob(os.path.join(cfg.fasta_dir,'monomers', "*.fa"))
@@ -352,6 +382,7 @@ def do_cycling(cfg):
             else:  #this is the normal mode of operations. Single sequence. 
                 if cycle == 0: #have to run af2 differently in first cycle 
                     dtimelog(f"Cycle {cycle} running AF2")
+                    throw(17, cycle)
                     run_and_log(
                         f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
                                     --model-type alphafold2_multimer_v3 \
@@ -366,6 +397,7 @@ def do_cycling(cfg):
                         if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
                             num_models = 1
                             dtimelog(f"Cycle {cycle}.{model_number} running AF2")
+                            throw(17, cycle)
                             run_and_log(
                                 f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
                                     --model-type alphafold2_multimer_v3 \
@@ -376,12 +408,15 @@ def do_cycling(cfg):
                                     --num-models {num_models}'
                                     )#
             dtimelog(f"Cycle {cycle} finished AF2 for this fasta file {fasta_file}")
+            throw(18, cycle)
         dtimelog(f"Cycle {cycle} finished AF2 for all fasta files")
-        ## Here, save the `cycle` var to a file. At the beginning of the do_cyccled fn, read it (if it exists, else = 0). Then, do loop in range(checkpoint_cycle, cfg.af2_mpnn_cycles) 
-        save_checkpoint(cfg.output_dir, "cycle", cycle+1)
+        throw(19, cycle)
         #save_checkpoint(cfg.output_dir, "is_af_corrupted", 0) ## AF folder is ok to move its files to cycle_folder
 
         # msa single sequence makes sense for designed proteins
+    save_checkpoint(cfg.output_dir, "cycle", cycle+1)
+    ## Here, save the `cycle` var to a file. Loops have finished; on restart, it will skip do_cycling altogether. 
+    throw(21, cycle)
 
 def final_operations(cfg):
     log.info("Final operations")
@@ -464,6 +499,8 @@ def dtimelog(message, final=False):
         for k,v in TIMEMEASURES.items():
             log.warning(f"{k} lasted {v} s.")
 
+crash_at_error = 0 # Added through command line. Where should the test crash?
+crash_at_cycle = 0 # Added through command line. In which cycle should the test crash?
 
 @hydra.main(version_base=None, config_path="config", config_name="run")
 def prosculptApp(cfg: DictConfig) -> None:
@@ -478,6 +515,11 @@ def prosculptApp(cfg: DictConfig) -> None:
     config_name = config.job.config_name
     config_path = [path["path"] for path in config.runtime.config_sources if path["schema"] == "file"][1]
     shutil.copy(os.path.join(config_path,config_name+'.yaml'), os.path.join(cfg.output_dir, f"input.yaml"))
+
+    global crash_at_error
+    global crash_at_cycle
+    crash_at_error = cfg.get("throw", -1)
+    crash_at_cycle = cfg.get("crash_at_cycle", 0)
 
     if cfg.get('only_run_analysis',False):#only_run_analysis
         print('***Skip everything, go to final operations***')
