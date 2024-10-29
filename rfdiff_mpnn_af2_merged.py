@@ -137,7 +137,7 @@ def get_checkpoint(folder, piece, default=0):
     if os.path.exists(os.path.join(folder, f"checkpoint_{piece}.txt")):
         with open(os.path.join(folder, f"checkpoint_{piece}.txt"), "r") as f:
             value = int(f.read() or 0)
-            log.info(f"Reading checkpoint {piece} at cycle {value}")
+            log.info(f"Reading checkpoint {piece}: {value}")
             return value # suppose only numbers (as strings) are there (user should not write to this file). In worst case, file is empty.
     else:
         log.info(f"Checkpoint {piece} doesn't exist. Returning default value {default}")
@@ -401,7 +401,7 @@ def do_cycling(cfg):
         content_status = 1
 
         # msa single sequence makes sense for designed proteins
-    throw(21, cycle)
+    throw(21)
 
 def final_operations(cfg):
     log.info("Final operations")
