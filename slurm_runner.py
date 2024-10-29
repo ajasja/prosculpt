@@ -5,7 +5,7 @@ import os
 import argparse
 import yaml
 
-parser=argparse.ArgumentParser(epilog=('#### Any other arguments passed will be passed as they are to prosculpt. If including output_dir, please include it first ####\n'))
+parser=argparse.ArgumentParser(epilog=('#### Any other arguments passed will be passed as they are to prosculpt. If including output_dir, please include it first ####\n**** Important: hydra config overrides should be put before -cd and -cn ****\nExample: python slurm_runner.py 1 multipassinpaintseq_throw  output_dir="Examples/Examples_out/multipass_inpaintseq_throw" +throw=1 +cycle=0 -cd Examples -cn multipass_inpaintseq'))
 
 parser.add_argument('num_tasks', help='Number of concurrent jobs to run.')
 parser.add_argument('name', help='Desired task name')
