@@ -118,39 +118,82 @@ def parse_additional_args(cfg, group):
         dodatniArgumenti += f" {k} {v}"
     return(dodatniArgumenti)
 
+def save_checkpoint(folder, piece, value):
+    with open(os.path.join(folder, f"checkpoint_{piece}.txt"), "w") as f:
+        f.write(str(value))
+        f.flush()
+    log.info(f"Saving checkpoint {piece} = {value}")
+
+def get_checkpoint(folder, piece, default=0):
+    # check if file exists
+    if os.path.exists(os.path.join(folder, f"checkpoint_{piece}.txt")):
+        with open(os.path.join(folder, f"checkpoint_{piece}.txt"), "r") as f:
+            value = int(f.read() or 0)
+            log.info(f"Reading checkpoint {piece} at cycle {value}")
+            return value # suppose only numbers (as strings) are there (user should not write to this file). In worst case, file is empty.
+    else:
+        log.info(f"Checkpoint {piece} doesn't exist. Returning default value {default}")
+        return default
+
 def do_cycling(cfg):
+    """
+    Runs a loop of (ProteinMPNN -> AF2 ->) `af2_mpnn_cycles` number of times.
+    """
     log.info("Running do_cycling")
-    for cycle in range(cfg.af2_mpnn_cycles):
+    start_cycle = get_checkpoint(cfg.output_dir, "cycle", 0)
+    is_af_corrupted = get_checkpoint(cfg.output_dir, "is_af_corrupted", 0)
+    for cycle in range(start_cycle, cfg.af2_mpnn_cycles):
         print("cycleeeeee", cycle)
+        dtimelog(f"Starting cycle {cycle}")
 
         trb_paths = None
         input_mpnn = cfg.rfdiff_out_dir # First cycle has this, other cycles overwrite this var
 
         if not cycle == 0: # All other cycles get starting PDBs from AF2
             cycle_directory = os.path.join(cfg.output_dir, "2_1_cycle_directory")
-            if os.path.exists(cycle_directory):
-                shutil.rmtree(cycle_directory)
-            os.makedirs(cycle_directory, exist_ok=True)
+            if cycle != start_cycle:
+                if os.path.exists(cycle_directory):
+                    shutil.rmtree(cycle_directory) # We should not remove it on restart
+                os.makedirs(cycle_directory, exist_ok=True)
+                save_checkpoint(cfg.output_dir, "is_af_corrupted", 0) ## AF folder is ok to move its files to cycle_folder and cycle_folder is empty (ready for new files).
+                is_af_corrupted = 0
+            elif os.path.exists(cycle_directory):
+                with os.scandir(cycle_directory) as it:
+                    with os.scandir(cycle_directory) as it:
+                        if not any(it):
+                            log.warning(f"Cycling directory is empty on restart. Restarted at {start_cycle}, now doing cycle {cycle} up to {cfg.af2_mpnn_cycles}. However, AF status is still set to corrupted {is_af_corrupted}. Assuming new (complete) data is in AF_dir && cycle_dir had been cleared just prior to crash (before moving new files into it). Setting is_af_corrupted to 0.")
+                            is_af_corrupted = 0
+                            save_checkpoint(cfg.output_dir, "is_af_corrupted", 0) 
+            else: # cycle >= 1, cycle == start_cycle (on restart), cycle_dir doesn't exist
+                log.warning(f"Cycling directory doesn't even exist on restart. This can only occur if the job was terminated during clearing the cycling_dir. Restarted at {start_cycle}, now doing cycle {cycle} up to {cfg.af2_mpnn_cycles}. However, AF status is still set to corrupted {is_af_corrupted}. Assuming new (complete) data is in AF_dir && cycle_dir was being cleared during the crash (before re-creating it and moving new files into it). Setting is_af_corrupted to 0.")
+                os.makedirs(cycle_directory, exist_ok=True)
+                is_af_corrupted = 0
+                save_checkpoint(cfg.output_dir, "is_af_corrupted", 0) 
 
-            af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
+            if not is_af_corrupted:
+                af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
-            #Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
-            for model_subdict in af2_model_subdicts: 
-                af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
-                for i, af2_pdb in enumerate(af2_pdbs):
-                    
-                    af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\\d+)")
-                    #if str(af_model_num) in args.af2_models:
-                    # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
-                    if cycle == 1:
-                        rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
-                        #else:
-                            #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
-                    shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
-                                #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
-                                #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
-                                #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
-                                # is it maybe possible to filter best ranked by af2 from the itr numbers?
+                #Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
+                for model_subdict in af2_model_subdicts: 
+                    af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
+                    index_from_checkpoint = get_checkpoint(model_subdict, "iteration", 0)
+                    for i, af2_pdb in enumerate(af2_pdbs, start=index_from_checkpoint):
+                        ## CHECKPOINTING: Hope it doesn't crash inside this loop. Else: `i` will go from 0 again, overwriting already existing files!
+                        
+                        af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\\d+)")
+                        #if str(af_model_num) in args.af2_models:
+                        # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
+                        if cycle == 1:
+                            rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
+                            #else:
+                                #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
+                        shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
+                                    #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
+                                    #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
+                                    #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
+                                    # is it maybe possible to filter best ranked by af2 from the itr numbers?
+                        save_checkpoint(model_subdict, "iteration", i+1) # I hope both `move` and `write` commands finish writing the file when a job is terminated!
+                        ## CHECKPOINTING: Alternative: on restart, check files -> regex -> itr_i -> max -> continue from there
 
             input_mpnn = cycle_directory
 
@@ -160,7 +203,8 @@ def do_cycling(cfg):
             print('trb_path is: ', trb_paths)
         #endif
         # All cycles run the same commands
-        
+        dtimelog(f"Cycle {cycle} helper scripts")
+
         run_and_log(
             f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
             --input_path={input_mpnn} \
@@ -189,6 +233,7 @@ def do_cycling(cfg):
 
         #_____________ RUN ProteinMPNN_____________
         # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
+        dtimelog(f"Cycle {cycle} running ProteinMPNN")
         proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
             --jsonl_path {cfg.path_for_parsed_chains} \
             --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
@@ -206,8 +251,10 @@ def do_cycling(cfg):
         run_and_log(proteinMPNN_cmd_str)
 
         log.info("Preparing to empty af2 directory.")
+        dtimelog(f"Cycle {cycle} preparation for af2")
         
         # af2 directory must be empty
+        save_checkpoint(cfg.output_dir, "is_af_corrupted", 1) ## AF folder is soon going to be in such a state that .pdb files should not be moved on restart (because you would have two different cycles in the same cycle_folder)
         shutil.rmtree(cfg.af2_out_dir)
         os.makedirs(cfg.af2_out_dir, exist_ok=True)
 
@@ -216,9 +263,13 @@ def do_cycling(cfg):
         fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
         print(fasta_files)
 
+        monomers_fasta_dir = os.path.join(cfg.fasta_dir, 'monomers')
+        if not os.path.exists(monomers_fasta_dir):
+            os.makedirs(monomers_fasta_dir)
+        
         #if symmetry - make fasta file with monomer sequence only
         for fasta_file in fasta_files:
-            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):
+            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):  #TODO: move this up one line because cfg symmetry is constant, not based on fasta_file
                 sequences=[]
                 for record in SeqIO.parse(fasta_file, "fasta"):
                     record.seq = record.seq[:record.seq.find('/')]  
@@ -227,18 +278,8 @@ def do_cycling(cfg):
                     descr = record.description
                     record.description = 'monomer_'+descr
                     sequences.append(record)
-                SeqIO.write(sequences, f"{fasta_file[:-3]}_monomer.fa", "fasta")
-        
-        fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) 
-
-        monomers_fasta_dir = os.path.join(cfg.fasta_dir, 'monomers')
-        if not os.path.exists(monomers_fasta_dir):
-            os.makedirs(monomers_fasta_dir)
-
-        for file in fasta_files:
-            if 'monomer' in os.path.basename(file):
-                print("moving monomer file: "+file) #just for DEBUG
-                shutil.move(file, os.path.join(os.path.dirname(file),'monomers',os.path.basename(file)))
+                SeqIO.write(sequences, os.path.join(os.path.dirname(fasta_file), "monomers", f"{os.path.basename(fasta_file)[:-3]}_monomer.fa"), "fasta") # It must be written to the correct subfolder already to prevent duplication on job restart (CHECKPOINTING): _monomer_monomer.fa
+                print("File written to /monomers subfolder. "+fasta_file) #just for DEBUG 
 
         fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
         fasta_files += glob.glob(os.path.join(cfg.fasta_dir,'monomers', "*.fa"))
@@ -310,6 +351,7 @@ def do_cycling(cfg):
 
             else:  #this is the normal mode of operations. Single sequence. 
                 if cycle == 0: #have to run af2 differently in first cycle 
+                    dtimelog(f"Cycle {cycle} running AF2")
                     run_and_log(
                         f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
                                     --model-type alphafold2_multimer_v3 \
@@ -323,6 +365,7 @@ def do_cycling(cfg):
                     for model_number in model_order:
                         if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
                             num_models = 1
+                            dtimelog(f"Cycle {cycle}.{model_number} running AF2")
                             run_and_log(
                                 f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
                                     --model-type alphafold2_multimer_v3 \
@@ -332,6 +375,11 @@ def do_cycling(cfg):
                                     {parse_additional_args(cfg, "pass_to_af")} \
                                     --num-models {num_models}'
                                     )#
+            dtimelog(f"Cycle {cycle} finished AF2 for this fasta file {fasta_file}")
+        dtimelog(f"Cycle {cycle} finished AF2 for all fasta files")
+        ## Here, save the `cycle` var to a file. At the beginning of the do_cyccled fn, read it (if it exists, else = 0). Then, do loop in range(checkpoint_cycle, cfg.af2_mpnn_cycles) 
+        save_checkpoint(cfg.output_dir, "cycle", cycle+1)
+        #save_checkpoint(cfg.output_dir, "is_af_corrupted", 0) ## AF folder is ok to move its files to cycle_folder
 
         # msa single sequence makes sense for designed proteins
 
