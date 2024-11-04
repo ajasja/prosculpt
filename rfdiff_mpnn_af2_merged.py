@@ -178,30 +178,32 @@ def do_cycling(cfg):
 
             if content_status == 2:
                 af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
+                log.info(f"AF2 model subdicts: {af2_model_subdicts}")
 
                 #Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
                 for model_subdict in af2_model_subdicts: 
+                    log.info(f"Model subdict: {model_subdict}")
                     af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
-                    index_from_checkpoint = get_checkpoint(model_subdict, "iteration", 0)
-                    for i, af2_pdb in enumerate(af2_pdbs, start=index_from_checkpoint):
-                        ## CHECKPOINTING: Hope it doesn't crash inside this loop. Else: `i` will go from 0 again, overwriting already existing files!
-                        
+                    log.info(f"AF2 pdbs: {af2_pdbs}")
+                    
+                    rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
+                    # Count number of files in cycle_directory which contain f"rf_{rf_model_num}"
+                    number_of_copied_models = len([f for f in os.listdir(cycle_directory) if f"rf_{rf_model_num}" in f])
+                    log.info(f"Number of already copied/present models: {number_of_copied_models}")
+                    #last_iteration = max([int(prosculpt.get_token_value(f, "itr_", "(\\d+)")) for f in os.listdir(cycle_directory) if f"rf_{rf_model_num}" in f] or [0])
+
+                    for i, af2_pdb in enumerate(af2_pdbs, start=number_of_copied_models):
                         af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\\d+)")
                         #if str(af_model_num) in args.af2_models:
                         # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
-                        if cycle >= 1:
-                            rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
-                            #else:
-                                #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
+
+                        log.info(f"i: {i}, af2_pdb: {af2_pdb}, af_model_num: {af_model_num}, rf_model_num: {rf_model_num}")
                         shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
                                     #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
                                     #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
                                     #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
                                     # is it maybe possible to filter best ranked by af2 from the itr numbers?
                         throw(9, cycle)
-                        save_checkpoint(model_subdict, "iteration", i+1) # I hope both `move` and `write` commands finish writing the file when a job is terminated!
-                        ## CHECKPOINTING: Alternative: on restart, check files -> regex -> itr_i -> max -> continue from there
-                        throw(10, cycle)
                 save_checkpoint(cfg.output_dir, "content_status", 3) ## AF folder is soon going to be in such a state that .pdb files should not be moved on restart (because you would have two different cycles in the same cycle_folder)
                 content_status = 3
 
@@ -293,6 +295,8 @@ def do_cycling(cfg):
                     sequences.append(record)
                 SeqIO.write(sequences, os.path.join(os.path.dirname(fasta_file), "monomers", f"{os.path.basename(fasta_file)[:-3]}_monomer.fa"), "fasta") # It must be written to the correct subfolder already to prevent duplication on job restart (CHECKPOINTING): _monomer_monomer.fa
                 print("File written to /monomers subfolder. "+fasta_file) #just for DEBUG 
+                ## CHECKPOINTING: Right now, protMPNN is rerun after restart, which outputs different files into mpnn_out. The new files overwrite the old ones in /monomers, so it is always fresh.
+                ## TODO: skip it (need more state variable checkpoints)
                 throw(16, cycle)
 
         fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
