@@ -149,7 +149,6 @@ def do_cycling(cfg):
     """
     log.info("Running do_cycling")
     start_cycle = get_checkpoint(cfg.output_dir, "cycle", 0)
-    is_af_corrupted = get_checkpoint(cfg.output_dir, "is_af_corrupted", 0)
     content_status = get_checkpoint(cfg.output_dir, "content_status", 0) # 0 ... fresh run; 1 ... can clear and copy; 2 ... can copy; 3 ... corrupted (partial new files in AF2)
     for cycle in range(start_cycle, cfg.af2_mpnn_cycles):
         print("cycleeeeee", cycle)
@@ -502,7 +501,8 @@ def prosculptApp(cfg: DictConfig) -> None:
     general_config_prep(cfg)
     config = HydraConfig.get()
     config_name = config.job.config_name
-    config_path = [path["path"] for path in config.runtime.config_sources if path["schema"] == "file"][1]
+    log.info(f"config.runtime.config_sources: {config.runtime.config_sources}")
+    config_path = [path["path"] for path in config.runtime.config_sources if path["schema"] == "file"][-1] # If run without config (through cmd), [1] is out of range. Assume passed config file is always the last one.
     shutil.copy(os.path.join(config_path,config_name+'.yaml'), os.path.join(cfg.output_dir, f"input.yaml"))
 
     global crash_at_error
