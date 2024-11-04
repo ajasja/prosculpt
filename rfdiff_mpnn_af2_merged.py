@@ -85,6 +85,18 @@ def run_rfdiff(cfg):
     See RFdiffusion git for details.
     """
     log.info("***************Running runRFdiff***************")
+
+    # Check if we already have cfg.num_designs_rfdiff .pdb and *.trb files in cfg.rfdiff_out_path
+    if len(glob.glob(os.path.join(cfg.rfdiff_out_path, "*.pdb"))) == cfg.num_designs_rfdiff:
+        log.info(f"Found {cfg.num_designs_rfdiff} .pdb and .trb files in {cfg.rfdiff_out_path}. Skipping RFdiff.")
+        if len(glob.glob(os.path.join(cfg.rfdiff_out_path, "*.trb"))) != cfg.num_designs_rfdiff:
+            log.critical(f"Found {len(glob.glob(os.path.join(cfg.rfdiff_out_path, '*.trb')))} trb files in {cfg.rfdiff_out_path}, expected {cfg.num_designs_rfdiff}. \n Most likely, your previous simulation crashed while RfDiff was writing output files. Please, manually remove the .pdb file which does not have an associated .trb file in the {cfg.rfdiff_out_path} directory, then run the computation again.")
+            raise Exception(f"Number of RfDiff .pdb files does not match RfDiff .trb files!") 
+        #endif
+        log.info("***************Skipping RFdiffusion altogether***************")
+        return
+
+
     rfdiff_cmd_str = f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
           inference.output_prefix={cfg.rfdiff_out_path} \
           'contigmap.contigs={cfg.contig}' \
