@@ -671,8 +671,11 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         seq_dict = {}
         for record in SeqIO.parse(mpnn_fasta, "fasta"):
             if i==0:
-                i +=1
-                continue
+                # Skip if record.description doesn't contain sample=. First seq is actually input to mpnn. However, after restart, we should not remove it again.
+                if "sample=" not in record.description:
+                    print(f"Skipping {record.description} for it does not contain sample=, it is input to and not output of mpnn.")
+                    i +=1
+                    continue
             i +=1
             print(record.seq, record.description)
             seq_dict[record.seq]=record.description

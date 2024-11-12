@@ -70,6 +70,7 @@ def general_config_prep(cfg):
 
     for directory in [cfg.rfdiff_out_dir, cfg.mpnn_out_dir, cfg.af2_out_dir]:
         os.makedirs(directory, exist_ok=True)
+        log.info(f"Made directory {directory}")
     
     # No need to return; cfg is mutable.
     
@@ -161,7 +162,7 @@ def do_cycling(cfg):
     """
     log.info("Running do_cycling")
     start_cycle = get_checkpoint(cfg.output_dir, "cycle", 0)
-    content_status = get_checkpoint(cfg.output_dir, "content_status", 0) # 0 ... fresh run; 1 ... can clear and copy; 2 ... can copy; 3 ... corrupted (partial new files in AF2)
+    content_status = get_checkpoint(cfg.output_dir, "content_status", 0) # 0 ... fresh run; 1 ... can clear and copy; 2 ... can copy; 3 ... corrupted (partial new files between MPNN and AF2); 4 ... AF2 is running, everything before AF2 should be skipped.
     for cycle in range(start_cycle, cfg.af2_mpnn_cycles):
         print("cycleeeeee", cycle)
         dtimelog(f"Starting cycle {cycle}")
@@ -220,95 +221,102 @@ def do_cycling(cfg):
 
             input_mpnn = cycle_directory
 
-            shutil.rmtree(cfg.mpnn_out_dir) # Remove MPNN dir so you can create new sequences
-            throw(11, cycle)
-            os.makedirs(cfg.mpnn_out_dir, exist_ok=True) # Create it again
+            if content_status != 4:
+                shutil.rmtree(cfg.mpnn_out_dir) # Remove MPNN dir so you can create new sequences
+                throw(11, cycle)
+                os.makedirs(cfg.mpnn_out_dir, exist_ok=True) # Create it again
             trb_paths = os.path.join(cfg.rfdiff_out_dir, "*.trb")
             print('trb_path is: ', trb_paths)
         #endif
-        # All cycles run the same commands
-        dtimelog(f"Cycle {cycle} helper scripts")
-        run_and_log(
-            f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
-            --input_path={input_mpnn} \
-            --output_path={cfg.path_for_parsed_chains}'       
-        )
-        throw(12, cycle)
 
-        if cfg.chains_to_design:
+        if content_status != 4:
+            # All cycles run the same commands
+            dtimelog(f"Cycle {cycle} helper scripts")
             run_and_log(
-                f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
+                f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
+                --input_path={input_mpnn} \
+                --output_path={cfg.path_for_parsed_chains}'       
+            )
+            throw(12, cycle)
+
+            if cfg.chains_to_design:
+                run_and_log(
+                    f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
+                        --input_path={cfg.path_for_parsed_chains} \
+                        --output_path={cfg.path_for_assigned_chains} \
+                        --chain_list='{cfg.chains_to_design}'"
+                        )
+                
+            fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
+            # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
+            # but this function should still be called because it creates (probably) important .json files
+
+            if cfg.inference.symmetry!=None:
+                run_and_log(
+                    f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
                     --input_path={cfg.path_for_parsed_chains} \
-                    --output_path={cfg.path_for_assigned_chains} \
-                    --chain_list='{cfg.chains_to_design}'"
-                    )
+                    --output_path={cfg.path_for_tied_positions} \
+                    --homooligomer 1'    
+                )         
+                log.info(f"running symmetry")
+
+            #_____________ RUN ProteinMPNN_____________
+            # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
+            dtimelog(f"Cycle {cycle} running ProteinMPNN")
+            proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
+                --jsonl_path {cfg.path_for_parsed_chains} \
+                --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
+                {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry!=None else ""} \
+                --chain_id_jsonl {cfg.path_for_assigned_chains} \
+                --out_folder {cfg.mpnn_out_dir} \
+                --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
+                --sampling_temp {cfg.sampling_temp} \
+                --backbone_noise {cfg.backbone_noise} \
+                --use_soluble_model  \
+                --omit_AAs {cfg.omit_AAs} \
+                {parse_additional_args(cfg, "pass_to_mpnn")} \
+                --batch_size 1'
             
-        fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
-        # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
+            run_and_log(proteinMPNN_cmd_str)
+            throw(13, cycle)
 
-        if cfg.inference.symmetry!=None:
-            run_and_log(
-                f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
-                --input_path={cfg.path_for_parsed_chains} \
-                --output_path={cfg.path_for_tied_positions} \
-                --homooligomer 1'    
-            )         
-            log.info(f"running symmetry")
-
-        #_____________ RUN ProteinMPNN_____________
-        # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
-        dtimelog(f"Cycle {cycle} running ProteinMPNN")
-        proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
-            --jsonl_path {cfg.path_for_parsed_chains} \
-            --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
-            {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry!=None else ""} \
-            --chain_id_jsonl {cfg.path_for_assigned_chains} \
-            --out_folder {cfg.mpnn_out_dir} \
-            --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            --sampling_temp {cfg.sampling_temp} \
-            --backbone_noise {cfg.backbone_noise} \
-            --use_soluble_model  \
-            --omit_AAs {cfg.omit_AAs} \
-            {parse_additional_args(cfg, "pass_to_mpnn")} \
-            --batch_size 1'
-        
-        run_and_log(proteinMPNN_cmd_str)
-        throw(13, cycle)
-
-        log.info("Preparing to empty af2 directory.")
-        dtimelog(f"Cycle {cycle} preparation for af2")
-        
-        # af2 directory must be empty
-        throw(14, cycle)
-        shutil.rmtree(cfg.af2_out_dir)
-        os.makedirs(cfg.af2_out_dir, exist_ok=True)
-        throw(15, cycle)
+            log.info("Preparing to empty af2 directory.")
+            dtimelog(f"Cycle {cycle} preparation for af2")
+            
+            # af2 directory must be empty
+            throw(14, cycle)
+            shutil.rmtree(cfg.af2_out_dir)
+            os.makedirs(cfg.af2_out_dir, exist_ok=True)
 
 
-        #________________ RUN AF2______________
-        fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
-        print(fasta_files)
+            #________________ RUN AF2______________
+            fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
+            print(fasta_files)
 
-        monomers_fasta_dir = os.path.join(cfg.fasta_dir, 'monomers')
-        if not os.path.exists(monomers_fasta_dir):
-            os.makedirs(monomers_fasta_dir)
-        
-        #if symmetry - make fasta file with monomer sequence only
-        for fasta_file in fasta_files:
-            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):  #TODO: move this up one line because cfg symmetry is constant, not based on fasta_file
-                sequences=[]
-                for record in SeqIO.parse(fasta_file, "fasta"):
-                    record.seq = record.seq[:record.seq.find('/')]  
-                    idd = record.id            
-                    record.id = 'monomer_'+idd      
-                    descr = record.description
-                    record.description = 'monomer_'+descr
-                    sequences.append(record)
-                SeqIO.write(sequences, os.path.join(os.path.dirname(fasta_file), "monomers", f"{os.path.basename(fasta_file)[:-3]}_monomer.fa"), "fasta") # It must be written to the correct subfolder already to prevent duplication on job restart (CHECKPOINTING): _monomer_monomer.fa
-                print("File written to /monomers subfolder. "+fasta_file) #just for DEBUG 
-                ## CHECKPOINTING: Right now, protMPNN is rerun after restart, which outputs different files into mpnn_out. The new files overwrite the old ones in /monomers, so it is always fresh.
-                ## TODO: skip it (need more state variable checkpoints)
-                throw(16, cycle)
+            monomers_fasta_dir = os.path.join(cfg.fasta_dir, 'monomers')
+            if not os.path.exists(monomers_fasta_dir):
+                os.makedirs(monomers_fasta_dir)
+            
+            #if symmetry - make fasta file with monomer sequence only
+            for fasta_file in fasta_files:
+                if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):  #TODO: move this up one line because cfg symmetry is constant, not based on fasta_file
+                    sequences=[]
+                    for record in SeqIO.parse(fasta_file, "fasta"):
+                        record.seq = record.seq[:record.seq.find('/')]  
+                        idd = record.id            
+                        record.id = 'monomer_'+idd      
+                        descr = record.description
+                        record.description = 'monomer_'+descr
+                        sequences.append(record)
+                    SeqIO.write(sequences, os.path.join(os.path.dirname(fasta_file), "monomers", f"{os.path.basename(fasta_file)[:-3]}_monomer.fa"), "fasta") # It must be written to the correct subfolder already to prevent duplication on job restart (CHECKPOINTING): _monomer_monomer.fa
+                    print("File written to /monomers subfolder. "+fasta_file) #just for DEBUG 
+                    ## CHECKPOINTING: Right now, protMPNN is rerun after restart, which outputs different files into mpnn_out. The new files overwrite the old ones in /monomers, so it is always fresh.
+                    ## TODO: skip it (need more state variable checkpoints)
+                    throw(16, cycle)
+
+        # content_status = 4; everything up to here can be skipped
+        save_checkpoint(cfg.output_dir, "content_status", 4)
+        content_status = 4
 
         fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
         fasta_files += glob.glob(os.path.join(cfg.fasta_dir,'monomers', "*.fa"))
