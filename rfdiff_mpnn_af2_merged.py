@@ -132,11 +132,22 @@ def parse_additional_args(cfg, group):
     return(dodatniArgumenti)
 
 error_messages = ["blank", "Am Anfang", "Just before entering next cycle (before deleting cycle_dir)", "Deleted cycle_dir, then crashed. New wasn't created yet.", "New empty cycle_dir, but is_af_corrupted=1", "New empty cycle_dir and is_af_corrupted=0", "Empty cycle_dir, just after saving is_af_corrupted=0", "Now created a dir, but haven't saved is_af_corrupted to 0 yet.", "Created dir & set is_af_corrupted to 0.", "9: This one is nasty! Already moved from af to cycle_dir, but haven't saved iteration number yet. After restart, one file will be lost (overwritten). TODO: Use alternative checkpointing.", "10: Moved and saved iteration number.", "Removed MPNN dir", "After parse_multiple_cahins", "After proteinMPNN", "Saved is_af_corrupted to 1, but haven't removed the af dir yet", "15: AF is now corrupted and empty.", "One file written to /monomers. On restart, will it overwrite it with the same one?", "Uh-oh, it crashed just prior to running AF.", "18: Now it crashed just after running AF for one fasta file.", "19: Well, now it crashed after running AF for all fasta files. But before saving cycle checkpoint! Expected restart result: just re-run it, without copying/moving anything in the cycle_dir", "20: Crashed just before updating cycle checkpoint.", "21: Finished all cycles; before final_ops"]
+import random
 def throw(id, cycle=0):
+    """
+    For testing restartability. Call it at different points in the code to see if the restart works.
+    @param id: int, ID of the crash you want to perform
+    @param cycle: int, in which AF-MPNN cycle should it crash
+    Message is derived from error_messages array. 
+    Alternatively, use probability-based crash test, which also re-runs the hard-coded command.
+    """
     log.info(f"Wanna crash? {id} ?= {crash_at_error} in cycle {cycle} ?= {crash_at_cycle}")
-    if id == crash_at_error and cycle == crash_at_cycle:
+    #if id == crash_at_error and cycle == crash_at_cycle:
+    if random.random() > 8/9:
         msg = error_messages[id]
         log.critical(f"Forced crash at {id}: {msg} in cycle {cycle}")
+        log.info("Re-running the command: ")
+        run_and_log("""python slurm_runner.py 1 MP_inpaintseq_CONT  output_dir="Examples/Examples_out/inpaintseq_MP_CONT" +throw=-16 +crash_at_cycle=0 -cd Examples -cn multipass_inpaintseq""")
         raise Exception(f"Forced crash at {id}: {msg} in cycle {cycle}") 
 
 def save_checkpoint(folder, piece, value):
