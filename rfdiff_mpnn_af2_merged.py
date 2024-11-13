@@ -216,7 +216,7 @@ def do_cycling(cfg):
                                     #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
                                     # is it maybe possible to filter best ranked by af2 from the itr numbers?
                         throw(9, cycle)
-                save_checkpoint(cfg.output_dir, "content_status", 3) ## AF folder is soon going to be in such a state that .pdb files should not be moved on restart (because you would have two different cycles in the same cycle_folder)
+                save_checkpoint(cfg.output_dir, "content_status", 3) ## ProteinMPNN is quick and can be rerun until AF2 starts running
                 content_status = 3
 
             input_mpnn = cycle_directory
@@ -298,8 +298,8 @@ def do_cycling(cfg):
                 os.makedirs(monomers_fasta_dir)
             
             #if symmetry - make fasta file with monomer sequence only
-            for fasta_file in fasta_files:
-                if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):  #TODO: move this up one line because cfg symmetry is constant, not based on fasta_file
+            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):  #cfg symmetry is constant, not based on fasta_file
+                for fasta_file in fasta_files:
                     sequences=[]
                     for record in SeqIO.parse(fasta_file, "fasta"):
                         record.seq = record.seq[:record.seq.find('/')]  
@@ -311,7 +311,7 @@ def do_cycling(cfg):
                     SeqIO.write(sequences, os.path.join(os.path.dirname(fasta_file), "monomers", f"{os.path.basename(fasta_file)[:-3]}_monomer.fa"), "fasta") # It must be written to the correct subfolder already to prevent duplication on job restart (CHECKPOINTING): _monomer_monomer.fa
                     print("File written to /monomers subfolder. "+fasta_file) #just for DEBUG 
                     ## CHECKPOINTING: Right now, protMPNN is rerun after restart, which outputs different files into mpnn_out. The new files overwrite the old ones in /monomers, so it is always fresh.
-                    ## TODO: skip it (need more state variable checkpoints)
+                    ## Unles AF2 already started running -- then it is skipped.
                     throw(16, cycle)
 
         # content_status = 4; everything up to here can be skipped
