@@ -56,7 +56,7 @@ for id, job in enumerate(slurm_job_list):
         
 #subprocess.run(command)
 if not args.dry_run:
-    os.system(f"sbatch -d afterany{jobs_string} -J test_check slurm_verify_tests.sh")
+    os.system(f"sbatch -d afterany{jobs_string} -J test_check --exclude=compute-0-5 slurm_verify_tests.sh") # compute-0-5 fails to run python (command not found, although PATH is correct)
     
 
 with open("Examples/Examples_out/test_verification_output.txt","w+") as output_file:
