@@ -485,7 +485,7 @@ def dtimelog(message, final=False):
     global TIMECALC
     global PREVIOUS_MESSAGE
     dt = round(time.time()-TIMECALC, 1)
-    log.warning(f"* * * {PREVIOUS_MESSAGE} lasted {dt} s. Running {message} * * *")
+    log.info(f"* * * {PREVIOUS_MESSAGE} lasted {dt} s. Running {message} * * *")
     TIMEMEASURES[PREVIOUS_MESSAGE] = dt
     PREVIOUS_MESSAGE = message
     TIMECALC = time.time()
@@ -493,7 +493,7 @@ def dtimelog(message, final=False):
     if final:
         # Print all measures one per line
         for k,v in TIMEMEASURES.items():
-            log.warning(f"{k} lasted {v} s.")
+            log.info(f"{k} lasted {v} s.")
 
 crash_at_error = 0 # Added through command line. Where should the test crash?
 crash_at_cycle = 0 # Added through command line. In which cycle should the test crash?
