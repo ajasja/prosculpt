@@ -131,7 +131,7 @@ def parse_additional_args(cfg, group):
         dodatniArgumenti += f" {k} {v}"
     return(dodatniArgumenti)
 
-error_messages = ["blank", "Am Anfang", "Just before entering next cycle (before deleting cycle_dir)", "Deleted cycle_dir, then crashed. New wasn't created yet.", "New empty cycle_dir, but is_af_corrupted=1", "New empty cycle_dir and is_af_corrupted=0", "Empty cycle_dir, just after saving is_af_corrupted=0", "Now created a dir, but haven't saved is_af_corrupted to 0 yet.", "Created dir & set is_af_corrupted to 0.", "9: This one is nasty! Already moved from af to cycle_dir, but haven't saved iteration number yet. After restart, one file will be lost (overwritten). TODO: Use alternative checkpointing.", "10: Moved and saved iteration number.", "Removed MPNN dir", "After parse_multiple_cahins", "After proteinMPNN", "Saved is_af_corrupted to 1, but haven't removed the af dir yet", "15: AF is now corrupted and empty.", "One file written to /monomers. On restart, will it overwrite it with the same one?", "Uh-oh, it crashed just prior to running AF.", "18: Now it crashed just after running AF for one fasta file.", "19: Well, now it crashed after running AF for all fasta files. But before saving cycle checkpoint! Expected restart result: just re-run it, without copying/moving anything in the cycle_dir", "20: Crashed just before updating cycle checkpoint.", "21: Finished all cycles; before final_ops"]
+error_messages = []
 import random
 def throw(id, cycle=0):
     """
@@ -140,6 +140,8 @@ def throw(id, cycle=0):
     @param cycle: int, in which AF-MPNN cycle should it crash
     Message is derived from error_messages array. 
     Alternatively, use probability-based crash test, which also re-runs the hard-coded command.
+
+    To make it crash, add +throw=id +crash_at_cycle=cycle to cmd, before -cd and -cn
     """
     log.info(f"Wanna crash? {id} ?= {crash_at_error} in cycle {cycle} ?= {crash_at_cycle}")
     #if id == crash_at_error and cycle == crash_at_cycle:
@@ -176,28 +178,21 @@ def do_cycling(cfg):
     content_status = get_checkpoint(cfg.output_dir, "content_status", 0) # 0 ... fresh run; 1 ... can clear and copy; 2 ... can copy; 3 ... corrupted (partial new files between MPNN and AF2); 4 ... AF2 is running, everything before AF2 should be skipped.
     for cycle in range(start_cycle, cfg.af2_mpnn_cycles):
         print("cycleeeeee", cycle)
-        dtimelog(f"Starting cycle {cycle}")
 
         trb_paths = None
         input_mpnn = cfg.rfdiff_out_dir # First cycle has this, other cycles overwrite this var
-        throw(1, cycle)
 
         if not cycle == 0: # All other cycles get starting PDBs from AF2
             print(f"Cycle is not 0: {cycle}")
             cycle_directory = os.path.join(cfg.output_dir, "2_1_cycle_directory")
 
             if content_status == 1:
-                throw(2, cycle)
                 if os.path.exists(cycle_directory):
                     shutil.rmtree(cycle_directory) # We should not remove it on restart
-                    throw(3, cycle)
                 os.makedirs(cycle_directory, exist_ok=True)
-                throw(4, cycle)
                 save_checkpoint(cfg.output_dir, "content_status", 2) ## AF folder is ok to move its files to cycle_folder and cycle_folder is empty (ready for new files).
                 content_status = 2
-                throw(5, cycle)
             print(f"Nada: {cycle}")
-            throw(20, cycle)
 
             if content_status == 2:
                 af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
@@ -226,7 +221,6 @@ def do_cycling(cfg):
                                     #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
                                     #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
                                     # is it maybe possible to filter best ranked by af2 from the itr numbers?
-                        throw(9, cycle)
                 save_checkpoint(cfg.output_dir, "content_status", 3) ## ProteinMPNN is quick and can be rerun until AF2 starts running
                 content_status = 3
 
@@ -234,7 +228,6 @@ def do_cycling(cfg):
 
             if content_status != 4:
                 shutil.rmtree(cfg.mpnn_out_dir) # Remove MPNN dir so you can create new sequences
-                throw(11, cycle)
                 os.makedirs(cfg.mpnn_out_dir, exist_ok=True) # Create it again
             trb_paths = os.path.join(cfg.rfdiff_out_dir, "*.trb")
             print('trb_path is: ', trb_paths)
@@ -242,13 +235,11 @@ def do_cycling(cfg):
 
         if content_status != 4:
             # All cycles run the same commands
-            dtimelog(f"Cycle {cycle} helper scripts")
             run_and_log(
                 f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
                 --input_path={input_mpnn} \
                 --output_path={cfg.path_for_parsed_chains}'       
             )
-            throw(12, cycle)
 
             if cfg.chains_to_design:
                 run_and_log(
@@ -273,7 +264,6 @@ def do_cycling(cfg):
 
             #_____________ RUN ProteinMPNN_____________
             # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
-            dtimelog(f"Cycle {cycle} running ProteinMPNN")
             proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
                 --jsonl_path {cfg.path_for_parsed_chains} \
                 --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
@@ -289,13 +279,10 @@ def do_cycling(cfg):
                 --batch_size 1'
             
             run_and_log(proteinMPNN_cmd_str)
-            throw(13, cycle)
 
             log.info("Preparing to empty af2 directory.")
-            dtimelog(f"Cycle {cycle} preparation for af2")
             
             # af2 directory must be empty
-            throw(14, cycle)
             shutil.rmtree(cfg.af2_out_dir)
             os.makedirs(cfg.af2_out_dir, exist_ok=True)
 
@@ -323,7 +310,6 @@ def do_cycling(cfg):
                     print("File written to /monomers subfolder. "+fasta_file) #just for DEBUG 
                     ## CHECKPOINTING: Right now, protMPNN is rerun after restart, which outputs different files into mpnn_out. The new files overwrite the old ones in /monomers, so it is always fresh.
                     ## Unles AF2 already started running -- then it is skipped.
-                    throw(16, cycle)
 
         # content_status = 4; everything up to here can be skipped
         save_checkpoint(cfg.output_dir, "content_status", 4)
@@ -399,8 +385,6 @@ def do_cycling(cfg):
 
             else:  #this is the normal mode of operations. Single sequence. 
                 if cycle == 0: #have to run af2 differently in first cycle 
-                    dtimelog(f"Cycle {cycle} running AF2")
-                    throw(17, cycle)
                     run_and_log(
                         f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
                                     --model-type alphafold2_multimer_v3 \
@@ -414,8 +398,6 @@ def do_cycling(cfg):
                     for model_number in model_order:
                         if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
                             num_models = 1
-                            dtimelog(f"Cycle {cycle}.{model_number} running AF2")
-                            throw(17, cycle)
                             run_and_log(
                                 f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
                                     --model-type alphafold2_multimer_v3 \
@@ -425,23 +407,18 @@ def do_cycling(cfg):
                                     {parse_additional_args(cfg, "pass_to_af")} \
                                     --num-models {num_models}'
                                     )#
-            dtimelog(f"Cycle {cycle} finished AF2 for this fasta file {fasta_file}")
-            throw(18, cycle)
             
-        dtimelog(f"Cycle {cycle} finished AF2 for all fasta files")
-        throw(19, cycle)
         save_checkpoint(cfg.output_dir, "content_status", 1) ## Content is ok to be copied to cycle_dir
         save_checkpoint(cfg.output_dir, "cycle", cycle+1) # Restart should start with next cycle.
         content_status = 1
 
         # msa single sequence makes sense for designed proteins
-    throw(21)
 
 def final_operations(cfg):
     log.info("Final operations")
     json_directories = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
-    print('do we already have csv files? If we need to re-run stats re have to delete them: ',os.listdir(cfg.output_dir) )
+    print('do we already have csv files? If we need to re-run stats, we have to delete them: ',os.listdir(cfg.output_dir) )
     if 'output.csv' in os.listdir(cfg.output_dir):
         os.remove(cfg.output_dir+'/output.csv')
     if 'scores_rg_charge_sap.csv' in os.listdir(cfg.output_dir):
