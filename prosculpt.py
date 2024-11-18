@@ -53,7 +53,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         if 'complex_con_ref_idx0' in trb_dict:
             selected_residues_data = trb_dict['complex_con_hal_idx0']
             selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
-            if len(selected_residues_in_designed_chains) == 0 and trb_dict.config.contigmap.provide_seq!=None:
+            if len(selected_residues_in_designed_chains) == 0 and trb_dict["config"]["contigmap"]["provide_seq"]!=None:
                     selected_residues_in_designed_chains=np.where([a != b for a, b in zip(trb_dict["inpaint_seq"], trb_dict["inpaint_str"])])[0] #if this works...
                     print(f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {selected_residues_in_designed_chains}")
                     #print(selected_residues_in_designed_chains)
@@ -671,8 +671,11 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         seq_dict = {}
         for record in SeqIO.parse(mpnn_fasta, "fasta"):
             if i==0:
-                i +=1
-                continue
+                # Skip if record.description doesn't contain sample=. First seq is actually input to mpnn. However, after restart, we should not remove it again.
+                if "sample=" not in record.description:
+                    print(f"Skipping {record.description} for it does not contain sample=, it is input to and not output of mpnn.")
+                    i +=1
+                    continue
             i +=1
             print(record.seq, record.description)
             seq_dict[record.seq]=record.description

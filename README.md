@@ -12,14 +12,16 @@ The main steps are as follows:
 7. The final output is a CSV file containing AF2 structure path, evaluation parameters etc.
 
 ## Requirements  
-The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionally, os, glob, re, and shutil packages should be installed (these are all part of Python Standard Library and are pre-installed), as well as biopython, hydra-core, pandas.  
+The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionally, os, glob, re, and shutil packages should be installed (these are all part of Python Standard Library and are pre-installed), as well as biopython, hydra-core, pandas and scipy.  
+
+For running tests, Python version must be >= 3.7 (it needs the `capture_output` arg).
 
 # Using the new _merged code
 ## Installation
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install biopython hydra-core pandas
+pip install biopython hydra-core pandas scipy
 ```
 
 ## Usage

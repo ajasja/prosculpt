@@ -5,7 +5,7 @@ import os
 import argparse
 import yaml
 
-parser=argparse.ArgumentParser(epilog=('#### Any other arguments passed will be passed as they are to prosculpt. If including output_dir, please include it first ####\n'))
+parser=argparse.ArgumentParser(epilog=('#### Any other arguments passed will be passed as they are to prosculpt. If including output_dir, please include it first ####\n**** Important: hydra config overrides should be put before -cd and -cn ****\nExample: python slurm_runner.py 1 multipassinpaintseq_throw  output_dir="Examples/Examples_out/multipass_inpaintseq_throw" +throw=1 +cycle=0 -cd Examples -cn multipass_inpaintseq'))
 
 parser.add_argument('num_tasks', help='Number of concurrent jobs to run.')
 parser.add_argument('name', help='Desired task name')
@@ -66,7 +66,7 @@ print(f"Slurm command can be found in {out_command_file}")
 
 if not args[0].dry_run:
     #Exclude is there because that node was working incredibly slow
-    os.system(f"export GROUP_SIZE=1; sbatch --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}")
+    os.system(f"export GROUP_SIZE=1; sbatch --exclude=compute-0-11 --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}")
     print(f"Job {task_name} has been submitted to slurm".center(WIDTH, SYMBOL))
 else:
     print("Command wasn't run because --dry-run was active.")
