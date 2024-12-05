@@ -577,7 +577,8 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
                                         #prefiltered con_hal_idx and we can use the full one that we recomputed before. This is necessary for the case with 
                                         #Partial diffusion and a provided seq to mantain. This way we can pass those residues as fixed which for some reason
                                         #RFDiff doesn't. This might be broken as hell. 
-        for chain, idx in con_hal_pdb_idx_complete:
+        #for chain, idx in con_hal_pdb_idx_complete: 
+        for chain, idx in con_hal_idx:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
             if not skipRfDiff:
                 if trb_data["inpaint_seq"][idx-1]: #skip residues with FALSE in the inpaint_seq array
