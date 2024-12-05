@@ -53,7 +53,7 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         if 'complex_con_ref_idx0' in trb_dict:
             selected_residues_data = trb_dict['complex_con_hal_idx0']
             selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
-            if len(selected_residues_in_designed_chains) == 0 and trb_dict.config.contigmap.provide_seq!=None:
+            if len(selected_residues_in_designed_chains) == 0 and trb_dict["config"]["contigmap"]["provide_seq"]!=None:
                     selected_residues_in_designed_chains=np.where([a != b for a, b in zip(trb_dict["inpaint_seq"], trb_dict["inpaint_str"])])[0] #if this works...
                     print(f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {selected_residues_in_designed_chains}")
                     #print(selected_residues_in_designed_chains)
@@ -577,7 +577,8 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
                                         #prefiltered con_hal_idx and we can use the full one that we recomputed before. This is necessary for the case with 
                                         #Partial diffusion and a provided seq to mantain. This way we can pass those residues as fixed which for some reason
                                         #RFDiff doesn't. This might be broken as hell. 
-        for chain, idx in con_hal_pdb_idx_complete:
+        #for chain, idx in con_hal_pdb_idx_complete: 
+        for chain, idx in con_hal_idx:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
             if not skipRfDiff:
                 if trb_data["inpaint_seq"][idx-1]: #skip residues with FALSE in the inpaint_seq array
