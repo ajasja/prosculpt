@@ -255,7 +255,7 @@ def do_cycling(cfg):
                         --chain_list='{cfg.chains_to_design}'"
                         )
                 
-            fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
+            fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths, cycle=cycle) # trb_paths is optional (default: None) and only used in non-first cycles
             # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
             # but this function should still be called because it creates (probably) important .json files
 

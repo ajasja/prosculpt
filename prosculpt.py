@@ -519,7 +519,7 @@ def getChainResidOffsets(pdb_file, designable_residues):
     return chainResidOffset, con_hal_idx
 
 
-def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
+def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None, cycle=0):
     skipRfDiff = cfg.get("skipRfDiff", False)
     designable_residues = cfg.get("designable_residues", None)
 
@@ -532,10 +532,24 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
         
         pdb_basename = pdb_file.stem
 
+        ## We get RfDiff model number
+        rf_model_num = get_token_value(os.path.basename(pdb_file), "_" if cycle == 0 else "rf_", "(\\d+)") #get 0 from _0.fa using reg exp #get 0 from rf_0__model_1__cycle_2__itr_0__.pdb
+            # (We could also just get the first _# and exit regex early -- RfDiff model number is always the first element of the filename)
+        print(f"RfDiff model number: {rf_model_num}")
+
         fixed_res = {}
 
         # We need to renumber fixed resids: each chain should start with 1 
         chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(pdb_file, designable_residues)
+        print(f"ChainResidOffset: {chainResidOffset}")
+
+        with open(f"{pdb_path}/../chainResidOffset_{rf_model_num}.json", "w" if cycle==0 else "r") as f:
+            if cycle==0:
+                json.dump(chainResidOffset, f)
+            else:
+                chainResidOffset = json.load(f)
+        print(f"Dumped or read chainResidOffset_{rf_model_num}.json")
+        print(f"ChainResidOffset: {chainResidOffset}")
         
         if not skipRfDiff:
             trb_file = pdb_file.with_suffix(".trb")
