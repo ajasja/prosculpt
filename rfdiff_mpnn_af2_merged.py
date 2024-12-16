@@ -20,7 +20,13 @@ def run_and_log(command, log_func=log.info, dry_run=False):
     if log_func:
         log_func(command)
     if not dry_run:
-        os.system(command)
+        stat = os.system(command)
+        wife = os.WIFEXITED(stat)
+        exitCode = os.waitstatus_to_exitcode(stat)
+        log.info(f"Command exited with status {stat} and WIFEXITED {wife}. Exit code: {exitCode}")
+        if exitCode != 0:
+            log.error("There was an error running the command. We consider it fatal to prevent any file loss. Check the logs and contact the developer.")
+            raise Exception(f"Command exited with exit code {exitCode}")
 
 scripts_folder = pathlib.Path(__file__).resolve().parent / "scripts"
 
