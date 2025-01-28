@@ -15,7 +15,7 @@ from Bio import SeqIO
 
 log = logging.getLogger(__name__)
 
-def run_and_log(command, log_func=log.info, dry_run=False):
+def run_and_log(command, log_func=log.info, dry_run=False, cfg="KEKEKE"):
     """Runs a command using os.system and also logs the command before running using log.info"""
     if log_func:
         log_func(command)
@@ -26,7 +26,19 @@ def run_and_log(command, log_func=log.info, dry_run=False):
         log.info(f"Command exited with status {stat} and WIFEXITED {wife}. Exit code: {exitCode}")
         if exitCode != 0:
             log.error("There was an error running the command. We consider it fatal to prevent any file loss. Check the logs and contact the developer.")
-            raise Exception(f"Command exited with exit code {exitCode}")
+            dodatek = ""
+
+            auto_restart_count = cfg.get('auto_restart_count', 0)
+            auto_restart = cfg.get('auto_restart', 0)
+            log.info(f"auto_restart_count: {auto_restart_count}, auto_restart: {auto_restart}")
+            if auto_restart_count < auto_restart: # if cfg has autoRestart > 0
+                log.error("As per config, Prosculpt will be restarted automatically.")
+                with open_dict(cfg):
+                    cfg.auto_restart_count = auto_restart_count + 1
+                dodatek = f"However, Prosculpt was autoRestarted {cfg.get('auto_restart_count', 0)} out of {cfg.get('auto_restart', 0)} times (as per config) after encountering the crash."
+                prosculptApp(cfg)
+            raise Exception(f"Command exited with exit code {exitCode}\n\n{dodatek}")
+        # TODO: make `cfg` global and manipulate it everywhere. To avoid the need of passing `cfg=cfg` to every run_and_log call.
 
 scripts_folder = pathlib.Path(__file__).resolve().parent / "scripts"
 
@@ -109,7 +121,7 @@ def run_rfdiff(cfg):
           'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
           -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}"
-    run_and_log(rfdiff_cmd_str)
+    run_and_log(rfdiff_cmd_str, cfg=cfg)
     
     log.info("***************After running RFdiffusion***************")
 
@@ -126,6 +138,7 @@ def rechain_rfdiff_pdbs(cfg):
     for pdb in rf_pdbs:
         run_and_log(
             f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} "{pdb}" "{pdb}" --chain_break_cutoff_A {cfg.chain_break_cutoff_A}'
+            , cfg=cfg
         )
         
 
@@ -137,9 +150,9 @@ def parse_additional_args(cfg, group):
         dodatniArgumenti += f" {k} {v}"
     return(dodatniArgumenti)
 
-error_messages = []
+error_messages = ["Testing if we can restart the prosculptApp(cfg)"]
 import random
-def throw(id, cycle=0):
+def throw(id, cycle=0, cfg="KEKEKE"):
     """
     For testing restartability. Call it at different points in the code to see if the restart works.
     @param id: int, ID of the crash you want to perform
@@ -230,6 +243,9 @@ def do_cycling(cfg):
                 save_checkpoint(cfg.output_dir, "content_status", 3) ## ProteinMPNN is quick and can be rerun until AF2 starts running
                 content_status = 3
 
+                # Let's crash it and re-call prosculptApp(cfg)
+                throw(0, cycle, cfg)
+
             input_mpnn = cycle_directory
 
             if content_status != 4:
@@ -244,7 +260,8 @@ def do_cycling(cfg):
             run_and_log(
                 f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
                 --input_path={input_mpnn} \
-                --output_path={cfg.path_for_parsed_chains}'       
+                --output_path={cfg.path_for_parsed_chains}' 
+                , cfg=cfg      
             )
 
             if cfg.chains_to_design:
@@ -253,6 +270,7 @@ def do_cycling(cfg):
                         --input_path={cfg.path_for_parsed_chains} \
                         --output_path={cfg.path_for_assigned_chains} \
                         --chain_list='{cfg.chains_to_design}'"
+                        , cfg=cfg
                         )
                 
             fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths, cycle=cycle) # trb_paths is optional (default: None) and only used in non-first cycles
@@ -265,6 +283,7 @@ def do_cycling(cfg):
                     --input_path={cfg.path_for_parsed_chains} \
                     --output_path={cfg.path_for_tied_positions} \
                     --homooligomer 1'    
+                    , cfg=cfg
                 )         
                 log.info(f"running symmetry")
 
@@ -284,7 +303,7 @@ def do_cycling(cfg):
                 {parse_additional_args(cfg, "pass_to_mpnn")} \
                 --batch_size 1'
             
-            run_and_log(proteinMPNN_cmd_str)
+            run_and_log(proteinMPNN_cmd_str, cfg=cfg)
 
             log.info("Preparing to empty af2 directory.")
             
@@ -374,6 +393,7 @@ def do_cycling(cfg):
                                         --model-order {cfg.model_order} \
                                         {parse_additional_args(cfg, "pass_to_af")} \
                                         --num-models {num_models}'
+                                        , cfg=cfg
                                         ) #changed from single_sequence
                     else: 
                         for model_number in model_order:
@@ -387,6 +407,7 @@ def do_cycling(cfg):
                                         --model-order {model_number} \
                                         {parse_additional_args(cfg, "pass_to_af")} \
                                         --num-models {num_models}'
+                                        , cfg=cfg
                                         ) #Changed from single_sequence
 
             else:  #this is the normal mode of operations. Single sequence. 
@@ -399,6 +420,7 @@ def do_cycling(cfg):
                                     --model-order {cfg.model_order} \
                                     {parse_additional_args(cfg, "pass_to_af")} \
                                     --num-models {num_models}'
+                                    , cfg=cfg
                                     ) 
                 else: 
                     for model_number in model_order:
@@ -412,6 +434,7 @@ def do_cycling(cfg):
                                     --model-order {model_number} \
                                     {parse_additional_args(cfg, "pass_to_af")} \
                                     --num-models {num_models}'
+                                    , cfg=cfg
                                     )#
             
         save_checkpoint(cfg.output_dir, "content_status", 1) ## Content is ok to be copied to cycle_dir
@@ -445,6 +468,7 @@ def final_operations(cfg):
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
         f'{cfg.python_path} {scripts_folder / "scoring_rg_charge_sap.py"} {csv_path}'
+        , cfg=cfg
         )
         
     scores_rg_path = os.path.join(cfg.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
