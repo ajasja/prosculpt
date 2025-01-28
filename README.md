@@ -107,3 +107,9 @@ Contigs are the most important input (for now, guiding potentials are another in
 - Important: if you wish to force a number of newly generated residues, pass it as range: `[A1-7/3-3/A11-12/1-1/A14-84/1-1/A86-96]` (and not `[A1-7/3/A11-12/1/A14-84/1/A86-96]`)
 - More info is available in the [RFdiff repo](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md#motif-scaffolding).
 
+## Automatic restart on 3rd-party crash
+Prosculpt uses 3rd-party software (RfDiffusion, ProteinMPNN, AlphaFold). Sometimes, especially if running hundreds of samples, this software may fail, exiting with an error code.  
+Previously, Prosculpt detected this and fatally crashed to avoid file loss. However, sometimes it may be handy to let it automatically restart Prosculpt and continue from where it left. (Useful if your HPC node becomes so slow AF decides to throw an error; reinitiating it may fix the issue).
+
+To do so, pass `auto_restart: n`, where `n` ... number of allowed restarts, to the .yaml config.
+

@@ -243,8 +243,6 @@ def do_cycling(cfg):
                 save_checkpoint(cfg.output_dir, "content_status", 3) ## ProteinMPNN is quick and can be rerun until AF2 starts running
                 content_status = 3
 
-                # Let's crash it and re-call prosculptApp(cfg)
-                throw(0, cycle, cfg)
 
             input_mpnn = cycle_directory
 
