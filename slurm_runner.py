@@ -64,9 +64,22 @@ with open(out_command_file, 'w') as f:
 
 print(f"Slurm command can be found in {out_command_file}")
 
+# Read nodes for exclusion from config/hpc_exclude_nodes.txt file
+exclude_nodes = ""
+try:
+    with open(os.path.join(slurm_runner_path, "config/hpc_exclude_nodes.txt"), "r") as f:
+        exclude_nodes = f.read().strip()
+        print(f"~ Excluding nodes {exclude_nodes}.")
+except: 
+    print("~ No nodes excluded from slurm job.")
+
 if not args[0].dry_run:
     #Exclude is there because that node was working incredibly slow
-    os.system(f"export GROUP_SIZE=1; sbatch --exclude=compute-0-11 --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}")
-    print(f"Job {task_name} has been submitted to slurm".center(WIDTH, SYMBOL))
+    exit_code = os.system(f"export GROUP_SIZE=1; sbatch --exclude={exclude_nodes} --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}")
+    if exit_code == 0:
+        print(f"Job {task_name} has been submitted to slurm with code {exit_code}".center(WIDTH, SYMBOL))
+    else:
+        print(f"Job submission failed with code {exit_code}".center(WIDTH, "-"))
+    # Although we can pass --exclude from a file direclty (--exclude=config/hpc_exclude_nodes.txt), it fails if file is empty or doesn't exist.
 else:
     print("Command wasn't run because --dry-run was active.")
