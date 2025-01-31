@@ -226,33 +226,34 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
             f.write(sequence_line+"\n") #write padded sequence
 
         #now write the aligned sequences
-        for chain in used_chains:
-            #LEt's get the correct file for this chain
-            for file in os.listdir(alignments_path):
-                if "auth_"+chain in file or "Chain_"+chain in file:
-                    alignment_file=file
-                    print("Alignment file for chain "+chain+" is "+alignment_file)
+        for chain in letters:
+            if chain in used_chains:
+                #LEt's get the correct file for this chain
+                for file in os.listdir(alignments_path):
+                    if "auth_"+chain in file or "Chain_"+chain in file:
+                        alignment_file=file
+                        print("Alignment file for chain "+chain+" is "+alignment_file)
 
 
-            with open(os.path.join(alignments_path,alignment_file), 'r') as chain_alignment_file:
-                for line_id, line in enumerate(chain_alignment_file):
-                    if line_id>=3: #skip first three lines, since they contain the original sequence.
-                        if line[0] == ">":
-                            f.write(line)
-                        else:
-                            table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
-                            line_without_insertions=line.translate(table)
+                with open(os.path.join(alignments_path,alignment_file), 'r') as chain_alignment_file:
+                    for line_id, line in enumerate(chain_alignment_file):
+                        if line_id>=3: #skip first three lines, since they contain the original sequence.
+                            if line[0] == ">":
+                                f.write(line)
+                            else:
+                                table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
+                                line_without_insertions=line.translate(table)
 
-                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons))  #Make a gap sequence of the length of the sequence..
-                            trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
-                            first_residue_in_trb=trb_chain[0][1]
-                            for id, pos in enumerate(residue_data_control_1):
-                                if pos[0]==chain: #If position chain corresponds to the chain we're looking at
-                            
-                                    position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
-                                    new_aligned_seq= new_aligned_seq[:residue_data_af2_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_af2_0[id]+1:] 
-    
-                            f.write(new_aligned_seq+"\n")
+                                new_aligned_seq="-"*(len(mpnn_sequence_no_colons))  #Make a gap sequence of the length of the sequence..
+                                trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
+                                first_residue_in_trb=trb_chain[0][1]
+                                for id, pos in enumerate(residue_data_control_1):
+                                    if pos[0]==chain: #If position chain corresponds to the chain we're looking at
+                                
+                                        position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
+                                        new_aligned_seq= new_aligned_seq[:residue_data_af2_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_af2_0[id]+1:] 
+        
+                                f.write(new_aligned_seq+"\n")
     
     #delete empty lines that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed, but it doesn't really slow things that much.
     with open(output,'r+') as output_file:
