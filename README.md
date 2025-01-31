@@ -113,3 +113,10 @@ Previously, Prosculpt detected this and fatally crashed to avoid file loss. Howe
 
 To do so, pass `auto_restart: n`, where `n` ... number of allowed restarts, to the .yaml config.
 
+## Excluding broken HPC nodes
+Sometimes, some HPC nodes get broken, work very slow or just throw _command not found_ or _no such file or directory_ errors. To avoid wasting time on them, you can [exclude](https://slurm.schedmd.com/sbatch.html#OPT_exclude) the tasks from being scheduled to them.
+
+For this, create a file `config/hpc_exclude_nodes.txt` (that is, in the same directory as your `installation.yaml` config) with the [NodeList](https://wiki.fysik.dtu.dk/Niflheim_system/Slurm_operations/#expanding-and-collapsing-host-lists) of broken nodes.  
+Example: `compute-3-20,compute-0-21,compute-6-[0-3]`.  
+_Note: all node names must be valid, otherwise Slurm will throw an error. Additionally, do not exclude all possible nodes, for no nodes will be available to perform your task._
+

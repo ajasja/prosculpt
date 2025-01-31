@@ -69,7 +69,12 @@ exclude_nodes = ""
 try:
     with open(os.path.join(slurm_runner_path, "config/hpc_exclude_nodes.txt"), "r") as f:
         exclude_nodes = f.read().strip()
-        print(f"~ Excluding nodes {exclude_nodes}.")
+        # Check if there are spaces in the string
+        if " " in exclude_nodes:
+            exclude_nodes = ""
+            print(f"!!! Spaces are not allowed in hostnames, hence in NodeLists. The provided hpc_exclude_nodes.txt file might be malicious. \nNot excluding any nodes. !!!")
+        else:
+            print(f"~ Excluding nodes {exclude_nodes}.")
 except: 
     print("~ No nodes excluded from slurm job.")
 
