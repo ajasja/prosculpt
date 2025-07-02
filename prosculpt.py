@@ -53,6 +53,11 @@ def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,
         if 'complex_con_ref_idx0' in trb_dict:
             selected_residues_data = trb_dict['complex_con_hal_idx0']
             selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
+            if len(selected_residues_in_designed_chains) == 0 and trb_dict["config"]["contigmap"]["provide_seq"]!=None:
+                    selected_residues_in_designed_chains=np.where([a != b for a, b in zip(trb_dict["inpaint_seq"], trb_dict["inpaint_str"])])[0] #if this works...
+                    print(f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {selected_residues_in_designed_chains}")
+                    #print(selected_residues_in_designed_chains)
+
             #selected_residues_in_fixed_chains=trb_dict['receptor_con_hal_idx0'] #This actually doesn't work and I think it's a bug in RFDiff
             selected_residues_in_fixed_chains=[res for res in selected_residues_data if res not in selected_residues_in_designed_chains]
         else:
@@ -221,33 +226,34 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
             f.write(sequence_line+"\n") #write padded sequence
 
         #now write the aligned sequences
-        for chain in used_chains:
-            #LEt's get the correct file for this chain
-            for file in os.listdir(alignments_path):
-                if "auth_"+chain in file or "Chain_"+chain in file:
-                    alignment_file=file
-                    print("Alignment file for chain "+chain+" is "+alignment_file)
+        for chain in letters:
+            if chain in used_chains:
+                #LEt's get the correct file for this chain
+                for file in os.listdir(alignments_path):
+                    if "auth_"+chain in file or "Chain_"+chain in file:
+                        alignment_file=file
+                        print("Alignment file for chain "+chain+" is "+alignment_file)
 
 
-            with open(os.path.join(alignments_path,alignment_file), 'r') as chain_alignment_file:
-                for line_id, line in enumerate(chain_alignment_file):
-                    if line_id>=3: #skip first three lines, since they contain the original sequence.
-                        if line[0] == ">":
-                            f.write(line)
-                        else:
-                            table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
-                            line_without_insertions=line.translate(table)
+                with open(os.path.join(alignments_path,alignment_file), 'r') as chain_alignment_file:
+                    for line_id, line in enumerate(chain_alignment_file):
+                        if line_id>=3: #skip first three lines, since they contain the original sequence.
+                            if line[0] == ">":
+                                f.write(line)
+                            else:
+                                table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
+                                line_without_insertions=line.translate(table)
 
-                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons))  #Make a gap sequence of the length of the sequence..
-                            trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
-                            first_residue_in_trb=trb_chain[0][1]
-                            for id, pos in enumerate(residue_data_control_1):
-                                if pos[0]==chain: #If position chain corresponds to the chain we're looking at
-                            
-                                    position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
-                                    new_aligned_seq= new_aligned_seq[:residue_data_af2_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_af2_0[id]+1:] 
-    
-                            f.write(new_aligned_seq+"\n")
+                                new_aligned_seq="-"*(len(mpnn_sequence_no_colons))  #Make a gap sequence of the length of the sequence..
+                                trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
+                                first_residue_in_trb=trb_chain[0][1]
+                                for id, pos in enumerate(residue_data_control_1):
+                                    if pos[0]==chain: #If position chain corresponds to the chain we're looking at
+                                
+                                        position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
+                                        new_aligned_seq= new_aligned_seq[:residue_data_af2_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_af2_0[id]+1:] 
+        
+                                f.write(new_aligned_seq+"\n")
     
     #delete empty lines that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed, but it doesn't really slow things that much.
     with open(output,'r+') as output_file:
@@ -514,7 +520,7 @@ def getChainResidOffsets(pdb_file, designable_residues):
     return chainResidOffset, con_hal_idx
 
 
-def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
+def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None, cycle=0):
     skipRfDiff = cfg.get("skipRfDiff", False)
     designable_residues = cfg.get("designable_residues", None)
 
@@ -527,10 +533,24 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
         
         pdb_basename = pdb_file.stem
 
+        ## We get RfDiff model number
+        rf_model_num = get_token_value(os.path.basename(pdb_file), "_" if cycle == 0 else "rf_", "(\\d+)") #get 0 from _0.fa using reg exp #get 0 from rf_0__model_1__cycle_2__itr_0__.pdb
+            # (We could also just get the first _# and exit regex early -- RfDiff model number is always the first element of the filename)
+        print(f"RfDiff model number: {rf_model_num}")
+
         fixed_res = {}
 
         # We need to renumber fixed resids: each chain should start with 1 
-        chainResidOffset, con_hal_idx = getChainResidOffsets(pdb_file, designable_residues)
+        chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(pdb_file, designable_residues)
+        print(f"ChainResidOffset: {chainResidOffset}")
+
+        with open(f"{pdb_path}/../chainResidOffset_{rf_model_num}.json", "w" if cycle==0 else "r") as f:
+            if cycle==0:
+                json.dump(chainResidOffset, f)
+            else:
+                chainResidOffset = json.load(f)
+        print(f"Dumped or read chainResidOffset_{rf_model_num}.json")
+        print(f"ChainResidOffset: {chainResidOffset}")
         
         if not skipRfDiff:
             trb_file = pdb_file.with_suffix(".trb")
@@ -568,6 +588,11 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None):
 
 
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
+        #for chain, idx in con_hal_idx: #ByFederico: this is a test. Since we're already filtering by inpaint_seq we don't need to use the 
+                                        #prefiltered con_hal_idx and we can use the full one that we recomputed before. This is necessary for the case with 
+                                        #Partial diffusion and a provided seq to mantain. This way we can pass those residues as fixed which for some reason
+                                        #RFDiff doesn't. This might be broken as hell. 
+        #for chain, idx in con_hal_pdb_idx_complete: 
         for chain, idx in con_hal_idx:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
             if not skipRfDiff:
@@ -662,8 +687,11 @@ def change_sequence_in_fasta (pdb_file, mpnn_fasta):
         seq_dict = {}
         for record in SeqIO.parse(mpnn_fasta, "fasta"):
             if i==0:
-                i +=1
-                continue
+                # Skip if record.description doesn't contain sample=. First seq is actually input to mpnn. However, after restart, we should not remove it again.
+                if "sample=" not in record.description:
+                    print(f"Skipping {record.description} for it does not contain sample=, it is input to and not output of mpnn.")
+                    i +=1
+                    continue
             i +=1
             print(record.seq, record.description)
             seq_dict[record.seq]=record.description

@@ -12,14 +12,16 @@ The main steps are as follows:
 7. The final output is a CSV file containing AF2 structure path, evaluation parameters etc.
 
 ## Requirements  
-The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionally, os, glob, re, and shutil packages should be installed (these are all part of Python Standard Library and are pre-installed), as well as biopython, hydra-core, pandas.  
+The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionally, os, glob, re, and shutil packages should be installed (these are all part of Python Standard Library and are pre-installed), as well as biopython, hydra-core, pandas and scipy.  
+
+For running tests, Python version must be >= 3.7 (it needs the `capture_output` arg).
 
 # Using the new _merged code
 ## Installation
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install biopython hydra-core pandas
+pip install biopython hydra-core pandas scipy
 ```
 
 ## Usage
@@ -104,4 +106,17 @@ Contigs are the most important input (for now, guiding potentials are another in
 - For leveraging symmetry: `'[10/A29-41/10/0 10/B29-41/10/0 10/C29-41/10]'`. In this case, the additional symmetry parameter must be: `symmmetry=C3` (three subunits). Also, you cannot use contigs with interval lengths to be generated e.g. `'[10-20/A29-41/10-20]'`. Symmetry is not good enough for now, it needs some debugging in the MPNN module and optimization in guiding potentials of RFdiffusion.
 - Important: if you wish to force a number of newly generated residues, pass it as range: `[A1-7/3-3/A11-12/1-1/A14-84/1-1/A86-96]` (and not `[A1-7/3/A11-12/1/A14-84/1/A86-96]`)
 - More info is available in the [RFdiff repo](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md#motif-scaffolding).
+
+## Automatic restart on 3rd-party crash
+Prosculpt uses 3rd-party software (RfDiffusion, ProteinMPNN, AlphaFold). Sometimes, especially if running hundreds of samples, this software may fail, exiting with an error code.  
+Previously, Prosculpt detected this and fatally crashed to avoid file loss. However, sometimes it may be handy to let it automatically restart Prosculpt and continue from where it left. (Useful if your HPC node becomes so slow AF decides to throw an error; reinitiating it may fix the issue).
+
+To do so, pass `auto_restart: n`, where `n` ... number of allowed restarts, to the .yaml config.
+
+## Excluding broken HPC nodes
+Sometimes, some HPC nodes get broken, work very slow or just throw _command not found_ or _no such file or directory_ errors. To avoid wasting time on them, you can [exclude](https://slurm.schedmd.com/sbatch.html#OPT_exclude) the tasks from being scheduled to them.
+
+For this, create a file `config/hpc_exclude_nodes.txt` (that is, in the same directory as your `installation.yaml` config) with the [NodeList](https://wiki.fysik.dtu.dk/Niflheim_system/Slurm_operations/#expanding-and-collapsing-host-lists) of broken nodes.  
+Example: `compute-3-20,compute-0-21,compute-6-[0-3]`.  
+_Note: all node names must be valid, otherwise Slurm will throw an error. Additionally, do not exclude all possible nodes, for no nodes will be available to perform your task._
 

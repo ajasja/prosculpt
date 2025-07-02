@@ -44,8 +44,8 @@ def get_chainbreaks(objname_or_file, cutoff_A=2, cmd=None, delete_all_before_loa
     C_atoms = cmd.get_coords(objname+" and name C", 1)
     N_atoms = cmd.get_coords(objname+" and name N", 1)
     print(objname)
-    print(C_atoms[:-1])
-    print(N_atoms[1:])
+    #print(C_atoms[:-1])
+    #print(N_atoms[1:])
     #subastract the C from the N of the next residue
     distances = np.sum((C_atoms[:-1]-N_atoms[1:])**2, axis=1)
     #len(distances), min(distances), np.mean(distances) ,max(distances)

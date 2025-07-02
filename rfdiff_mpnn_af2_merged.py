@@ -1,5 +1,6 @@
 from omegaconf import DictConfig, OmegaConf
 import hydra
+from hydra.core.hydra_config import HydraConfig
 import os
 from hydra.utils import get_original_cwd, to_absolute_path
 import logging
@@ -15,12 +16,30 @@ from Bio.PDB import PDBParser
 
 log = logging.getLogger(__name__)
 
-def run_and_log(command, log_func=log.info, dry_run=False):
+def run_and_log(command, log_func=log.info, dry_run=False, cfg="KEKEKE"):
     """Runs a command using os.system and also logs the command before running using log.info"""
     if log_func:
         log_func(command)
     if not dry_run:
-        os.system(command)
+        stat = os.system(command)
+        wife = os.WIFEXITED(stat)
+        exitCode = os.waitstatus_to_exitcode(stat)
+        log.info(f"Command exited with status {stat} and WIFEXITED {wife}. Exit code: {exitCode}")
+        if exitCode != 0:
+            log.error("There was an error running the command. We consider it fatal to prevent any file loss. Check the logs and contact the developer.")
+            dodatek = ""
+
+            auto_restart_count = cfg.get('auto_restart_count', 0)
+            auto_restart = cfg.get('auto_restart', 0)
+            log.info(f"auto_restart_count: {auto_restart_count}, auto_restart: {auto_restart}")
+            if auto_restart_count < auto_restart: # if cfg has autoRestart > 0
+                log.error("As per config, Prosculpt will be restarted automatically.")
+                with open_dict(cfg):
+                    cfg.auto_restart_count = auto_restart_count + 1
+                dodatek = f"However, Prosculpt was autoRestarted {cfg.get('auto_restart_count', 0)} out of {cfg.get('auto_restart', 0)} times (as per config) after encountering the crash."
+                prosculptApp(cfg)
+            raise Exception(f"Command exited with exit code {exitCode}\n\n{dodatek}")
+        # TODO: make `cfg` global and manipulate it everywhere. To avoid the need of passing `cfg=cfg` to every run_and_log call.
 
 scripts_folder = pathlib.Path(__file__).resolve().parent / "scripts"
 
@@ -67,13 +86,10 @@ def general_config_prep(cfg):
                 breaks = cfg.contig.count("/0 ") + 1
             cfg.chains_to_design = ' '.join(chain_letters[:breaks])
             log.info(f"Chains to design (according to contig chain breaks): {cfg.chains_to_design}")
-                
-        
 
-
-    
     for directory in [cfg.rfdiff_out_dir, cfg.mpnn_out_dir, cfg.af2_out_dir]:
         os.makedirs(directory, exist_ok=True)
+        log.info(f"Made directory {directory}")
     
     # No need to return; cfg is mutable.
     
@@ -89,12 +105,24 @@ def run_rfdiff(cfg):
     See RFdiffusion git for details.
     """
     log.info("***************Running runRFdiff***************")
+
+    # Check if we already have cfg.num_designs_rfdiff .pdb and *.trb files in cfg.rfdiff_out_path
+    if len(glob.glob(os.path.join(cfg.rfdiff_out_path, "*.pdb"))) == cfg.num_designs_rfdiff:
+        log.info(f"Found {cfg.num_designs_rfdiff} .pdb and .trb files in {cfg.rfdiff_out_path}. Skipping RFdiff.")
+        if len(glob.glob(os.path.join(cfg.rfdiff_out_path, "*.trb"))) != cfg.num_designs_rfdiff:
+            log.critical(f"Found {len(glob.glob(os.path.join(cfg.rfdiff_out_path, '*.trb')))} trb files in {cfg.rfdiff_out_path}, expected {cfg.num_designs_rfdiff}. \n Most likely, your previous simulation crashed while RfDiff was writing output files. Please, manually remove the .pdb file which does not have an associated .trb file in the {cfg.rfdiff_out_path} directory, then run the computation again.")
+            raise Exception(f"Number of RfDiff .pdb files does not match RfDiff .trb files!") 
+        #endif
+        log.info("***************Skipping RFdiffusion altogether***************")
+        return
+
+
     rfdiff_cmd_str = f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
           inference.output_prefix={cfg.rfdiff_out_path} \
           'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
           -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}"
-    run_and_log(rfdiff_cmd_str)
+    run_and_log(rfdiff_cmd_str, cfg=cfg)
     
     log.info("***************After running RFdiffusion***************")
 
@@ -110,7 +138,8 @@ def rechain_rfdiff_pdbs(cfg):
     rf_pdbs = glob.glob(os.path.join(cfg.rfdiff_out_path, '*.pdb'))
     for pdb in rf_pdbs:
         run_and_log(
-            f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} {pdb} {pdb} --chain_break_cutoff_A {cfg.chain_break_cutoff_A}'
+            f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} "{pdb}" "{pdb}" --chain_break_cutoff_A {cfg.chain_break_cutoff_A}'
+            , cfg=cfg
         )
 
         """
@@ -151,127 +180,193 @@ def parse_additional_args(cfg, group):
         dodatniArgumenti += f" {k} {v}"
     return(dodatniArgumenti)
 
+error_messages = ["Testing if we can restart the prosculptApp(cfg)"]
+import random
+def throw(id, cycle=0, cfg="KEKEKE"):
+    """
+    For testing restartability. Call it at different points in the code to see if the restart works.
+    @param id: int, ID of the crash you want to perform
+    @param cycle: int, in which AF-MPNN cycle should it crash
+    Message is derived from error_messages array. 
+    Alternatively, use probability-based crash test, which also re-runs the hard-coded command.
+
+    To make it crash, add +throw=id +crash_at_cycle=cycle to cmd, before -cd and -cn
+    """
+    log.info(f"Wanna crash? {id} ?= {crash_at_error} in cycle {cycle} ?= {crash_at_cycle}")
+    #if id == crash_at_error and cycle == crash_at_cycle:
+    if random.random() > 8/9:
+        msg = error_messages[id]
+        log.critical(f"Forced crash at {id}: {msg} in cycle {cycle}")
+        log.info("Re-running the command: ")
+        run_and_log("""python slurm_runner.py 1 MP_inpaintseq_CONT  output_dir="Examples/Examples_out/inpaintseq_MP_CONT" +throw=-16 +crash_at_cycle=0 -cd Examples -cn multipass_inpaintseq""")
+        raise Exception(f"Forced crash at {id}: {msg} in cycle {cycle}") 
+
+def save_checkpoint(folder, piece, value):
+    with open(os.path.join(folder, f"checkpoint_{piece}.txt"), "w") as f:
+        f.write(str(value))
+        f.flush()
+    log.info(f"Saving checkpoint {piece} = {value}")
+
+def get_checkpoint(folder, piece, default=0):
+    # check if file exists
+    if os.path.exists(os.path.join(folder, f"checkpoint_{piece}.txt")):
+        with open(os.path.join(folder, f"checkpoint_{piece}.txt"), "r") as f:
+            value = int(f.read() or 0)
+            log.info(f"Reading checkpoint {piece}: {value}")
+            return value # suppose only numbers (as strings) are there (user should not write to this file). In worst case, file is empty.
+    else:
+        log.info(f"Checkpoint {piece} doesn't exist. Returning default value {default}")
+        return default
+
 def do_cycling(cfg):
+    """
+    Runs a loop of (ProteinMPNN -> AF2 ->) `af2_mpnn_cycles` number of times.
+    """
     log.info("Running do_cycling")
-    for cycle in range(cfg.af2_mpnn_cycles):
+    start_cycle = get_checkpoint(cfg.output_dir, "cycle", 0)
+    content_status = get_checkpoint(cfg.output_dir, "content_status", 0) # 0 ... fresh run; 1 ... can clear and copy; 2 ... can copy; 3 ... corrupted (partial new files between MPNN and AF2); 4 ... AF2 is running, everything before AF2 should be skipped.
+    for cycle in range(start_cycle, cfg.af2_mpnn_cycles):
         print("cycleeeeee", cycle)
 
         trb_paths = None
         input_mpnn = cfg.rfdiff_out_dir # First cycle has this, other cycles overwrite this var
 
         if not cycle == 0: # All other cycles get starting PDBs from AF2
+            print(f"Cycle is not 0: {cycle}")
             cycle_directory = os.path.join(cfg.output_dir, "2_1_cycle_directory")
-            if os.path.exists(cycle_directory):
-                shutil.rmtree(cycle_directory)
-            os.makedirs(cycle_directory, exist_ok=True)
 
-            af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
+            if content_status == 1:
+                if os.path.exists(cycle_directory):
+                    shutil.rmtree(cycle_directory) # We should not remove it on restart
+                os.makedirs(cycle_directory, exist_ok=True)
+                save_checkpoint(cfg.output_dir, "content_status", 2) ## AF folder is ok to move its files to cycle_folder and cycle_folder is empty (ready for new files).
+                content_status = 2
+            print(f"Nada: {cycle}")
 
-            #Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
-            for model_subdict in af2_model_subdicts: 
-                af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
-                for i, af2_pdb in enumerate(af2_pdbs):
+            if content_status == 2:
+                af2_model_subdicts = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
+                log.info(f"AF2 model subdicts: {af2_model_subdicts}")
+
+                #Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
+                for model_subdict in af2_model_subdicts: 
+                    log.info(f"Model subdict: {model_subdict}")
+                    af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
+                    log.info(f"AF2 pdbs: {af2_pdbs}")
                     
-                    af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\\d+)")
-                    #if str(af_model_num) in args.af2_models:
-                    # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
-                    if cycle == 1:
-                        rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
-                        #else:
-                            #rf_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "rf__", "(\\d+)") #after first cycling modelXX directories in af_output do not correspond to rf model anymore
-                    shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
-                                #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
-                                #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
-                                #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
-                                # is it maybe possible to filter best ranked by af2 from the itr numbers?
+                    rf_model_num = prosculpt.get_token_value(os.path.basename(model_subdict), "model_", "(\\d+)")
+                    # Count number of files in cycle_directory which contain f"rf_{rf_model_num}"
+                    number_of_copied_models = len([f for f in os.listdir(cycle_directory) if f"rf_{rf_model_num}" in f])
+                    log.info(f"Number of already copied/present models: {number_of_copied_models}")
+                    #last_iteration = max([int(prosculpt.get_token_value(f, "itr_", "(\\d+)")) for f in os.listdir(cycle_directory) if f"rf_{rf_model_num}" in f] or [0])
+
+                    for i, af2_pdb in enumerate(af2_pdbs, start=number_of_copied_models):
+                        af_model_num = prosculpt.get_token_value(os.path.basename(af2_pdb), "model_", "(\\d+)")
+                        #if str(af_model_num) in args.af2_models:
+                        # Rename pdbs to keep the model_num traceability with orginal rfdiff structure and enable filtering which models for next cycle
+
+                        log.info(f"i: {i}, af2_pdb: {af2_pdb}, af_model_num: {af_model_num}, rf_model_num: {rf_model_num}")
+                        shutil.move(af2_pdb, os.path.join(cycle_directory, f"rf_{rf_model_num}__model_{af_model_num}__cycle_{cycle}__itr_{i}__.pdb")) 
+                                    #rf_ --> rfdiffusion structure number (in rfdiff outou dir)
+                                    #model_ -> af2 model num, used for filtering which to cycle (preference for model 4)
+                                    #itr_ -> to differentiate models in later cycles (5 pdbs for model 4 from rf 0 for example)
+                                    # is it maybe possible to filter best ranked by af2 from the itr numbers?
+                save_checkpoint(cfg.output_dir, "content_status", 3) ## ProteinMPNN is quick and can be rerun until AF2 starts running
+                content_status = 3
+
 
             input_mpnn = cycle_directory
 
-            shutil.rmtree(cfg.mpnn_out_dir) # Remove MPNN dir so you can create new sequences
-            os.makedirs(cfg.mpnn_out_dir, exist_ok=True) # Create it again
+            if content_status != 4:
+                shutil.rmtree(cfg.mpnn_out_dir) # Remove MPNN dir so you can create new sequences
+                os.makedirs(cfg.mpnn_out_dir, exist_ok=True) # Create it again
             trb_paths = os.path.join(cfg.rfdiff_out_dir, "*.trb")
             print('trb_path is: ', trb_paths)
         #endif
-        # All cycles run the same commands
-        
-        run_and_log(
-            f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
-            --input_path={input_mpnn} \
-            --output_path={cfg.path_for_parsed_chains}'       
-        )
 
-        if cfg.chains_to_design:
+        if content_status != 4:
+            # All cycles run the same commands
             run_and_log(
-                f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
+                f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
+                --input_path={input_mpnn} \
+                --output_path={cfg.path_for_parsed_chains}' 
+                , cfg=cfg      
+            )
+
+            if cfg.chains_to_design:
+                run_and_log(
+                    f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
+                        --input_path={cfg.path_for_parsed_chains} \
+                        --output_path={cfg.path_for_assigned_chains} \
+                        --chain_list='{cfg.chains_to_design}'"
+                        , cfg=cfg
+                        )
+                
+            fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths, cycle=cycle) # trb_paths is optional (default: None) and only used in non-first cycles
+            # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
+            # but this function should still be called because it creates (probably) important .json files
+
+            if cfg.inference.symmetry!=None:
+                run_and_log(
+                    f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
                     --input_path={cfg.path_for_parsed_chains} \
-                    --output_path={cfg.path_for_assigned_chains} \
-                    --chain_list='{cfg.chains_to_design}'"
-                    )
+                    --output_path={cfg.path_for_tied_positions} \
+                    --homooligomer 1'    
+                    , cfg=cfg
+                )         
+                log.info(f"running symmetry")
+
+            #_____________ RUN ProteinMPNN_____________
+            # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
+            proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
+                --jsonl_path {cfg.path_for_parsed_chains} \
+                --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
+                {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry!=None else ""} \
+                --chain_id_jsonl {cfg.path_for_assigned_chains} \
+                --out_folder {cfg.mpnn_out_dir} \
+                --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
+                --sampling_temp {cfg.sampling_temp} \
+                --backbone_noise {cfg.backbone_noise} \
+                --use_soluble_model  \
+                --omit_AAs {cfg.omit_AAs} \
+                {parse_additional_args(cfg, "pass_to_mpnn")} \
+                --batch_size 1'
             
-        fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths) # trb_paths is optional (default: None) and only used in non-first cycles
-        # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
+            run_and_log(proteinMPNN_cmd_str, cfg=cfg)
 
-        if cfg.inference.symmetry!=None:
-            run_and_log(
-                f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
-                --input_path={cfg.path_for_parsed_chains} \
-                --output_path={cfg.path_for_tied_positions} \
-                --homooligomer 1'    
-            )         
-            log.info(f"running symmetry")
-
-        #_____________ RUN ProteinMPNN_____________
-        # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
-        proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
-            --jsonl_path {cfg.path_for_parsed_chains} \
-            --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
-            {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry!=None else ""} \
-            --chain_id_jsonl {cfg.path_for_assigned_chains} \
-            --out_folder {cfg.mpnn_out_dir} \
-            --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
-            --sampling_temp {cfg.sampling_temp} \
-            --backbone_noise {cfg.backbone_noise} \
-            --use_soluble_model  \
-            --omit_AAs {cfg.omit_AAs} \
-            {parse_additional_args(cfg, "pass_to_mpnn")} \
-            --batch_size 1'
-        
-        run_and_log(proteinMPNN_cmd_str)
-
-        log.info("Preparing to empty af2 directory.")
-        
-        # af2 directory must be empty
-        shutil.rmtree(cfg.af2_out_dir)
-        os.makedirs(cfg.af2_out_dir, exist_ok=True)
+            log.info("Preparing to empty af2 directory.")
+            
+            # af2 directory must be empty
+            shutil.rmtree(cfg.af2_out_dir)
+            os.makedirs(cfg.af2_out_dir, exist_ok=True)
 
 
-        #________________ RUN AF2______________
-        fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
-        print(fasta_files)
+            #________________ RUN AF2______________
+            fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) # glob is not sorted by default
+            print(fasta_files)
 
-        #if symmetry - make fasta file with monomer sequence only
-        for fasta_file in fasta_files:
-            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):
-                sequences=[]
-                for record in SeqIO.parse(fasta_file, "fasta"):
-                    record.seq = record.seq[:record.seq.find('/')]  
-                    idd = record.id            
-                    record.id = 'monomer_'+idd      
-                    descr = record.description
-                    record.description = 'monomer_'+descr
-                    sequences.append(record)
-                SeqIO.write(sequences, f"{fasta_file[:-3]}_monomer.fa", "fasta")
-        
-        fasta_files = sorted(glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))) 
+            monomers_fasta_dir = os.path.join(cfg.fasta_dir, 'monomers')
+            if not os.path.exists(monomers_fasta_dir):
+                os.makedirs(monomers_fasta_dir)
+            
+            #if symmetry - make fasta file with monomer sequence only
+            if cfg.inference.symmetry!=None or cfg.get("model_monomer", False):  #cfg symmetry is constant, not based on fasta_file
+                for fasta_file in fasta_files:
+                    sequences=[]
+                    for record in SeqIO.parse(fasta_file, "fasta"):
+                        record.seq = record.seq[:record.seq.find('/')]  
+                        idd = record.id            
+                        record.id = 'monomer_'+idd      
+                        descr = record.description
+                        record.description = 'monomer_'+descr
+                        sequences.append(record)
+                    SeqIO.write(sequences, os.path.join(os.path.dirname(fasta_file), "monomers", f"{os.path.basename(fasta_file)[:-3]}_monomer.fa"), "fasta") # It must be written to the correct subfolder already to prevent duplication on job restart (CHECKPOINTING): _monomer_monomer.fa
+                    print("File written to /monomers subfolder. "+fasta_file) #just for DEBUG 
+                    ## CHECKPOINTING: Right now, protMPNN is rerun after restart, which outputs different files into mpnn_out. The new files overwrite the old ones in /monomers, so it is always fresh.
+                    ## Unles AF2 already started running -- then it is skipped.
 
-        monomers_fasta_dir = os.path.join(cfg.fasta_dir, 'monomers')
-        if not os.path.exists(monomers_fasta_dir):
-            os.makedirs(monomers_fasta_dir)
-
-        for file in fasta_files:
-            if 'monomer' in os.path.basename(file):
-                print("moving monomer file: "+file) #just for DEBUG
-                shutil.move(file, os.path.join(os.path.dirname(file),'monomers',os.path.basename(file)))
+        # content_status = 4; everything up to here can be skipped
+        save_checkpoint(cfg.output_dir, "content_status", 4)
+        content_status = 4
 
         fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
         fasta_files += glob.glob(os.path.join(cfg.fasta_dir,'monomers', "*.fa"))
@@ -326,6 +421,7 @@ def do_cycling(cfg):
                                         --model-order {cfg.model_order} \
                                         {parse_additional_args(cfg, "pass_to_af")} \
                                         --num-models {num_models}'
+                                        , cfg=cfg
                                         ) #changed from single_sequence
                     else: 
                         for model_number in model_order:
@@ -339,6 +435,7 @@ def do_cycling(cfg):
                                         --model-order {model_number} \
                                         {parse_additional_args(cfg, "pass_to_af")} \
                                         --num-models {num_models}'
+                                        , cfg=cfg
                                         ) #Changed from single_sequence
 
             else:  #this is the normal mode of operations. Single sequence. 
@@ -351,6 +448,7 @@ def do_cycling(cfg):
                                     --model-order {cfg.model_order} \
                                     {parse_additional_args(cfg, "pass_to_af")} \
                                     --num-models {num_models}'
+                                    , cfg=cfg
                                     ) 
                 else: 
                     for model_number in model_order:
@@ -364,7 +462,12 @@ def do_cycling(cfg):
                                     --model-order {model_number} \
                                     {parse_additional_args(cfg, "pass_to_af")} \
                                     --num-models {num_models}'
+                                    , cfg=cfg
                                     )#
+            
+        save_checkpoint(cfg.output_dir, "content_status", 1) ## Content is ok to be copied to cycle_dir
+        save_checkpoint(cfg.output_dir, "cycle", cycle+1) # Restart should start with next cycle.
+        content_status = 1
 
         # msa single sequence makes sense for designed proteins
 
@@ -372,7 +475,7 @@ def final_operations(cfg):
     log.info("Final operations")
     json_directories = glob.glob(os.path.join(cfg.af2_out_dir, "*"))
 
-    print('do we already have csv files? If we need to re-run stats re have to delete them: ',os.listdir(cfg.output_dir) )
+    print('do we already have csv files? If we need to re-run stats, we have to delete them: ',os.listdir(cfg.output_dir) )
     if 'output.csv' in os.listdir(cfg.output_dir):
         os.remove(cfg.output_dir+'/output.csv')
     if 'scores_rg_charge_sap.csv' in os.listdir(cfg.output_dir):
@@ -393,6 +496,7 @@ def final_operations(cfg):
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
         f'{cfg.python_path} {scripts_folder / "scoring_rg_charge_sap.py"} {csv_path}'
+        , cfg=cfg
         )
         
     scores_rg_path = os.path.join(cfg.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
@@ -431,31 +535,73 @@ def pass_config_to_rfdiff(cfg):
 
     pass
 
+import time
+TIMEMEASURES = {}
+TIMECALC = time.time()
+PREVIOUS_MESSAGE = "Before app start"
+def dtimelog(message, final=False):
+    global TIMECALC
+    global PREVIOUS_MESSAGE
+    dt = round(time.time()-TIMECALC, 1)
+    log.info(f"* * * {PREVIOUS_MESSAGE} lasted {dt} s. Running {message} * * *")
+    TIMEMEASURES[PREVIOUS_MESSAGE] = dt
+    PREVIOUS_MESSAGE = message
+    TIMECALC = time.time()
+    
+    if final:
+        # Print all measures one per line
+        for k,v in TIMEMEASURES.items():
+            log.info(f"{k} lasted {v} s.")
+
+crash_at_error = 0 # Added through command line. Where should the test crash?
+crash_at_cycle = 0 # Added through command line. In which cycle should the test crash?
+
 @hydra.main(version_base=None, config_path="config", config_name="run")
 def prosculptApp(cfg: DictConfig) -> None:
+
+
     log.info("Hydrić")
     log.info("The following configuration was passed: \n" + OmegaConf.to_yaml(cfg))
 
     #log.debug(f"Now in Hydra, cwd = {os.getcwd()}")
 
+    dtimelog("general_config_prep")
     general_config_prep(cfg)
+    config = HydraConfig.get()
+    config_name = config.job.config_name
+    log.info(f"config.runtime.config_sources: {config.runtime.config_sources}")
+    config_path = [path["path"] for path in config.runtime.config_sources if path["schema"] == "file"][-1] # If run without config (through cmd), [1] is out of range. Assume passed config file is always the last one.
+    shutil.copy(os.path.join(config_path,config_name+'.yaml'), os.path.join(cfg.output_dir, f"input.yaml"))
+
+    global crash_at_error
+    global crash_at_cycle
+    crash_at_error = cfg.get("throw", -1)
+    crash_at_cycle = cfg.get("crash_at_cycle", 0)
 
     if cfg.get('only_run_analysis',False):#only_run_analysis
         print('***Skip everything, go to final operations***')
+        dtimelog("only final_operations")
         final_operations(cfg)
 
     else:
         if not cfg.get("skipRfDiff", False):
+            dtimelog("pass_config_to_rfdiff")
             pass_config_to_rfdiff(cfg)
+            dtimelog("run_rfdiff")
             run_rfdiff(cfg)
+            dtimelog("rechain_rfdiff_pdbs")
             rechain_rfdiff_pdbs(cfg)
         else:
             log.info("*** Skipping RfDiff ***")
+            dtimelog("skipping RfDiff")
             # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
             shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
 
+        dtimelog("do_cycling")
         do_cycling(cfg)
+        dtimelog("final_operations")
         final_operations(cfg)
+        dtimelog("Finished", True)
 
 
 if __name__ == "__main__":
