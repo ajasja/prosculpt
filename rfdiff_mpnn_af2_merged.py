@@ -528,6 +528,8 @@ crash_at_cycle = 0 # Added through command line. In which cycle should the test 
 
 @hydra.main(version_base=None, config_path="config", config_name="run")
 def prosculptApp(cfg: DictConfig) -> None:
+
+
     log.info("Hydrić")
     log.info("The following configuration was passed: \n" + OmegaConf.to_yaml(cfg))
 

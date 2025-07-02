@@ -1,7 +1,7 @@
 # This config includes installation paths and other constant values
 python_path_rfdiff: /home/tsatler/anaconda3/envs/SE3nv/bin/python
 inference_path_rfdiff: /home/tsatler/RFdif/RFdiffusion/scripts/run_inference.py
-python_path_mpnn: /home/tsatler/anaconda3/envs/mlfold/bin/python
+python_path_mpnn: /home/tsatler/anaconda3/envs/mlfold2/bin/python
 pymol_python_path: /home/aljubetic/conda/envs/pyro/bin/python
 mpnn_installation_path: /home/tsatler/ProteinMPNN
 
