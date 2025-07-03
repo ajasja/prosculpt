@@ -20,156 +20,214 @@ def get_rmsd_from_coords(native_coords, model_coords, rot, tran):
     RMSD = np.sqrt(sum(sum(diff**2))/native_coords.shape[0])
     return RMSD
 
-def calculate_RMSD_linker_len (trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,symmetry, model_monomer):        
+def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path,symmetry, model_monomer):        
     # First calculate RMSD between input protein and AF2 generated protein
     # Second calcualte number of total generated AA by RFDIFF 
     #   - if designing only in one location the number is equal linker length  
-     
-        parser = PDBParser(PERMISSIVE = 1)
-        structure_af2 = parser.get_structure("af2", af2_pdb)
-
-        # Skip if trb does not exist
-        if not os.path.exists(trb_path):
-            print('skipping rfdiffusion, only RMSD is calculated')
-
-            if symmetry!=None or model_monomer:
-                rmsd = homooligomer_rmsd.align_oligomers(starting_pdb, af2_pdb, save_aligned=False)
-            else:
-                rmsd = homooligomer_rmsd.align_monomer(starting_pdb, af2_pdb, save_aligned=False)
-
-            return([round(rmsd, 1),-1,-1],-1)
-
     
-        with open(trb_path, 'rb') as f:
-                trb_dict = pickle.load(f)
+    parser = PDBParser(PERMISSIVE = 1)
+    structure_af2 = parser.get_structure("af2", af2_pdb)
+    
+    skipRfDiff = cfg.get("skipRfDiff", False)
+    designable_residues = cfg.get("designable_residues", None)
+    # Skip if trb does not exist
 
-        # Get different data from trb file depending on the fact if designing a monomer (one chain) or heteromer
-        # complex_con_rex_idx present only if there are chains that are completely fixed.
-        # Data structure: con_ref_idx0 = [0, 1, 3, 3, ...] 
-        #   Info: array of input pdb AA indices starting 0 (con_ref_pdb_idx), and where they are in the output pdb (con_hal_pdb_idx)
-        #   In complex_con_hal_idx0 there is no chain info however RFDIFF changes pdb indeces to go from 1 to n (e.g. 1st AA in chain B has idx 34)
-        
-        #selected_residues_data will hold the information only of those residues that were selected from the reference structure to be used in the final design
-        if 'complex_con_ref_idx0' in trb_dict:
-            selected_residues_data = trb_dict['complex_con_hal_idx0']
-            selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
-            if len(selected_residues_in_designed_chains) == 0 and trb_dict["config"]["contigmap"]["provide_seq"]!=None:
-                    selected_residues_in_designed_chains=np.where([a != b for a, b in zip(trb_dict["inpaint_seq"], trb_dict["inpaint_str"])])[0] #if this works...
-                    print(f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {selected_residues_in_designed_chains}")
-                    #print(selected_residues_in_designed_chains)
+    if skipRfDiff:
+        print('skipping rfdiffusion. RMSD_Sculpted is that of the designable residues. RMSD_Motif is that of the non-designable residues')
 
-            #selected_residues_in_fixed_chains=trb_dict['receptor_con_hal_idx0'] #This actually doesn't work and I think it's a bug in RFDiff
-            selected_residues_in_fixed_chains=[res for res in selected_residues_data if res not in selected_residues_in_designed_chains]
-        else:
-            selected_residues_data = trb_dict['con_hal_idx0']
-            selected_residues_in_fixed_chains=[]
-            selected_residues_in_designed_chains=selected_residues_data
+        if symmetry!=None or model_monomer:
+            rmsd = homooligomer_rmsd.align_oligomers(starting_pdb, af2_pdb, save_aligned=False)
+            return([round(rmsd, 1),-1,-1,-1,-1],  -1)
+        else: #There is a lot of code duplication here from when RFDiff is used, but I don't want to deal with the problem of making the skipped one go into the non-skip correctly
+            #rmsd = homooligomer_rmsd.align_monomer(starting_pdb, af2_pdb, save_aligned=False)
+            
 
-        all_af2_res = list(structure_af2.get_residues()) 
-        all_af2_res_ca= [ind['CA'] for ind in all_af2_res]     
+            chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(cfg.pdb_path, designable_residues)
+            
+            selected_residue_data= [x + (chainResidOffset[chain] -1) for chain, x in con_hal_pdb_idx_complete]
+            selected_residues_in_designed_chains=selected_residue_data #This will be a problem if there are fixed chains. TODO:FIX
 
-        af2_all_fixed_res = [all_af2_res[ind]['CA'] for ind in selected_residues_data]
-        af2_sculpted_res = [ind['CA'] for ind in all_af2_res if ind['CA'] not in af2_all_fixed_res]
-        af2_fixed_chain_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
-        af2_motif_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_designed_chains] 
-        
-               
-        trb_help = list(trb_dict['inpaint_str'])
-        linker_indeces = [boolean for boolean in trb_help if boolean == False] #calculate linker length here - convenient
-        linker_length = len(linker_indeces)
-
-        #io=PDBIO()    
-        #io.set_structure(structure_af2)
-        #io.save("af2_pdb_2.pdb") #This is not necessary and might be slowing down everything a bit.
-        rmsd=-1
-        rmsd_all_fixed = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
-        rmsd_sculpted = -1
-        rmsd_fixed_chains = -1
-        rmsd_motif = -1
-        # if starting_pdb:
-        structure_rfdiff = parser.get_structure("control", rfdiff_pdb_path) 
-
-        all_rfdiff_res = list(structure_rfdiff.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
-        all_rfdiff_res_ca= [ind['CA'] for ind in all_rfdiff_res]     
-
-        rfdiff_all_fixed_res = [all_rfdiff_res[ind]['CA'] for ind in selected_residues_data] #retrieve the residue with the corresponding index from rfdiff_res
-        rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_all_fixed_res]
-        rfdiff_fixed_chain_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
-        rfdiff_motif_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_designed_chains]
-
-
-        if len(rfdiff_all_fixed_res)!=len(af2_all_fixed_res):
-            print("Fixed and moving atom lists differ in size") #for now, this is when input pdb and output are different length
-            print(rfdiff_all_fixed_res,af2_all_fixed_res)
-            return(-1, -1)
-        
-        #Align all and get RMSD of all
-        superimposer = SVDSuperimposer()
-        rfdiff_all_coords =  np.array([a.coord for a in all_rfdiff_res_ca])
-        af2_all_coords =  np.array([a.coord for a in all_af2_res_ca])
-              
-        superimposer.set(rfdiff_all_coords, af2_all_coords)
-        superimposer.run()
-        rmsd = get_rmsd_from_coords(rfdiff_all_coords, af2_all_coords, superimposer.rot, superimposer.tran)
-
-        #Align all reference residues if there are no fixed chains. Otherwise, align only fixed chains.  (Very nice because fully fixed chains should be a stable reference)
-        #then get rmsd_all_fixed and rmsd_sculpted (If any)
-        superimposer = SVDSuperimposer()
-        rfdiff_all_fixed_coords = np.array([a.coord for a in rfdiff_all_fixed_res])
-        af2_all_fixed_coords = np.array([a.coord for a in af2_all_fixed_res])
-
-        rfdiff_fixed_chain_coords=np.array([a.coord for a in rfdiff_fixed_chain_res])
-        rfdiff_motif_res_coords=np.array([a.coord for a in rfdiff_motif_res])
-
-        af2_fixed_chain_coords=np.array([a.coord for a in af2_fixed_chain_res])
-        af2_motif_res_coords=np.array([a.coord for a in af2_motif_res])
-
-        if len(rfdiff_fixed_chain_coords)==0: #(there are no fixed chains)
-            if len(rfdiff_all_fixed_coords)!=0: #(There are no fixed residues at all)
-                superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
-                superimposer.run() 
-                rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
-        else:
-            superimposer.set(rfdiff_fixed_chain_coords, af2_fixed_chain_coords)
+            all_af2_res = list(structure_af2.get_residues()) 
+            all_af2_res_ca= [ind['CA'] for ind in all_af2_res] 
+            af2_all_fixed_res = [all_af2_res[ind]['CA'] for ind in selected_residue_data]
+            af2_sculpted_res = [ind['CA'] for ind in all_af2_res if ind['CA'] not in af2_all_fixed_res]
+            #af2_fixed_chain_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
+            #af2_motif_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_designed_chains] 
+            structure_rfdiff = parser.get_structure("control", rfdiff_pdb_path) 
+            all_rfdiff_res = list(structure_rfdiff.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
+            all_rfdiff_res_ca= [ind['CA'] for ind in all_rfdiff_res]     
+            
+            superimposer = SVDSuperimposer()
+            rfdiff_all_coords =  np.array([a.coord for a in all_rfdiff_res_ca])
+            af2_all_coords =  np.array([a.coord for a in all_af2_res_ca])
+                    
+            superimposer.set(rfdiff_all_coords, af2_all_coords)
             superimposer.run()
-            rmsd_fixed_chains = get_rmsd_from_coords(rfdiff_fixed_chain_coords, af2_fixed_chain_coords, superimposer.rot, superimposer.tran)
-            rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
-        
+            rmsd = get_rmsd_from_coords(rfdiff_all_coords, af2_all_coords, superimposer.rot, superimposer.tran)
 
-        if True in trb_dict['inpaint_seq']: #There are non-redesigned models
+            rfdiff_all_fixed_res = [all_rfdiff_res[ind]['CA'] for ind in selected_residue_data] #retrieve the residue with the corresponding index from rfdiff_res
+            rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_all_fixed_res]
+
+            superimposer = SVDSuperimposer()
+            rfdiff_all_fixed_coords = np.array([a.coord for a in rfdiff_all_fixed_res])
+            af2_all_fixed_coords = np.array([a.coord for a in af2_all_fixed_res])
+            superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
+            superimposer.run() 
+            rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
+            #rfdiff_fixed_chain_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
+            #rfdiff_motif_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_designed_chains]
             rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
             af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
-
             rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
             af2_sculpted_coords = np.array(af2_sculpted_coords)
-
             rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
-            if (len(rfdiff_motif_res_coords)!=0):
-                rmsd_motif = get_rmsd_from_coords(rfdiff_motif_res_coords, af2_motif_res_coords, superimposer.rot, superimposer.tran)
+            print([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),-1,round(rmsd_all_fixed, 1)])
+            return([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),-1,round(rmsd_all_fixed, 1)],  -1)
+
+    
+    with open(trb_path, 'rb') as f:
+            trb_dict = pickle.load(f)
+
+    # Get different data from trb file depending on the fact if designing a monomer (one chain) or heteromer
+    # complex_con_rex_idx present only if there are chains that are completely fixed.
+    # Data structure: con_ref_idx0 = [0, 1, 3, 3, ...] 
+    #   Info: array of input pdb AA indices starting 0 (con_ref_pdb_idx), and where they are in the output pdb (con_hal_pdb_idx)
+    #   In complex_con_hal_idx0 there is no chain info however RFDIFF changes pdb indeces to go from 1 to n (e.g. 1st AA in chain B has idx 34)
+    
+    #selected_residues_data will hold the information only of those residues that were selected from the reference structure to be used in the final design
+    if 'complex_con_ref_idx0' in trb_dict:
+        selected_residues_data = trb_dict['complex_con_hal_idx0']
+        selected_residues_in_designed_chains=trb_dict['con_hal_idx0']
+        if len(selected_residues_in_designed_chains) == 0 and trb_dict["config"]["contigmap"]["provide_seq"]!=None:
+                selected_residues_in_designed_chains=np.where([a != b for a, b in zip(trb_dict["inpaint_seq"], trb_dict["inpaint_str"])])[0] #if this works...
+                print(f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {selected_residues_in_designed_chains}")
+                #print(selected_residues_in_designed_chains)
+
+        #selected_residues_in_fixed_chains=trb_dict['receptor_con_hal_idx0'] #This actually doesn't work and I think it's a bug in RFDiff
+        selected_residues_in_fixed_chains=[res for res in selected_residues_data if res not in selected_residues_in_designed_chains]
+    else:
+        selected_residues_data = trb_dict['con_hal_idx0']
+        selected_residues_in_fixed_chains=[]
+        selected_residues_in_designed_chains=selected_residues_data
+
+    all_af2_res = list(structure_af2.get_residues()) 
+    all_af2_res_ca= [ind['CA'] for ind in all_af2_res]     
+
+    af2_all_fixed_res = [all_af2_res[ind]['CA'] for ind in selected_residues_data]
+    af2_sculpted_res = [ind['CA'] for ind in all_af2_res if ind['CA'] not in af2_all_fixed_res]
+    af2_fixed_chain_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
+    af2_motif_res=[all_af2_res[ind]['CA'] for ind in selected_residues_in_designed_chains] 
+    
+            
+    trb_help = list(trb_dict['inpaint_str'])
+    linker_indeces = [boolean for boolean in trb_help if boolean == False] #calculate linker length here - convenient
+    linker_length = len(linker_indeces)
+
+    #io=PDBIO()    
+    #io.set_structure(structure_af2)
+    #io.save("af2_pdb_2.pdb") #This is not necessary and might be slowing down everything a bit.
+    rmsd=-1
+    rmsd_all_fixed = -1 # If there's no starting structure, we cannot compare it. RMSD is undefined (-1)
+    rmsd_sculpted = -1
+    rmsd_fixed_chains = -1
+    rmsd_motif = -1
+    # if starting_pdb:
+    structure_rfdiff = parser.get_structure("control", rfdiff_pdb_path) 
+
+    all_rfdiff_res = list(structure_rfdiff.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
+    all_rfdiff_res_ca= [ind['CA'] for ind in all_rfdiff_res]     
+
+    rfdiff_all_fixed_res = [all_rfdiff_res[ind]['CA'] for ind in selected_residues_data] #retrieve the residue with the corresponding index from rfdiff_res
+    rfdiff_sculpted_res = [ind['CA'] for ind in all_rfdiff_res if ind['CA'] not in rfdiff_all_fixed_res]
+    rfdiff_fixed_chain_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
+    rfdiff_motif_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_designed_chains]
+
+
+    if len(rfdiff_all_fixed_res)!=len(af2_all_fixed_res):
+        print("Fixed and moving atom lists differ in size") #for now, this is when input pdb and output are different length
+        print(rfdiff_all_fixed_res,af2_all_fixed_res)
+        return(-1, -1)
+    
+    #Align all and get RMSD of all
+    superimposer = SVDSuperimposer()
+    rfdiff_all_coords =  np.array([a.coord for a in all_rfdiff_res_ca])
+    af2_all_coords =  np.array([a.coord for a in all_af2_res_ca])
+            
+    superimposer.set(rfdiff_all_coords, af2_all_coords)
+    superimposer.run()
+    rmsd = get_rmsd_from_coords(rfdiff_all_coords, af2_all_coords, superimposer.rot, superimposer.tran)
+
+    #Align all reference residues if there are no fixed chains. Otherwise, align only fixed chains.  (Very nice because fully fixed chains should be a stable reference)
+    #then get rmsd_all_fixed and rmsd_sculpted (If any)
+    superimposer = SVDSuperimposer()
+    rfdiff_all_fixed_coords = np.array([a.coord for a in rfdiff_all_fixed_res])
+    af2_all_fixed_coords = np.array([a.coord for a in af2_all_fixed_res])
+
+    rfdiff_fixed_chain_coords=np.array([a.coord for a in rfdiff_fixed_chain_res])
+    rfdiff_motif_res_coords=np.array([a.coord for a in rfdiff_motif_res])
+
+    af2_fixed_chain_coords=np.array([a.coord for a in af2_fixed_chain_res])
+    af2_motif_res_coords=np.array([a.coord for a in af2_motif_res])
+
+    if len(rfdiff_fixed_chain_coords)==0: #(there are no fixed chains)
+        if len(rfdiff_all_fixed_coords)!=0: #(There are no fixed residues at all)
+            superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
+            superimposer.run() 
+            rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
+    else:
+        superimposer.set(rfdiff_fixed_chain_coords, af2_fixed_chain_coords)
+        superimposer.run()
+        rmsd_fixed_chains = get_rmsd_from_coords(rfdiff_fixed_chain_coords, af2_fixed_chain_coords, superimposer.rot, superimposer.tran)
+        rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
+    
+
+    if True in trb_dict['inpaint_seq']: #There are non-redesigned models
+        rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
+        af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
+
+        rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
+        af2_sculpted_coords = np.array(af2_sculpted_coords)
+
+        rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
+        if (len(rfdiff_motif_res_coords)!=0):
+            rmsd_motif = get_rmsd_from_coords(rfdiff_motif_res_coords, af2_motif_res_coords, superimposer.rot, superimposer.tran)
 
     #If we do symmetry, we align af2 model to rfdiffusion structure. Should we control that, or hardcode it?
-            
-        if symmetry!=None:
-            rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
- 
-        return ([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),round(rmsd_fixed_chains, 1),round(rmsd_motif, 1)],  linker_length)
+        
+    if symmetry!=None:
+        rmsd = homooligomer_rmsd.align_oligomers(rfdiff_pdb_path, af2_pdb, save_aligned=False)
+
+    return ([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),round(rmsd_fixed_chains, 1),round(rmsd_motif, 1)],  linker_length)
 
 
-def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
-    with open(trb_path, 'rb') as f:
-                trb_dict = pickle.load(f)
-            
-    if 'complex_con_ref_idx0' in trb_dict:
-        #residue_data_control_0 = trb_dict['complex_con_ref_idx0'] 
-        residue_data_af2_0 = trb_dict['complex_con_hal_idx0']
-        residue_data_control_1 = trb_dict['complex_con_ref_pdb_idx']
-        #residue_data_af2_1 = trb_dict['complex_con_hal_pdb_idx']
+def make_alignment_file(cfg, trb_path,pdb_file,mpnn_seq,alignments_path,output):
+
+    skipRfDiff = cfg.get("skipRfDiff", False)
+    designable_residues = cfg.get("designable_residues", None)
+
+    if not skipRfDiff:
+        with open(trb_path, 'rb') as f:
+                    trb_dict = pickle.load(f)
+          
+        if 'complex_con_ref_idx0' in trb_dict:
+            #residue_data_control_0 = trb_dict['complex_con_ref_idx0'] 
+            residue_data_af2_0 = trb_dict['complex_con_hal_idx0']
+            residue_data_control_1 = trb_dict['complex_con_ref_pdb_idx']
+            #residue_data_af2_1 = trb_dict['complex_con_hal_pdb_idx']
+        else:
+            #residue_data_control_0 = trb_dict['con_ref_idx0']
+            residue_data_af2_0 = trb_dict['con_hal_idx0']
+            residue_data_control_1 = trb_dict['con_ref_pdb_idx']
+            #residue_data_af2_1 = trb_dict['con_hal_pdb_idx']
     else:
-        #residue_data_control_0 = trb_dict['con_ref_idx0']
-        residue_data_af2_0 = trb_dict['con_hal_idx0']
-        residue_data_control_1 = trb_dict['con_ref_pdb_idx']
-        #residue_data_af2_1 = trb_dict['con_hal_pdb_idx']
-    
+        
+        chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(pdb_file, designable_residues)
+        residue_data_af2_0= [x + (chainResidOffset[chain] -1) for chain, x in con_hal_pdb_idx_complete]
+        residue_data_control_1=con_hal_pdb_idx_complete
+        print(residue_data_af2_0)
+        print(con_hal_pdb_idx_complete)
+
+
     if mpnn_seq[-1:] =="\n":
         mpnn_seq=mpnn_seq[:-1]
     mpnn_sequence_no_colons=mpnn_seq.replace(":","")
@@ -226,33 +284,34 @@ def make_alignment_file(trb_path,mpnn_seq,alignments_path,output):
             f.write(sequence_line+"\n") #write padded sequence
 
         #now write the aligned sequences
-        for chain in used_chains:
-            #LEt's get the correct file for this chain
-            for file in os.listdir(alignments_path):
-                if "auth_"+chain in file or "Chain_"+chain in file:
-                    alignment_file=file
-                    print("Alignment file for chain "+chain+" is "+alignment_file)
+        for chain in letters:
+            if chain in used_chains:
+                #LEt's get the correct file for this chain
+                for file in os.listdir(alignments_path):
+                    if "auth_"+chain in file or "Chain_"+chain in file:
+                        alignment_file=file
+                        print("Alignment file for chain "+chain+" is "+alignment_file)
 
 
-            with open(os.path.join(alignments_path,alignment_file), 'r') as chain_alignment_file:
-                for line_id, line in enumerate(chain_alignment_file):
-                    if line_id>=3: #skip first three lines, since they contain the original sequence.
-                        if line[0] == ">":
-                            f.write(line)
-                        else:
-                            table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
-                            line_without_insertions=line.translate(table)
+                with open(os.path.join(alignments_path,alignment_file), 'r') as chain_alignment_file:
+                    for line_id, line in enumerate(chain_alignment_file):
+                        if line_id>=3: #skip first three lines, since they contain the original sequence.
+                            if line[0] == ">":
+                                f.write(line)
+                            else:
+                                table=str.maketrans('', '', string.ascii_lowercase) #This deletes lowercase characters from the string
+                                line_without_insertions=line.translate(table)
 
-                            new_aligned_seq="-"*(len(mpnn_sequence_no_colons))  #Make a gap sequence of the length of the sequence..
-                            trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
-                            first_residue_in_trb=trb_chain[0][1]
-                            for id, pos in enumerate(residue_data_control_1):
-                                if pos[0]==chain: #If position chain corresponds to the chain we're looking at
-                            
-                                    position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
-                                    new_aligned_seq= new_aligned_seq[:residue_data_af2_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_af2_0[id]+1:] 
-    
-                            f.write(new_aligned_seq+"\n")
+                                new_aligned_seq="-"*(len(mpnn_sequence_no_colons))  #Make a gap sequence of the length of the sequence..
+                                trb_chain=[x for x in residue_data_control_1 if x[0][0]==chain]
+                                first_residue_in_trb=trb_chain[0][1]
+                                for id, pos in enumerate(residue_data_control_1):
+                                    if pos[0]==chain: #If position chain corresponds to the chain we're looking at
+                                
+                                        position_to_copy=residue_data_control_1[id][1]-1 #minus 1 because this is 1-indexed while the sequence is 0 indexed
+                                        new_aligned_seq= new_aligned_seq[:residue_data_af2_0[id]] + line_without_insertions[position_to_copy-first_residue_in_trb+1] +  new_aligned_seq[residue_data_af2_0[id]+1:] 
+        
+                                f.write(new_aligned_seq+"\n")
     
     #delete empty lines that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed, but it doesn't really slow things that much.
     with open(output,'r+') as output_file:
@@ -304,7 +363,7 @@ def merge_csv(output_dir, output_csv, scores_csv):
 
 
 
-def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False):
+def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False):
 
     
     # Preparing paths to acces correct files
@@ -315,15 +374,18 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
     os.makedirs(dir_renamed_pdb, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
 
     trb_file = os.path.join(rfdiff_out_dir, f"_{trb_num}.trb") #name of corresponding trb file 
-    try:
+    skipRfDiff = cfg.get("skipRfDiff", False)
+    designable_residues = cfg.get("designable_residues", None)
+    if not skipRfDiff:
         with open(trb_file, 'rb') as f:
             trb_dict = pickle.load(f)
         if 'complex_con_ref_idx0' in trb_dict:
             residue_data_af2 = trb_dict['complex_con_hal_idx0']
         else:
             residue_data_af2 = trb_dict['con_hal_idx0']
-    except FileNotFoundError:
-        print('could not find trb_file, probably due to SkipRFdiff=True')
+    else:
+        chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(control_structure_path, designable_residues)
+        residue_data_af2= [x + (chainResidOffset[chain] -1) for chain, x in con_hal_pdb_idx_complete]
 
     json_files = glob.glob(os.path.join(model_i, 'T*000.json'))
     rfdiff_pdb_path = os.path.join(rfdiff_out_dir, f"_{trb_num}.pdb")
@@ -351,7 +413,7 @@ def rename_pdb_create_csv(output_dir, rfdiff_out_dir, trb_num, model_i, control_
         except NameError:
             plddt_sculpted=-1
 
-        rmsd_list, linker_length = calculate_RMSD_linker_len(trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry, model_monomer)
+        rmsd_list, linker_length = calculate_RMSD_linker_len(cfg, trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry, model_monomer)
         pae = round((np.mean(params['pae'])), 2)
 
         #if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
@@ -572,6 +634,8 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None, cycle
             else:
                 con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
             # Process con_hal_idx to extract chain ids and indices
+        else:
+            con_hal_idx=con_hal_pdb_idx_complete
 
         # fixed_res should never be empty, otherwise ProteinMPNN will throw a KeyError fixed_position_dict[b['name']][letter]
         # We need to set blank fixed_res for each generated chain (based on contig).
@@ -592,6 +656,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None, cycle
                                         #Partial diffusion and a provided seq to mantain. This way we can pass those residues as fixed which for some reason
                                         #RFDiff doesn't. This might be broken as hell. 
         #for chain, idx in con_hal_pdb_idx_complete: 
+
         for chain, idx in con_hal_idx:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
             if not skipRfDiff:

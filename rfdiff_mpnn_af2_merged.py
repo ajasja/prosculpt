@@ -378,7 +378,7 @@ def do_cycling(cfg):
                             trb_file=os.path.join(cfg.rfdiff_out_dir, "_"+str(rf_model_num)+".trb") #
                             print (a3m_filename)
                             custom_a3m_path=os.path.join(model_dir,a3m_filename)
-                            prosculpt.make_alignment_file(trb_file,mpnn_seq,cfg.a3m_dir,custom_a3m_path)
+                            prosculpt.make_alignment_file(cfg,trb_file,cfg.pdb_path,mpnn_seq,cfg.a3m_dir,custom_a3m_path)
                             input_a3m_files.append(custom_a3m_path)
 
                 for a3m_file in input_a3m_files:
@@ -458,9 +458,9 @@ def final_operations(cfg):
         trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\\d+)") #get 0 from model_0 using reg exp
 
         if 'pdb_path' in cfg:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
+            prosculpt.rename_pdb_create_csv(cfg, cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
         else:
-            prosculpt.rename_pdb_create_csv(cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
+            prosculpt.rename_pdb_create_csv(cfg, cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
             
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
@@ -528,6 +528,8 @@ crash_at_cycle = 0 # Added through command line. In which cycle should the test 
 
 @hydra.main(version_base=None, config_path="config", config_name="run")
 def prosculptApp(cfg: DictConfig) -> None:
+
+
     log.info("Hydrić")
     log.info("The following configuration was passed: \n" + OmegaConf.to_yaml(cfg))
 
