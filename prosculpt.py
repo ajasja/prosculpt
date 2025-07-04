@@ -204,6 +204,7 @@ def make_alignment_file(cfg, trb_path,pdb_file,mpnn_seq,alignments_path,output):
 
     skipRfDiff = cfg.get("skipRfDiff", False)
     designable_residues = cfg.get("designable_residues", None)
+    chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(pdb_file, designable_residues)
 
     if not skipRfDiff:
         with open(trb_path, 'rb') as f:
@@ -215,13 +216,31 @@ def make_alignment_file(cfg, trb_path,pdb_file,mpnn_seq,alignments_path,output):
             residue_data_control_1 = trb_dict['complex_con_ref_pdb_idx']
             #residue_data_af2_1 = trb_dict['complex_con_hal_pdb_idx']
         else:
+
+            partial_diffusion = cfg.get("partial_diffusion", False)
+            if not partial_diffusion:
+                residue_data_af2_0 = trb_dict['con_hal_idx0']
+                residue_data_control_1 = trb_dict['con_ref_pdb_idx']
+            else: #When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
+                    #con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
+                    #based on the inpaint_seq
+                residue_data_control_1=[]
+                residue_data_af2_0=[]
+                
+                for id0, value in enumerate(trb_dict["inpaint_seq"]):
+                    if value==True:
+                        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                        for key in abeceda:
+                            if key in chainResidOffset:
+                                if id0 >= chainResidOffset[key]:
+                                    currentResidueChain=key
+                        residue_data_control_1.append((currentResidueChain,id0+chainResidOffset[currentResidueChain]))
+                        residue_data_af2_0.append(id0)
+                
             #residue_data_control_0 = trb_dict['con_ref_idx0']
-            residue_data_af2_0 = trb_dict['con_hal_idx0']
-            residue_data_control_1 = trb_dict['con_ref_pdb_idx']
+
             #residue_data_af2_1 = trb_dict['con_hal_pdb_idx']
     else:
-        
-        chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(pdb_file, designable_residues)
         residue_data_af2_0= [x + (chainResidOffset[chain] -1) for chain, x in con_hal_pdb_idx_complete]
         residue_data_control_1=con_hal_pdb_idx_complete
         print(residue_data_af2_0)
