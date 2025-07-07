@@ -80,6 +80,7 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
             af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
             rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
             af2_sculpted_coords = np.array(af2_sculpted_coords)
+
             rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
             print([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),-1,round(rmsd_all_fixed, 1)])
             return([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),-1,round(rmsd_all_fixed, 1)],  -1)
@@ -106,7 +107,25 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
         #selected_residues_in_fixed_chains=trb_dict['receptor_con_hal_idx0'] #This actually doesn't work and I think it's a bug in RFDiff
         selected_residues_in_fixed_chains=[res for res in selected_residues_data if res not in selected_residues_in_designed_chains]
     else:
-        selected_residues_data = trb_dict['con_hal_idx0']
+        partial_diffusion = cfg.get("partial_diffusion", False)
+        if not partial_diffusion:
+            selected_residues_data = trb_dict['con_hal_idx0']
+        else: #When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
+                    #con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
+                    #based on the inpaint_seq
+            selected_residues_data=[]
+
+            chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(cfg.pdb_path, designable_residues)
+            for id0, value in enumerate(trb_dict["inpaint_seq"]):
+                if value==True:
+                    abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                    for key in abeceda:
+                        if key in chainResidOffset:
+                            if id0 >= chainResidOffset[key]:
+                                currentResidueChain=key
+                    #residue_data_control_1.append((currentResidueChain,id0+chainResidOffset[currentResidueChain]))
+                    selected_residues_data.append(id0)
+        
         selected_residues_in_fixed_chains=[]
         selected_residues_in_designed_chains=selected_residues_data
 
@@ -159,7 +178,7 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
 
     #Align all reference residues if there are no fixed chains. Otherwise, align only fixed chains.  (Very nice because fully fixed chains should be a stable reference)
     #then get rmsd_all_fixed and rmsd_sculpted (If any)
-    superimposer = SVDSuperimposer()
+    #superimposer = SVDSuperimposer()
     rfdiff_all_fixed_coords = np.array([a.coord for a in rfdiff_all_fixed_res])
     af2_all_fixed_coords = np.array([a.coord for a in af2_all_fixed_res])
 
@@ -170,10 +189,12 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
     af2_motif_res_coords=np.array([a.coord for a in af2_motif_res])
 
     if len(rfdiff_fixed_chain_coords)==0: #(there are no fixed chains)
-        if len(rfdiff_all_fixed_coords)!=0: #(There are no fixed residues at all)
+        if len(rfdiff_all_fixed_coords)!=0: #(There are fixed residues at all)
             superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
             superimposer.run() 
             rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
+        else:
+            rmsd_all_fixed=-1
     else:
         superimposer.set(rfdiff_fixed_chain_coords, af2_fixed_chain_coords)
         superimposer.run()
@@ -181,12 +202,15 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
         rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
     
 
-    if True in trb_dict['inpaint_seq']: #There are non-redesigned models
+    if True in trb_dict['inpaint_seq']: #There are non-redesigned residues
         rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
         af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
 
         rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
         af2_sculpted_coords = np.array(af2_sculpted_coords)
+
+        #superimposer.set(rfdiff_all_coords, af2_all_coords)
+        #superimposer.run()
 
         rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
         if (len(rfdiff_motif_res_coords)!=0):
