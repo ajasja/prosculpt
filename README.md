@@ -52,7 +52,7 @@ Also replace the prosculpt_python_path with the python path of your prosculpt en
 
 Now we will run a single test, to allow colabfold to download the weights by executing: (This step uses slurm. If your system doesn't use slurm, just run prosculpt by yourself once)
 ```bash
-python run_tests.py unconditional
+python run_tests.py -t unconditional
 ```
 After this has succesfully ran, you can run all tests by executing:
 ```bash
