@@ -14,26 +14,25 @@ The main steps are as follows:
 7. The final output is a CSV file containing AF2 structure path, evaluation parameters etc.
 
 ## Requirements  
-The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionally, os, glob, re, and shutil packages should be installed (these are all part of Python Standard Library and are pre-installed), as well as biopython, hydra-core, pandas and scipy.  
+The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionall biopython, hydra-core, pandas and scipy and pyRosetta are required.  
 
 For running tests, Python version must be >= 3.7 (it needs the `capture_output` arg).
 
-# Using the new _merged code
 ## Installation
-The easiest way to install prosculpt is using a container manager like singularity. To do so, follow these instructions
+The easiest way to install prosculpt is using a container manager like [apptainer](https://apptainer.org/) (or singularity). To do so, follow these instructions
 
 Begin by cloning prosculpt:
 ```bash
 git clone https://github.com/ajasja/prosculpt.git
+cd prosculpt
 ```
 Create a new conda environment called prosculpt (or any name of your choice) and activate it:
 ```bash
 python -m venv prosculpt_venv/
 source prosculpt_venv/bin/activate
 ```
-Go into the prosculpt folder and install it and its dependencies
+Install it and its dependencies
 ```bash
-cd prosculpt
 pip install .
 ```
 Install pyrosetta into the environment
@@ -60,7 +59,7 @@ After this has succesfully ran, you can run all tests by executing:
 python run_tests.py
 ```
 
-#After all tests are finished, go into the Examples/Examples_out_{yourdatetime} and check the output txt file to verify all tests have passed. 
+After all tests are finished, go into the Examples/Examples_out_{yourdatetime} and check the output txt file to verify all tests have passed. 
 
 
 
