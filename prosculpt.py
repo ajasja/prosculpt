@@ -408,7 +408,6 @@ def merge_csv(output_dir, output_csv, scores_csv):
 
 def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False):
 
-    
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "") # add / to path to access json files within
 
@@ -419,13 +418,35 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
     trb_file = os.path.join(rfdiff_out_dir, f"_{trb_num}.trb") #name of corresponding trb file 
     skipRfDiff = cfg.get("skipRfDiff", False)
     designable_residues = cfg.get("designable_residues", None)
+    partial_diffusion = cfg.get("partial_diffusion", False)
+    
     if not skipRfDiff:
         with open(trb_file, 'rb') as f:
             trb_dict = pickle.load(f)
-        if 'complex_con_ref_idx0' in trb_dict:
-            residue_data_af2 = trb_dict['complex_con_hal_idx0']
-        else:
-            residue_data_af2 = trb_dict['con_hal_idx0']
+
+        if not partial_diffusion:
+            if 'complex_con_ref_idx0' in trb_dict:
+                residue_data_af2 = trb_dict['complex_con_hal_idx0']
+            else:
+                residue_data_af2 = trb_dict['con_hal_idx0']
+        else: #When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
+                #con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
+                #based on the inpaint_seq
+            residue_data_af2=[]
+            abeceda='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(control_structure_path, designable_residues)
+            for id0, value in enumerate(trb_dict["inpaint_seq"]):
+                
+                if value==True:
+                    
+                    for key in abeceda:
+                        if key in chainResidOffset:
+                            
+                            if id0 >= chainResidOffset[key]:
+                                currentResidueChain=key
+                    residue_data_af2.append(id0)
+                    #residue_data_af2.append((currentResidueChain,id0+chainResidOffset[currentResidueChain]))
+
     else:
         chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(control_structure_path, designable_residues)
         residue_data_af2= [x + (chainResidOffset[chain] -1) for chain, x in con_hal_pdb_idx_complete]
@@ -452,6 +473,7 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
 
         try:
             plddt_sculpted_list=[plddt_list[i] for i in range(0,len(plddt_list)) if i not in residue_data_af2]
+    
             plddt_sculpted=int(np.mean(plddt_sculpted_list))
         except NameError:
             plddt_sculpted=-1
