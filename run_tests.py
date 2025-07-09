@@ -13,7 +13,8 @@ parser.add_argument('-d', '--dry-run', action="store_true", help="Do not run any
 
 
 args=parser.parse_args()
-os.makedirs("Examples/Examples_out/", exist_ok=True)
+out_folder=f"Examples_out_{datetime.datetime.now().strftime('%y-%m-%d-%H-%M-%S')}"
+os.makedirs(f"Examples/{out_folder}", exist_ok=True)
 
 if args.list:
     print("Available tests:")
@@ -37,7 +38,8 @@ slurm_job_list=[]
 for test_file in test_file_list:
     print("Running "+ test_file)
     if not args.dry_run:
-        process_output=subprocess.run(["sh",test_file],capture_output=True,text=True)
+        command=f"sh {test_file} ++output_dir='Examples/{out_folder}/{test_file.split("/")[1].split(".")[0]}'"
+        process_output=subprocess.run(command, shell=True,capture_output=True,text=True)
         for line in process_output.stdout.split("\n"):
             if "Submitted batch job" in line:
                 print(line)
@@ -56,12 +58,10 @@ for id, job in enumerate(slurm_job_list):
         
 #subprocess.run(command)
 if not args.dry_run:
-    os.system(f"sbatch -d afterany{jobs_string} -J test_check --exclude=compute-0-[1-10] slurm_verify_tests.sh") # compute-0-5 fails to run python (command not found, although PATH is correct). compute-0-2 and compute-0-10 also fail (python not found; if I provide the full path to my .venv python, no such file or directory). Thus, we exclude all compute-0- nodes from 1 to 10.
-    
+    os.system(f"sbatch -d afterany{jobs_string} -J test_check slurm_verify_tests.sh Examples/{out_folder}") # compute-0-5 fails to run python (command not found, although PATH is correct). compute-0-2 and compute-0-10 also fail (python not found; if I provide the full path to my .venv python, no such file or directory). Thus, we exclude all compute-0- nodes from 1 to 10.
+    with open(f"Examples/{out_folder}/test_verification_output.txt","w+") as output_file:
+        output_file.write("Started running tests: "+datetime.datetime.now().strftime('%d/%m/%y %H:%M:%S.%f')+"\n")
 
-with open("Examples/Examples_out/test_verification_output.txt","w+") as output_file:
-    output_file.write("Started running tests: "+datetime.datetime.now().strftime('%d/%m/%y %H:%M:%S.%f')+"\n")
-
-            
+                
 
 

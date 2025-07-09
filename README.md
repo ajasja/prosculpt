@@ -14,17 +14,55 @@ The main steps are as follows:
 7. The final output is a CSV file containing AF2 structure path, evaluation parameters etc.
 
 ## Requirements  
-The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionally, os, glob, re, and shutil packages should be installed (these are all part of Python Standard Library and are pre-installed), as well as biopython, hydra-core, pandas and scipy.  
+The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionall biopython, hydra-core, pandas and scipy and pyRosetta are required.  
 
 For running tests, Python version must be >= 3.7 (it needs the `capture_output` arg).
 
-# Using the new _merged code
 ## Installation
+The easiest way to install prosculpt is using a container manager like [apptainer](https://apptainer.org/) (or singularity). To do so, follow these instructions
+
+Begin by cloning prosculpt:
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install biopython hydra-core pandas scipy
+git clone https://github.com/ajasja/prosculpt.git
+cd prosculpt
 ```
+Create a new environment called prosculpt (or any name of your choice) using python or any venv manager and activate it:
+```bash
+python -m venv prosculpt_venv/
+source prosculpt_venv/bin/activate
+```
+Install it and its dependencies
+```bash
+pip install .
+```
+Install pyrosetta into the environment
+```bash
+pip install pyrosetta-installer 
+python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
+```
+At a location of your choice download the appropriate SIF files, executing the following commands:
+```bash
+singularity pull rfdiff.sif docker://rosettacommons/rfdiffusion
+singularity pull proteinmpnn_jysgro.sif docker://jysgro/proteinmpnn
+singularity pull colabfold.sif docker://unionbio/colabfold:w4KMVR7WrKDlCbdQ1BYrjQ-test
+singularity pull pymol.sif docker://jysgro/pymol:3.1.0_amd_arm
+```
+Go into prosculpt/config/installation.yaml and replace the run command of the sif files with the appropriate commands and paths for your system.
+Also replace the prosculpt_python_path with the python path of your prosculpt env (You can get it by running "which python" with the env active)
+
+Now we will run a single test, to allow colabfold to download the weights by executing: (This step uses slurm. If your system doesn't use slurm, just run prosculpt by yourself once)
+```bash
+python run_tests.py -t unconditional
+```
+After this has succesfully ran, you can run all tests by executing:
+```bash
+python run_tests.py
+```
+
+After all tests are finished, go into the Examples/Examples_out_{yourdatetime} and check the output txt file to verify all tests have passed. 
+
+
+
 
 ## Usage
 To run Prosculpt on Slurm, use the `slurm_runner.py` with the following positional arguments:

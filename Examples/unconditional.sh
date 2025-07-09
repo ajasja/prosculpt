@@ -1,1 +1,1 @@
-python slurm_runner.py 1 Unconditional output_dir="Examples/Examples_out/unconditional"  +sampling_temp=0.1 +backbone_noise=0.0 model_order=\'1,2\' "contig=\[150-150\]"
+python slurm_runner.py 1 Unconditional $1 +sampling_temp=0.1 +backbone_noise=0.0 model_order=\'1,2\' "contig=\[150-150\]"

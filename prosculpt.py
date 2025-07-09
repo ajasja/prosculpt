@@ -57,7 +57,7 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
             all_rfdiff_res = list(structure_rfdiff.get_residues()) #obtain a list of all the residues in the structure, structure_control is object
             all_rfdiff_res_ca= [ind['CA'] for ind in all_rfdiff_res]     
             
-            superimposer = SVDSuperimposer()
+            superimposer = SVDSuperimposer()    
             rfdiff_all_coords =  np.array([a.coord for a in all_rfdiff_res_ca])
             af2_all_coords =  np.array([a.coord for a in all_af2_res_ca])
                     
@@ -80,6 +80,7 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
             af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
             rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
             af2_sculpted_coords = np.array(af2_sculpted_coords)
+
             rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
             print([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),-1,round(rmsd_all_fixed, 1)])
             return([round(rmsd, 1),round(rmsd_all_fixed, 1),round(rmsd_sculpted, 1),-1,round(rmsd_all_fixed, 1)],  -1)
@@ -106,7 +107,25 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
         #selected_residues_in_fixed_chains=trb_dict['receptor_con_hal_idx0'] #This actually doesn't work and I think it's a bug in RFDiff
         selected_residues_in_fixed_chains=[res for res in selected_residues_data if res not in selected_residues_in_designed_chains]
     else:
-        selected_residues_data = trb_dict['con_hal_idx0']
+        partial_diffusion = cfg.get("partial_diffusion", False)
+        if not partial_diffusion:
+            selected_residues_data = trb_dict['con_hal_idx0']
+        else: #When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
+                    #con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
+                    #based on the inpaint_seq
+            selected_residues_data=[]
+
+            chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(cfg.pdb_path, designable_residues)
+            for id0, value in enumerate(trb_dict["inpaint_seq"]):
+                if value==True:
+                    abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                    for key in abeceda:
+                        if key in chainResidOffset:
+                            if id0 >= chainResidOffset[key]:
+                                currentResidueChain=key
+                    #residue_data_control_1.append((currentResidueChain,id0+chainResidOffset[currentResidueChain]))
+                    selected_residues_data.append(id0)
+        
         selected_residues_in_fixed_chains=[]
         selected_residues_in_designed_chains=selected_residues_data
 
@@ -159,7 +178,7 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
 
     #Align all reference residues if there are no fixed chains. Otherwise, align only fixed chains.  (Very nice because fully fixed chains should be a stable reference)
     #then get rmsd_all_fixed and rmsd_sculpted (If any)
-    superimposer = SVDSuperimposer()
+    #superimposer = SVDSuperimposer()
     rfdiff_all_fixed_coords = np.array([a.coord for a in rfdiff_all_fixed_res])
     af2_all_fixed_coords = np.array([a.coord for a in af2_all_fixed_res])
 
@@ -170,10 +189,12 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
     af2_motif_res_coords=np.array([a.coord for a in af2_motif_res])
 
     if len(rfdiff_fixed_chain_coords)==0: #(there are no fixed chains)
-        if len(rfdiff_all_fixed_coords)!=0: #(There are no fixed residues at all)
+        if len(rfdiff_all_fixed_coords)!=0: #(There are fixed residues at all)
             superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)      
             superimposer.run() 
             rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
+        else:
+            rmsd_all_fixed=-1
     else:
         superimposer.set(rfdiff_fixed_chain_coords, af2_fixed_chain_coords)
         superimposer.run()
@@ -181,12 +202,15 @@ def calculate_RMSD_linker_len (cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_
         rmsd_all_fixed = get_rmsd_from_coords(rfdiff_all_fixed_coords, af2_all_fixed_coords, superimposer.rot, superimposer.tran)
     
 
-    if True in trb_dict['inpaint_seq']: #There are non-redesigned models
+    if True in trb_dict['inpaint_seq']: #There are non-redesigned residues
         rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
         af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
 
         rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
         af2_sculpted_coords = np.array(af2_sculpted_coords)
+
+        #superimposer.set(rfdiff_all_coords, af2_all_coords)
+        #superimposer.run()
 
         rmsd_sculpted = get_rmsd_from_coords(rfdiff_sculpted_coords, af2_sculpted_coords, superimposer.rot, superimposer.tran)
         if (len(rfdiff_motif_res_coords)!=0):
@@ -204,6 +228,7 @@ def make_alignment_file(cfg, trb_path,pdb_file,mpnn_seq,alignments_path,output):
 
     skipRfDiff = cfg.get("skipRfDiff", False)
     designable_residues = cfg.get("designable_residues", None)
+    chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(pdb_file, designable_residues)
 
     if not skipRfDiff:
         with open(trb_path, 'rb') as f:
@@ -215,13 +240,31 @@ def make_alignment_file(cfg, trb_path,pdb_file,mpnn_seq,alignments_path,output):
             residue_data_control_1 = trb_dict['complex_con_ref_pdb_idx']
             #residue_data_af2_1 = trb_dict['complex_con_hal_pdb_idx']
         else:
+
+            partial_diffusion = cfg.get("partial_diffusion", False)
+            if not partial_diffusion:
+                residue_data_af2_0 = trb_dict['con_hal_idx0']
+                residue_data_control_1 = trb_dict['con_ref_pdb_idx']
+            else: #When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
+                    #con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
+                    #based on the inpaint_seq
+                residue_data_control_1=[]
+                residue_data_af2_0=[]
+                
+                for id0, value in enumerate(trb_dict["inpaint_seq"]):
+                    if value==True:
+                        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                        for key in abeceda:
+                            if key in chainResidOffset:
+                                if id0 >= chainResidOffset[key]:
+                                    currentResidueChain=key
+                        residue_data_control_1.append((currentResidueChain,id0+chainResidOffset[currentResidueChain]))
+                        residue_data_af2_0.append(id0)
+                
             #residue_data_control_0 = trb_dict['con_ref_idx0']
-            residue_data_af2_0 = trb_dict['con_hal_idx0']
-            residue_data_control_1 = trb_dict['con_ref_pdb_idx']
+
             #residue_data_af2_1 = trb_dict['con_hal_pdb_idx']
     else:
-        
-        chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(pdb_file, designable_residues)
         residue_data_af2_0= [x + (chainResidOffset[chain] -1) for chain, x in con_hal_pdb_idx_complete]
         residue_data_control_1=con_hal_pdb_idx_complete
         print(residue_data_af2_0)
@@ -365,7 +408,6 @@ def merge_csv(output_dir, output_csv, scores_csv):
 
 def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False):
 
-    
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "") # add / to path to access json files within
 
@@ -376,13 +418,35 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
     trb_file = os.path.join(rfdiff_out_dir, f"_{trb_num}.trb") #name of corresponding trb file 
     skipRfDiff = cfg.get("skipRfDiff", False)
     designable_residues = cfg.get("designable_residues", None)
+    partial_diffusion = cfg.get("partial_diffusion", False)
+    
     if not skipRfDiff:
         with open(trb_file, 'rb') as f:
             trb_dict = pickle.load(f)
-        if 'complex_con_ref_idx0' in trb_dict:
-            residue_data_af2 = trb_dict['complex_con_hal_idx0']
-        else:
-            residue_data_af2 = trb_dict['con_hal_idx0']
+
+        if not partial_diffusion:
+            if 'complex_con_ref_idx0' in trb_dict:
+                residue_data_af2 = trb_dict['complex_con_hal_idx0']
+            else:
+                residue_data_af2 = trb_dict['con_hal_idx0']
+        else: #When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
+                #con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
+                #based on the inpaint_seq
+            residue_data_af2=[]
+            abeceda='ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+            chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(control_structure_path, designable_residues)
+            for id0, value in enumerate(trb_dict["inpaint_seq"]):
+                
+                if value==True:
+                    
+                    for key in abeceda:
+                        if key in chainResidOffset:
+                            
+                            if id0 >= chainResidOffset[key]:
+                                currentResidueChain=key
+                    residue_data_af2.append(id0)
+                    #residue_data_af2.append((currentResidueChain,id0+chainResidOffset[currentResidueChain]))
+
     else:
         chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(control_structure_path, designable_residues)
         residue_data_af2= [x + (chainResidOffset[chain] -1) for chain, x in con_hal_pdb_idx_complete]
@@ -409,6 +473,7 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
 
         try:
             plddt_sculpted_list=[plddt_list[i] for i in range(0,len(plddt_list)) if i not in residue_data_af2]
+    
             plddt_sculpted=int(np.mean(plddt_sculpted_list))
         except NameError:
             plddt_sculpted=-1
@@ -589,6 +654,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None, cycle
     pdb_files = Path(pdb_path).glob("*.pdb")
 
     contig = cfg.contig
+    abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 
     for pdb_file in pdb_files:
         
@@ -632,14 +698,30 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None, cycle
             if 'complex_con_hal_pdb_idx' in trb_data:
                 con_hal_idx = trb_data.get('complex_con_hal_pdb_idx', []) #con_hal_pdb_idx #complex_con_hal_pdb_idx
             else:
-                con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
+                partial_diffusion = cfg.get("partial_diffusion", False)
+                if not partial_diffusion:
+                    con_hal_idx = trb_data.get('con_hal_pdb_idx', [])
+                else: #When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
+                    #con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
+                    #based on the inpaint_seq
+                    con_hal_idx=[]
+                    for id0, value in enumerate(trb_data["inpaint_seq"]):
+                        if value==True:
+                            for key in abeceda:
+                                if key in chainResidOffset:
+                                    
+                                    if id0 >= chainResidOffset[key]:
+                                        currentResidueChain=key
+                            con_hal_idx.append((currentResidueChain,id0+chainResidOffset[currentResidueChain]))
+                
             # Process con_hal_idx to extract chain ids and indices
         else:
             con_hal_idx=con_hal_pdb_idx_complete
 
+        
         # fixed_res should never be empty, otherwise ProteinMPNN will throw a KeyError fixed_position_dict[b['name']][letter]
         # We need to set blank fixed_res for each generated chain (based on contig).
-        abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        
 
         if cfg.inference.symmetry!=None: #if we find symmetry:
             breaks = int(cfg.inference.symmetry[1:])
@@ -651,11 +733,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths = None, cycle
 
 
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
-        #for chain, idx in con_hal_idx: #ByFederico: this is a test. Since we're already filtering by inpaint_seq we don't need to use the 
-                                        #prefiltered con_hal_idx and we can use the full one that we recomputed before. This is necessary for the case with 
-                                        #Partial diffusion and a provided seq to mantain. This way we can pass those residues as fixed which for some reason
-                                        #RFDiff doesn't. This might be broken as hell. 
-        #for chain, idx in con_hal_pdb_idx_complete: 
+
 
         for chain, idx in con_hal_idx:
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)

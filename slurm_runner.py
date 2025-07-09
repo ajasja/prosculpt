@@ -9,26 +9,19 @@ parser=argparse.ArgumentParser(epilog=('#### Any other arguments passed will be 
 
 parser.add_argument('num_tasks', help='Number of concurrent jobs to run.')
 parser.add_argument('name', help='Desired task name')
+parser.add_argument('-p', '--partition', default='gpu' ,help='GPU resource name')
+parser.add_argument('-g', '--gres', default='gpu:A40:1' ,help='GPU resource name')
 parser.add_argument('-d', '--dry-run', action="store_true", help="Print command but do not run.")
 args=parser.parse_known_args() #This allows us to pass any other arguments further to prosculpt
-
-
-WIDTH = 80
-SYMBOL = "⁝"
-print("".center(WIDTH, SYMBOL))
-print(" prosculpt2slurm ".center(WIDTH, SYMBOL))
-print("".center(WIDTH, SYMBOL))
-print("Please make sure your first argument was the number of concurrent jobs you want to run and the second argument was the desired name of the slurm task. After that, add the arguments that will be passed as-is to the _merged script.")
-print("".center(WIDTH, SYMBOL))
 
 slurm_runner_path= os.path.dirname(os.path.realpath(__file__))
 current_path= os.getcwd()
 
 n = int(args[0].num_tasks)
 task_name = args[0].name
+partition = args[0].partition
+gres= args[0].gres
 
-if task_name[:11] == "output_dir=":
-    print(f"!!! Are you sure you want to name your slurm job {task_name}? Anyway, continuing ...")
 
 out_command_file = f"ps2slurm_{task_name}_{int(time.time())}.txt"
 
@@ -80,11 +73,11 @@ except:
 
 if not args[0].dry_run:
     #Exclude is there because that node was working incredibly slow
-    exit_code = os.system(f"export GROUP_SIZE=1; sbatch --exclude={exclude_nodes} --partition=gpu --gres=gpu:A40:1 --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}")
+    exit_code = os.system(f"export GROUP_SIZE=1; sbatch --exclude={exclude_nodes} --partition={partition} --gres={gres} --ntasks=1 --cpus-per-task=2 --output slurm-%A_%a_{task_name}.out --error slurm-%A_%a_{task_name}.out -J {task_name}  -a 1-{n} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}")
     if exit_code == 0:
-        print(f"Job {task_name} has been submitted to slurm with code {exit_code}".center(WIDTH, SYMBOL))
+        print(f"Job {task_name} has been submitted to slurm with code {exit_code}")
     else:
-        print(f"Job submission failed with code {exit_code}".center(WIDTH, "-"))
+        print(f"Job submission failed with code {exit_code}")
     # Although we can pass --exclude from a file direclty (--exclude=config/hpc_exclude_nodes.txt), it fails if file is empty or doesn't exist.
 else:
     print("Command wasn't run because --dry-run was active.")
