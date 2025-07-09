@@ -28,8 +28,8 @@ git clone https://github.com/ajasja/prosculpt.git
 ```
 Create a new conda environment called prosculpt (or any name of your choice) and activate it:
 ```bash
-conda create -n "prosculpt" python=3.12
-conda activate prosculpt 
+python -m venv prosculpt_venv/
+source prosculpt_venv/bin/activate
 ```
 Go into the prosculpt folder and install it and its dependencies
 ```bash
