@@ -13,7 +13,7 @@ colabfold_preparation_script: /home/folivieri/singularity_prosculpt/af2_preparat
 colabfold_run_command: singularity run --nv /home/folivieri/singularity_prosculpt/colabfold.sif colabfold_batch
 
 pymol_python_path: singularity exec /home/folivieri/singularity_prosculpt/pymol.sif /usr/bin/python3.13
-prosculpt_python_path: /home/aljubetic/conda/envs/pyro/bin/python
+prosculpt_python_path: /home/folivieri/miniforge3/envs/prosculpt_test/bin/python
 
 boltz2_run_command: #not yet implemented
 chain1_run_command: #not yet implemented

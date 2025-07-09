@@ -5,15 +5,15 @@ rfdiff_run_command:  >-
                       singularity run --nv 
                       -B {OUTPUT_PATH}:/output 
                       -B {OUTPUT_PATH}/schedules:/app/RFdiffusion/schedules 
-                      --writable-tmpfs ../sif_files/rfdiff.sif 
+                      --writable-tmpfs /home/folivieri/singularity_prosculpt/rfdiff.sif 
 
-mpnn_run_command: singularity exec ../sif_files/proteinmpnn_jysgro.sif python /ProteinMPNN/protein_mpnn_run.py
+mpnn_run_command: singularity exec /home/folivieri/singularity_prosculpt/proteinmpnn_jysgro.sif python /ProteinMPNN/protein_mpnn_run.py
 
-colabfold_preparation_script: ../sif_files/af2_preparation_script.sh
-colabfold_run_command: singularity run --nv ../sif_files/colabfold.sif colabfold_batch
+colabfold_preparation_script: /home/folivieri/singularity_prosculpt/af2_preparation_script.sh
+colabfold_run_command: singularity run --nv /home/folivieri/singularity_prosculpt/colabfold.sif colabfold_batch
 
-pymol_python_path: singularity exec ../sif_files/pymol.sif /usr/bin/python3.13
-prosculpt_python_path: /home/aljubetic/conda/envs/pyro/bin/python
+pymol_python_path: singularity exec /home/folivieri/singularity_prosculpt/pymol.sif /usr/bin/python3.13
+prosculpt_python_path: /home/folivieri/miniforge3/envs/prosculpt_test/bin/python
 
 boltz2_run_command: #not yet implemented
 chain1_run_command: #not yet implemented
