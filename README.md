@@ -18,11 +18,50 @@ For running tests, Python version must be >= 3.7 (it needs the `capture_output` 
 
 # Using the new _merged code
 ## Installation
+The easiest way to install prosculpt is using a container manager like singularity. To do so, follow these instructions
+
+Begin by cloning prosculpt:
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install biopython hydra-core pandas scipy
+git clone https://github.com/ajasja/prosculpt.git
 ```
+Create a new conda environment called prosculpt (or any name of your choice) and activate it:
+```bash
+conda create -n "prosculpt" python=3.12
+conda activate prosculpt 
+```
+Go into the prosculpt folder and install it and its dependencies
+```bash
+cd prosculpt
+pip install .
+```
+Install pyrosetta into the environment
+```bash
+pip install pyrosetta-installer 
+python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
+```
+At a location of your choice download the appropriate SIF files, executing the following commands:
+```bash
+singularity pull rfdiff.sif docker://rosettacommons/rfdiffusion
+singularity pull proteinmpnn_jysgro.sif docker://jysgro/proteinmpnn
+singularity pull colabfold.sif docker://unionbio/colabfold:w4KMVR7WrKDlCbdQ1BYrjQ-test
+singularity pull pymol.sif docker://jysgro/pymol:3.1.0_amd_arm
+```
+Go into prosculpt/config/installation.yaml and replace the run command of the sif files with the appropriate commands and paths for your system.
+Also replace the prosculpt_python_path with the python path of your prosculpt env (You can get it by running "which python" with the env active)
+
+Now we will run a single test, to allow colabfold to download the weights by executing: (This step uses slurm. If your system doesn't use slurm, just run prosculpt by yourself once)
+```bash
+python run_tests.py unconditional
+```
+After this has succesfully ran, you can run all tests by executing:
+```bash
+python run_tests.py
+```
+
+#After all tests are finished, go into the Examples/Examples_out_{yourdatetime} and check the output txt file to verify all tests have passed. 
+
+
+
 
 ## Usage
 To run Prosculpt on Slurm, use the `slurm_runner.py` with the following positional arguments:
