@@ -26,7 +26,7 @@ Begin by cloning prosculpt:
 git clone https://github.com/ajasja/prosculpt.git
 cd prosculpt
 ```
-Create a new conda environment called prosculpt (or any name of your choice) and activate it:
+Create a new environment called prosculpt (or any name of your choice) using python or any venv manager and activate it:
 ```bash
 python -m venv prosculpt_venv/
 source prosculpt_venv/bin/activate
