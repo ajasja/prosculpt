@@ -4,11 +4,13 @@
 rfdiff_run_command:  >- 
                       singularity run --nv 
                       -B {OUTPUT_PATH}:/output 
-                      -B {OUTPUT_PATH}/schedules:/app/RFdiffusion/schedules 
-                      --writable-tmpfs /home/folivieri/singularity_prosculpt/rfdiff.sif 
+                      /home/folivieri/singularity_prosculpt/rfdiff.sif 
+                      inference.schedule_directory_path={OUTPUT_PATH}/schedules
 
+# Do not use the sungularity run command, becuuse the path to helper script files is needed. 
 mpnn_run_command: singularity exec /home/folivieri/singularity_prosculpt/proteinmpnn_jysgro.sif python /ProteinMPNN/protein_mpnn_run.py
 
+# bash script that runs before colabfold and sets up the enviorment. Can be set to None.
 colabfold_preparation_script: /home/folivieri/singularity_prosculpt/af2_preparation_script.sh
 colabfold_run_command: singularity run --nv /home/folivieri/singularity_prosculpt/colabfold.sif colabfold_batch
 
