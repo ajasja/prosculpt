@@ -13,6 +13,7 @@ mpnn_run_command: singularity exec --nv /home/folivieri/singularity_prosculpt/pr
 
 # bash script that runs before colabfold and sets up the enviorment. Can be set to None.
 colabfold_preparation_script: /home/folivieri/singularity_prosculpt/af2_preparation_script.sh
+# path to af2 model weights can be set by including the --data /path/to/af2/folder. By default ~/.cache is used.
 colabfold_run_command: singularity run --nv /home/folivieri/singularity_prosculpt/colabfold.sif colabfold_batch
 
 pymol_python_path: singularity exec /home/folivieri/singularity_prosculpt/pymol.sif /usr/bin/python3.13
