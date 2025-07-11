@@ -1,4 +1,3 @@
-print("Is this even working?", flush=True)
 import argparse
 import os
 import pandas as pd 
@@ -48,6 +47,6 @@ with open(os.path.join(directory,"test_verification_output.txt"), "a+") as outpu
                     print("final_output does not exist")
                     output_file.write("Test "+ test_folder + " failed. Missing final_output.csv\n")
 
-    print("penultimate line")
+        
     output_file.write("Finished running and verifying tests: "+datetime.datetime.now().strftime('%d/%m/%y %H:%M:%S.%f')+"\n")
 print("Finished running test verification script: "+datetime.datetime.now().strftime('%d/%m/%y %H:%M:%S.%f'))

@@ -1,1 +1,0 @@
-python slurm_runner.py 1 Binder $1 -cd Examples -cn binder

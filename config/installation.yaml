@@ -17,3 +17,13 @@ colabfold_run_command: singularity run --nv /home/folivieri/singularity_prosculp
 
 pymol_python_path: singularity exec /home/folivieri/singularity_prosculpt/pymol.sif /usr/bin/python3.13
 prosculpt_python_path: /home/folivieri/miniforge3/envs/prosculpt_test/bin/python
+
+slurm:
+  #General slurm parameters that apply to every job (they can be overwritten by individual jobs)
+  #Do not specify the --array command here. Use the num_tasks parameter in the job yaml file.
+  partition: gpu 
+  gres: gpu:1
+  exclude: compute-0-10
+  cpus-per-task: 2
+  output: slurm-%A_%a_%x.out
+  error: slurm-%A_%a_%x.err
