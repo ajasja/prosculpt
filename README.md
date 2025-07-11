@@ -67,6 +67,8 @@ After all tests are finished, go into the Examples/Examples_out_{yourdatetime} a
 
 To run Prosculpt on Slurm, use the `slurm_runner.py` passing it an input yaml file with the job options. Note that slurm_runner no longer supports passing arguments inline with the exception of ++output_folder.
 
+`python slurm_runner.py job_parameters.yaml
+
 If you want to run Prosculpt locally, run the `rfdiff_mpnn_af2_merged.py` directly and modify args as needed.
 
 ## Examples
