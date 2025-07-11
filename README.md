@@ -43,7 +43,7 @@ python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 At a location of your choice download the appropriate SIF files, executing the following commands:
 ```bash
 singularity pull rfdiff.sif docker://rosettacommons/rfdiffusion
-singularity pull proteinmpnn_jysgro.sif docker://jysgro/proteinmpnn
+singularity pull proteinmpnn.sif docker://rosettacommons/proteinmpnn
 singularity pull colabfold.sif docker://unionbio/colabfold:w4KMVR7WrKDlCbdQ1BYrjQ-test
 singularity pull pymol.sif docker://jysgro/pymol:3.1.0_amd_arm
 ```
