@@ -1,0 +1,71 @@
+task_name: Minimal_script
+
+
+slurm:
+  #do not specify the --array command here. Use the num_tasks parameter below.
+  exclude: compute-0-10
+  partition: gpu 
+  gres: gpu:A40:1
+  cpus-per-task: 2
+  output: slurm-%A_%a_%x.out
+  error: slurm-%A_%a_%x.err
+  #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
+
+num_tasks: 1 
+
+pdb_path: /home/folivieri/prosculpt/Minimal_Prosculpt_scripts/Project_name/Input_Structure/example.pdb
+output_dir: /home/folivieri/prosculpt/Minimal_Prosculpt_scripts/Project_name/output/ # Path to output directory
+
+
+#contig: "[95-95/A96-105/72-72/0 B178-745]" # Contig to design
+contig: "[69-69/0 B1-108]" # Contig to design
+
+num_designs_rfdiff: 2 # 70 Number of designs to generate with RFdiffusion
+num_seq_per_target_mpnn: 2 # 5 Number of sequences to generate per target with MPNN
+chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
+af2_mpnn_cycles: 1 # Not used yet?
+model_order: 1 # Choose specific models to cycle in af2-mpnn
+chain_break_cutoff_A: 4 # Chain break cutoff in angstroms (default: 2)
+
+omit_AAs: C
+skipRfDiff: False # Whether to skip RfDiff and only redesign a few residues with ProteinMPNN and AF
+designable_residues: [A] # Residues to be redesigned when skipRfDiff == True. Also add letters of all other chains in the PDB you wish to have in the end structure.
+
+model_monomer: True
+use_a3m: True  #If True this tells the program to make an alignment file from the given alignments.
+a3m_dir: /home/folivieri/prosculpt/Minimal_Prosculpt_scripts/Project_name/Alignment_files #If use_a3m is True, then you need to specify the location of the alignment files obtained from the colabfold server.
+
+only_run_analysis: False
+sampling_temp: 0.1
+backbone_noise: 0.0
+
+
+defaults:
+  - installation
+  - _self_
+
+pass_to_rfdiff: # Groups to pass to RfDiff
+- inference
+- potentials
+#- diffuser
+#- contigmap
+
+# Symmetry to sample
+# Available symmetries:
+# - Cyclic symmetry (C_n) # call as c5
+# - Dihedral symmetry (D_n) # call as d5
+# - Tetrahedral symmetry # call as tetrahedral
+# - Octahedral symmetry # call as octahedral
+# - Icosahedral symmetry # call as icosahedral
+#symmetry: c2
+
+inference:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+  #symmetry: null
+potentials:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+#contigmap:
+  #inpaint_seq: [A229/A231/A234/A237/A238] # Without quotes! RfDiff expects contigs as lists, not as strings.
+  #provide_seq: [0-357] #Subtract 1 from residue ID. Separate ranges with commas [62-68,120-120]
+#diffuser: 
+#  partial_T: 15

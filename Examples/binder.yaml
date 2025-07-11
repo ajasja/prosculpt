@@ -1,3 +1,15 @@
+task_name: binder_example
+
+slurm:
+  #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
+  #Do not specify the --array command here. Use the num_tasks parameter below.
+  output: slurm-%A_%a_%x.out 
+  error: slurm-%A_%a_%x.err
+  #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
+  
+
+num_tasks: 1
+
 # Config for the current run
 pdb_path: Examples/input_data/insulin_target.pdb # Path to input PDB file || null when building unconditionally
 #output_dir: Examples/Examples_out/binder/ # Path to output directory

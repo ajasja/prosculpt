@@ -70,6 +70,10 @@ def general_config_prep(cfg):
             cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.designable_residues}))
             log.info(f"Skipping RFdiff, only redesigning chains specified in designable_residues: {cfg.chains_to_design}")
 
+
+        if "inference" not in cfg:
+            cfg.inference={}
+
         if 'symmetry' not in cfg.inference:
             cfg.inference.symmetry=None
 

@@ -18,18 +18,18 @@ os.makedirs(f"Examples/{out_folder}", exist_ok=True)
 
 if args.list:
     print("Available tests:")
-    for sh_file in glob.glob("Examples/*.sh"):
+    for sh_file in glob.glob("Examples/*.yaml"):
         print(sh_file.split("/")[1].split(".")[0])   
     sys.exit()
 
 #Assign either one test or all to the list
 test_file_list=[]
 if args.test:
-    test_filename="Examples/"+args.test+".sh"
+    test_filename="Examples/"+args.test+".yaml"
     assert os.path.exists(test_filename), "Test not found. Use the name without the extension."
     test_file_list.append(test_filename)
 else:
-    for sh_file in glob.glob("Examples/*.sh"):
+    for sh_file in glob.glob("Examples/*.yaml"):
         test_file_list.append(sh_file)
 
 
@@ -38,7 +38,9 @@ slurm_job_list=[]
 for test_file in test_file_list:
     print("Running "+ test_file)
     if not args.dry_run:
-        command=f"sh {test_file} ++output_dir='Examples/{out_folder}/{test_file.split("/")[1].split(".")[0]}'"
+        
+        command=f"python slurm_runner.py {test_file} ++output_dir='Examples/{out_folder}/{test_file.split("/")[1].split(".")[0]}'"
+        print(command)
         process_output=subprocess.run(command, shell=True,capture_output=True,text=True)
         for line in process_output.stdout.split("\n"):
             if "Submitted batch job" in line:

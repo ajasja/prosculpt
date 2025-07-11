@@ -1,1 +1,0 @@
-python slurm_runner.py 1 c2_symmetry $1 -cd Examples -cn c2_symmetry 
