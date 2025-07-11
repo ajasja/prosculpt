@@ -8,7 +8,8 @@ rfdiff_run_command:  >-
                       inference.schedule_directory_path={OUTPUT_PATH}/schedules
 
 # Do not use the sungularity run command, becuuse the path to helper script files is needed. 
-mpnn_run_command: singularity exec /home/folivieri/singularity_prosculpt/proteinmpnn_jysgro.sif python /ProteinMPNN/protein_mpnn_run.py
+#mpnn_run_command: singularity exec /home/folivieri/singularity_prosculpt/proteinmpnn_jysgro.sif python /ProteinMPNN/protein_mpnn_run.py
+mpnn_run_command: singularity exec --nv /home/folivieri/singularity_prosculpt/proteinmpnn.sif python /app/proteinmpnn/protein_mpnn_run.py
 
 # bash script that runs before colabfold and sets up the enviorment. Can be set to None.
 colabfold_preparation_script: /home/folivieri/singularity_prosculpt/af2_preparation_script.sh
