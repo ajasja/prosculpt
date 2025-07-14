@@ -44,6 +44,7 @@ with open(out_command_file, 'w') as f:
         arguments=[]
 
         output_dir=""
+        output_dir_in_args=False
         for argn, arg in enumerate(extra_args):
             if "output_dir" in arg:
                 output_dir_in_args=True
