@@ -51,6 +51,7 @@ def general_config_prep(cfg):
 
     # We want to have all the params in the cfg struct. Thus, use we open_dict to be able to write new data.
     with open_dict(cfg):
+
         cfg.output_dir = str(pathlib.Path(cfg.output_dir).resolve()) # Output dir MUST be absolute, otherwise ProtMPPN complains about missing seq_chain (update: it probably doesn't matter)
         cfg.rfdiff_out_dir = os.path.join(cfg.output_dir, "1_rfdiff")
         cfg.mpnn_out_dir = os.path.join(cfg.output_dir, "2_mpnn")
@@ -69,6 +70,10 @@ def general_config_prep(cfg):
             # We only need to redesign the chains specified in designable_residues
             cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.designable_residues}))
             log.info(f"Skipping RFdiff, only redesigning chains specified in designable_residues: {cfg.chains_to_design}")
+
+
+        if "inference" not in cfg:
+            cfg.inference={}
 
         if 'symmetry' not in cfg.inference:
             cfg.inference.symmetry=None
@@ -116,12 +121,25 @@ def run_rfdiff(cfg):
         log.info("***************Skipping RFdiffusion altogether***************")
         return
 
+    if r"{OUTPUT_PATH}" in cfg.rfdiff_run_command:    
+            rfdiff_run_command=(cfg.rfdiff_run_command).replace(r"{OUTPUT_PATH}", cfg.output_dir)
 
-    rfdiff_cmd_str = f"{cfg.python_path_rfdiff} {cfg.inference_path_rfdiff} \
-          inference.output_prefix={cfg.rfdiff_out_path} \
+            out_path="/output"
+            rfdiff_out_path="/output/1_rfdiff/"
+    else:
+        rfdiff_run_command=cfg.rfdiff_run_command
+        rfdiff_out_path=cfg.rfdiff_out_path
+        out_path=cfg.output_dir
+
+    #os.makedirs(rfdiff_out_path, exist_ok=True)
+    os.makedirs(cfg.output_dir+"/schedules", exist_ok=True)
+
+
+    rfdiff_cmd_str = f"{rfdiff_run_command} \
+          inference.output_prefix={rfdiff_out_path} \
           'contigmap.contigs={cfg.contig}' \
           inference.num_designs={cfg.num_designs_rfdiff} \
-          -cn prosculpt2rfdiff.yaml -cd {cfg.output_dir}"
+          -cn prosculpt2rfdiff.yaml -cd {out_path}"
     run_and_log(rfdiff_cmd_str, cfg=cfg)
     
     log.info("***************After running RFdiffusion***************")
@@ -283,10 +301,12 @@ def do_cycling(cfg):
             print('trb_path is: ', trb_paths)
         #endif
 
+        mpnn_run_command_only_path= (cfg.mpnn_run_command).rsplit('/', 1)[0]
+
         if content_status != 4:
             # All cycles run the same commands
             run_and_log(
-                f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "parse_multiple_chains.py")} \
+                f'{mpnn_run_command_only_path}/helper_scripts/parse_multiple_chains.py \
                 --input_path={input_mpnn} \
                 --output_path={cfg.path_for_parsed_chains}' 
                 , cfg=cfg      
@@ -294,12 +314,12 @@ def do_cycling(cfg):
 
             if cfg.chains_to_design:
                 run_and_log(
-                    f"{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, 'helper_scripts', 'assign_fixed_chains.py')} \
+                    f"{mpnn_run_command_only_path}/helper_scripts/assign_fixed_chains.py \
                         --input_path={cfg.path_for_parsed_chains} \
                         --output_path={cfg.path_for_assigned_chains} \
-                        --chain_list='{cfg.chains_to_design}'"
+                        --chain_list='{cfg.chains_to_design}'" 
                         , cfg=cfg
-                        )
+                    )
                 
             fixed_pos_path = prosculpt.process_pdb_files(input_mpnn, cfg.mpnn_out_dir, cfg, trb_paths, cycle=cycle) # trb_paths is optional (default: None) and only used in non-first cycles
             # trb_paths is atm not used in process_pdb_files anyway -- a different approach is used (file.pdb -> withExtension .trb), which ensures the PDB and TRB files match.
@@ -307,7 +327,7 @@ def do_cycling(cfg):
 
             if cfg.inference.symmetry!=None:
                 run_and_log(
-                    f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "helper_scripts", "make_tied_positions_dict.py")} \
+                    f'{mpnn_run_command_only_path}/helper_scripts/make_tied_positions_dict.py \
                     --input_path={cfg.path_for_parsed_chains} \
                     --output_path={cfg.path_for_tied_positions} \
                     --homooligomer 1'    
@@ -317,7 +337,7 @@ def do_cycling(cfg):
 
             #_____________ RUN ProteinMPNN_____________
             # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
-            proteinMPNN_cmd_str = f'{cfg.python_path_mpnn} {os.path.join(cfg.mpnn_installation_path, "protein_mpnn_run.py")} \
+            proteinMPNN_cmd_str = f'{cfg.mpnn_run_command} \
                 --jsonl_path {cfg.path_for_parsed_chains} \
                 --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
                 {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry!=None else ""} \
@@ -394,6 +414,10 @@ def do_cycling(cfg):
             model_order = str(cfg.model_order).split(",") # If only one number is passed, Hydra converts it to int
             num_models = len(model_order) #model order "1,2,3" -> num of models = 3
             
+            if cfg.get("colabfold_preparation_script", False):
+                preparation_command = f"source {cfg.colabfold_preparation_script} && " #if the preparation script is specified, include it
+            else:
+                preparation_command=""
             
             if cfg.get("use_a3m", False): #If we're using a custom a3m, generate it for each sequence in the fasta
                 print("Generating custom msa files")
@@ -414,7 +438,7 @@ def do_cycling(cfg):
                 for a3m_file in input_a3m_files:
                     if cycle == 0: #have to run af2 differently in first cycle 
                         run_and_log(
-                            f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                            f'{preparation_command}{cfg.colabfold_run_command} \
                                         --model-type alphafold2_multimer_v3 \
                                         --msa-mode mmseqs2_uniref_env \
                                         {a3m_file} {model_dir} \
@@ -428,7 +452,7 @@ def do_cycling(cfg):
                             if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
                                 num_models = 1
                                 run_and_log(
-                                    f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                                    f'{preparation_command}{cfg.colabfold_run_command} \
                                         --model-type alphafold2_multimer_v3 \
                                         --msa-mode mmseqs2_uniref_env \
                                         {a3m_file} {model_dir} \
@@ -441,7 +465,7 @@ def do_cycling(cfg):
             else:  #this is the normal mode of operations. Single sequence. 
                 if cycle == 0: #have to run af2 differently in first cycle 
                     run_and_log(
-                        f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                        f'{preparation_command}{cfg.colabfold_run_command} \
                                     --model-type alphafold2_multimer_v3 \
                                     --msa-mode single_sequence \
                                     {fasta_file} {model_dir} \
@@ -455,7 +479,7 @@ def do_cycling(cfg):
                         if af2_model_num == model_number: # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
                             num_models = 1
                             run_and_log(
-                                f'source {cfg.af_setup_path} && {cfg.python_path_af2} {cfg.colabfold_setup_path} \
+                                f'{preparation_command}{cfg.colabfold_run_command} \
                                     --model-type alphafold2_multimer_v3 \
                                     --msa-mode single_sequence \
                                     {fasta_file} {model_dir} \
@@ -495,7 +519,7 @@ def final_operations(cfg):
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
-        f'{cfg.python_path} {scripts_folder / "scoring_rg_charge_sap.py"} {csv_path}'
+        f'{cfg.prosculpt_python_path} {scripts_folder / "scoring_rg_charge_sap.py"} {csv_path}'
         , cfg=cfg
         )
         

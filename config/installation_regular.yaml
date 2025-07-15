@@ -1,0 +1,11 @@
+# This config includes installation paths and other constant values
+
+rfdiff_run_command: /home/tsatler/anaconda3/envs/SE3nv/bin/python /home/tsatler/RFdif/RFdiffusion/scripts/run_inference.py
+
+mpnn_run_command: /home/tsatler/anaconda3/envs/mlfold2/bin/python /home/tsatler/ProteinMPNN/protein_mpnn_run.py
+
+colabfold_preparation_script: /home/aljubetic/bin/set_up_AF2.3.sh
+colabfold_run_command: /home/aljubetic/AF2/CF2.3/colabfold-conda/bin/python /home/aljubetic/AF2/CF2.3/colabfold-conda/bin/colabfold_batch
+
+pymol_python_path: /home/aljubetic/conda/envs/pyro/bin/python
+prosculpt_python_path: /home/aljubetic/conda/envs/pyro/bin/python
