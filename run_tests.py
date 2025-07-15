@@ -39,7 +39,7 @@ for test_file in test_file_list:
     print("Running "+ test_file)
     if not args.dry_run:
         
-        command=f"python slurm_runner.py {test_file} ++output_dir='Examples/{out_folder}/{test_file.split("/")[1].split(".")[0]}'"
+        command=f"python slurm_runner.py {test_file} ++output_dir='Examples/{out_folder}/{test_file.split('/')[1].split('.')[0]}'"
         print(command)
         process_output=subprocess.run(command, shell=True,capture_output=True,text=True)
         for line in process_output.stdout.split("\n"):
