@@ -23,7 +23,7 @@ yaml_file_name_no_extension = yaml_file_name.rsplit( ".", 1 )[ 0 ]
 with open(yaml_file_path) as yaml_file:
     yaml_data = yaml.safe_load(yaml_file)
 
-with open("config/installation.yaml") as installation_yaml_file:
+with open(os.path.join(slurm_runner_path,"config", "installation.yaml")) as installation_yaml_file:
     installation_yaml_data = yaml.safe_load(installation_yaml_file)
 
 installation_slurm_yaml_data=installation_yaml_data["slurm"]
@@ -74,16 +74,17 @@ print(f"Slurm command can be found in {out_command_file}")
 
 options_string=""
 job_specific_keys=[]
-for key, value in slurm_data.items(): 
-    job_specific_keys.append(key)
-    if key=="slurm_options_string":
-        options_string+= f" {value}"
-    else:
-        if len(key)==1:
-            options_string+= " -"
+if slurm_data is not None:
+    for key, value in slurm_data.items(): 
+        job_specific_keys.append(key)
+        if key=="slurm_options_string":
+            options_string+= f" {value}"
         else:
-            options_string+= " --"
-        options_string+= f"{key} {value}"
+            if len(key)==1:
+                options_string+= " -"
+            else:
+                options_string+= " --"
+            options_string+= f"{key} {value}"
 
 #now take the default values from installation.yaml if not present in job yaml
 for key, value in installation_slurm_yaml_data.items(): 
