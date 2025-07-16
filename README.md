@@ -6,8 +6,8 @@ Protein design and sculpting using Rosetta and Deep learning methods (RFDiff and
 The script `rfdiff_mpnn_af2_merged.py` runs a pipeline to automate the processes of generating protein structures with RFdiffusion, sequence generation with ProteinMPNN, and folding and evaluation with AF2 and Rosetta. Specifically, the script uses motif scaffolding to generate structures (see [RFdiffusion github repository](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md)).
 
 The main steps are as follows:
-1. The main inputs are a protein PDB file and a string that specifies how to generate the new structure around the original protein (which parts to keep, etc.) - this string is called a contig. 
-2. The RFdiffusion module generates new protein structures (backbone atoms only) based on the contig provided.
+1. The main inputs are a protein PDB file and a yaml file that specifies how to generate the new structure around the original protein (which parts to keep, etc.). 
+2. The RFdiffusion module generates new protein structures (backbone atoms only) based on the options provided.
 4. Generated PDB files are preprocessed using helper scripts and ProteinMPNN generates sequences (aminoacid residues) for these structures.
 5. Sequences are prepared for the AF2, which folds them into structures.
 6. Additional evaluation parameters are calculated for these structures using a separate script with Rosetta.
