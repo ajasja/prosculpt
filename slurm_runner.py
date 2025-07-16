@@ -16,6 +16,8 @@ current_path= os.getcwd()
 
 
 yaml_file_path = args[0].yaml_file
+yaml_file_path=os.path.abspath(yaml_file_path)
+
 extra_args = args[1].copy()
 yaml_file_dir, yaml_file_name = os.path.split(yaml_file_path)
 yaml_file_name_no_extension = yaml_file_name.rsplit( ".", 1 )[ 0 ]
