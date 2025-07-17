@@ -11,9 +11,13 @@ import shutil
 import pathlib
 from omegaconf import open_dict
 from Bio import SeqIO
+from pyrosetta import *
+from plugin import filter_backbones_after_rfdiff
 
 
 log = logging.getLogger(__name__)
+
+init("-mute all")
 
 def run_and_log(command, log_func=log.info, dry_run=False, cfg="KEKEKE"):
     """Runs a command using os.system and also logs the command before running using log.info"""
@@ -205,6 +209,17 @@ def get_checkpoint(folder, piece, default=0):
     else:
         log.info(f"Checkpoint {piece} doesn't exist. Returning default value {default}")
         return default
+    
+
+def plugin_filters(cfg):
+    # Extract the filter config
+    filter_config = cfg.get("rfdiff_backbone_filters", {})
+
+    # Set the RFDiffusion output directory
+    rfdiff_output_dir = cfg.rfdiff_out_dir  # Contains *.pdb files
+
+    # Run the plugin system
+    filter_backbones_after_rfdiff(rfdiff_output_dir, filter_config)
 
 def do_cycling(cfg):
     """
