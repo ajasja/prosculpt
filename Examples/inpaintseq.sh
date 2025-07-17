@@ -1,1 +1,0 @@
-python slurm_runner.py 1 Inpaintseq output_dir="Examples/Examples_out/inpaintseq" -cd Examples -cn inpaintseq

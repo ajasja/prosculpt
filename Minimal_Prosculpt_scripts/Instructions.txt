@@ -1,0 +1,36 @@
+For running prosculpt, you will need:
+
+-   An input structure in pdb format (assuming you're not doing design from nothing)
+-   A config file with the settings for what you want to do
+-   Possibly, an alignment file for your input structure (This is recommended if you're working with natural proteins)
+
+#Input structure
+The input structure should contain the protein you're gonna be working with. 
+If you're designing binders, it's best if your receptor is chain B. (This is because rfdiffusion always makes receptor chain B and binder chain A, so we can keep it consistent).
+If you're doing partial diffusion, I've found that you need not only chain B as the receptor and A the binder (or whatever you're diffusing) but also you need chain A and B in the correct order in the file 
+    as well as the atom IDs in correct order. You can fix this with pdbfixer if you need to
+
+#Config file
+
+The config file settings are too much to explain here. 
+
+
+#Alignment file
+
+Alignment files are needed to give prosculpt the alignment information for alphafold for natural proteins.
+To get your alignment files: 
+- Get a fasta file of your input structure (in pymol you can simply do "save example.fasta"). The sequence in the fasta needs to match exactly the sequence in the PDB
+    - The fasta file should have each chain as a separate entry in the fasta (So each one has a ">" of their own)
+- Paste that fasta file into our alphafold server (at /home/d12/AF2_MOUNT/in)
+- Wait to get the AF2 results. 
+- The results will include the PDB models (which you can use as your new input structure. This is recommended, but you don't have to if for some reason your structure is better)
+    and also will include the a3m files we will use. Take the a3m files for those chains you will use, and paste them in a folder of their own in your project folder. Each a3m file should
+    include in their name "Chain_X" where X is what chain they correspond to in the input structure. AF2 sometimes does this on its own (I'm not sure why or when) but if it hasn't you'll
+    need to do this manually.
+
+Open launch.sh and modify it to match your project. Some users like to make a separate launch.sh for each project and keep it in the project folder.
+Then in a terminal run "sh launch.sh"
+
+And you're done!
+
+Wait for it to finish and then you can go through filtering and analysis with the filtering_and_analysis.ipynb file.
