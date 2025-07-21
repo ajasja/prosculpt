@@ -221,6 +221,12 @@ def plugin_filters(cfg):
     # Run the plugin system
     filter_backbones_after_rfdiff(rfdiff_output_dir, filter_config)
 
+    # Check how many .pdb files remain
+    remaining_pdbs = list(rfdiff_output_dir.glob("*.pdb"))
+    if not remaining_pdbs:
+        log.error("All RFDiffusion backbones failed the plugin filters. No structures remain.")
+        raise Exception("All RFDiffusion backbones failed plugin filters — aborting pipeline.")
+
 def do_cycling(cfg):
     """
     Runs a loop of (ProteinMPNN -> AF2 ->) `af2_mpnn_cycles` number of times.
@@ -598,6 +604,10 @@ def prosculptApp(cfg: DictConfig) -> None:
             pass_config_to_rfdiff(cfg)
             dtimelog("run_rfdiff")
             run_rfdiff(cfg)
+
+            dtimelog("plugin_filters")
+            plugin_filters(cfg)
+
             dtimelog("rechain_rfdiff_pdbs")
             rechain_rfdiff_pdbs(cfg)
         else:
