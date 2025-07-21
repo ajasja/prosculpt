@@ -9,7 +9,7 @@ import logging
 
 # from plugin_utils import ensure_pyrosetta_initialized
 
-logger = logging.getLogger("prosculpt.plugins")
+logger = logging.getLogger(__name__)
 
 def make_vector1_range(start, end):
     vec = vector1_unsigned_long()

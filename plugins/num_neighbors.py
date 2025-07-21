@@ -10,7 +10,7 @@ from pyrosetta.rosetta.protocols.moves import DsspMover
 
 import logging
 
-logger = logging.getLogger("prosculpt.plugins")
+logger = logging.getLogger(__name__)
 
 def get_first_helix_range(pose, chain_id="A"):
     DsspMover().apply(pose)
