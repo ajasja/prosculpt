@@ -12,7 +12,7 @@ import pathlib
 from omegaconf import open_dict
 from Bio import SeqIO
 from pyrosetta import *
-from plugin import filter_backbones_after_rfdiff
+from plugins.plugin import filter_backbones_after_rfdiff
 
 
 log = logging.getLogger(__name__)
