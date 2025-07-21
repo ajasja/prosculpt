@@ -72,6 +72,8 @@ def filter_backbone(pdb: str | Path, kwargs: dict):
 
     num_neighbors = sum(neighbor_subset)
 
+    logger.info(f"Detected {num_neighbors} estimated num_neighbors")
+
     # Get thresholds
     min_neighbors = kwargs.get("min_num_neighbors", 0)
     max_neighbors = kwargs.get("max_num_neighbors", float('inf'))
