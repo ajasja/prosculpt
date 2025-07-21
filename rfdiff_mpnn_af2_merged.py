@@ -9,6 +9,7 @@ import glob
 import re
 import shutil
 import pathlib
+from pathlib import Path
 from omegaconf import open_dict
 from Bio import SeqIO
 from pyrosetta import *
@@ -217,6 +218,8 @@ def plugin_filters(cfg):
 
     # Set the RFDiffusion output directory
     rfdiff_output_dir = cfg.rfdiff_out_dir  # Contains *.pdb files
+
+    rfdiff_output_dir = Path(rfdiff_output_dir)
 
     # Run the plugin system
     filter_backbones_after_rfdiff(rfdiff_output_dir, filter_config)
