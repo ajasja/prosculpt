@@ -1,0 +1,62 @@
+LOCUS       GG_insert                457 bp ds-DNA     circular     18-SEP-2023
+DEFINITION  .
+FEATURES             Location/Qualifiers
+     domesticator    1..457
+                     /label="synthesize"
+                     /ApEinfo_revcolor="#b1ff67"
+                     /ApEinfo_fwdcolor="#b1ff67"
+     misc_feature    1..63
+                     /label="@AvoidChanges"
+                     /ApEinfo_revcolor="#75c6a9"
+                     /ApEinfo_fwdcolor="#75c6a9"
+     misc_feature    53..58
+                     /label="BsaI"
+                     /ApEinfo_revcolor="#f58a5e"
+                     /ApEinfo_fwdcolor="#f58a5e"
+     misc_feature    64..381
+                     /label="@EnforceTranslation"
+                     /ApEinfo_revcolor="#c7b0e3"
+                     /ApEinfo_fwdcolor="#c7b0e3"
+     misc_feature    64..381
+                     /label="Translation"
+                     /ApEinfo_revcolor="#ff9ccd"
+                     /ApEinfo_fwdcolor="#ff9ccd"
+     misc_feature    64..381
+                     /label="!insert(A)"
+                     /ApEinfo_revcolor="#ffef86"
+                     /ApEinfo_fwdcolor="#ffef86"
+     misc_feature    64..381
+                     /label="@AvoidHairpins() & @AvoidPattern(AAAAAA) & @AvoidPattern(CCCCCC) & @AvoidPattern(GGGGGG) & @AvoidPattern(TTTTTT) & @AvoidPattern(AGGAGG) & @AvoidPattern(TAAGGAG) & @AvoidPattern(GCTGGTGG) & @AvoidPattern(ATCTGTT) & @AvoidPattern(GGRGGT) & @AvoidPattern(MAGGTRAG) & @AvoidPattern(YYYYNTAGG) & @EnforceGCContent(25-80%/50bp) & @EnforceGCContent(40-65%) & ~MinimizeNumKmers(8, boost=10) & ~use_best_codon(e_coli) & @no(BsaI_site, strand=both) & @no(XhoI_site, strand=both) & @no(NdeI_site, strand=both)"
+                     /ApEinfo_revcolor="#f8d3a9"
+                     /ApEinfo_fwdcolor="#f8d3a9"
+     CDS             64..381
+                     /ApEinfo_revcolor="#84b0dc"
+                     /ApEinfo_fwdcolor="#84b0dc"
+                     /translation="GKSKQLKDKIEQLKEKLKATKDELDKYEEENQQLEEKLELAKKEATDAEAKNEQLKEEIQLFEEEISSLEEELATAEWENSQLEEEADESEREMKVIESKIEQLKE"
+     misc_feature    382..457
+                     /label="@AvoidChanges"
+                     /ApEinfo_revcolor="#9eafd2"
+                     /ApEinfo_fwdcolor="#9eafd2"
+     misc_feature    complement(389..394)
+                     /label="BsaI"
+                     /ApEinfo_revcolor="#f58a5e"
+                     /ApEinfo_fwdcolor="#f58a5e"
+     CDS             409..411
+                     /ApEinfo_revcolor="#84b0dc"
+                     /ApEinfo_fwdcolor="#84b0dc"
+                     /translation="*"
+     primer          423..457
+                     /label=8170
+                     /note="sequence: CTAGGCTGCTAAACAAAGCCCGAAAGGAAGCTGAG"
+                     /ApEinfo_revcolor="#b1ff67"
+                     /ApEinfo_fwdcolor="#b1ff67"
+ORIGIN
+        1 ATAATTTTGT TTAACTTTAA GAAGGAGATA TACATATGGC GCGCTAGCGC GCGGTCTCca
+       61 ggaGGCAAAT CAAAACAACT GAAAGACAAA ATTGAACAGC TGAAGGAAAA GTTAAAAGCG
+      121 ACCAAGGATG AATTGGACAA ATACGAGGAA GAGAACCAGC AGCTTGAAGA GAAACTTGAA
+      181 CTGGCGAAGA AAGAGGCTAC TGACGCTGAA GCGAAAAACG AGCAGTTAAA AGAGGAGATT
+      241 CAGCTGTTTG AGGAAGAGAT CTCCTCATTG GAGGAGGAAC TGGCGACAGC AGAATGGGAG
+      301 AACTCCCAGT TGGAAGAGGA AGCTGATGAA TCTGAGCGTG AAATGAAGGT CATTGAGTCT
+      361 AAGATCGAAC AGCTTAAAGA GggctcgCGA GACCCGCGCC CTAGGCTGTA ATTGATTAAT
+      421 ACCTAGGCTG CTAAACAAAG CCCGAAAGGA AGCTGAG
+//
