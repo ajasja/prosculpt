@@ -26,7 +26,8 @@ def load_plugins(filter_configs: List[dict]):
     plugins = []
 
     for config in filter_configs:
-        script_path = Path(config["filter_script"])
+        script_path = (Path(__file__).parent.parent / config["filter_script"]).resolve()
+        logger.debug(f"Resolved plugin path: {script_path}")
         if not script_path.exists():
             raise FileNotFoundError(f"Plugin script not found: {script_path}")
 
