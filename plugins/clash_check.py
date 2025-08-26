@@ -89,6 +89,18 @@ def get_clash_xml():
 
 # Plugin entry point
 def filter_backbone(pdb: str | Path, kwargs: dict):
+    """
+    Checks for inter-chain clashes between the designed structure and the reference base structure.
+
+    Parameters:
+        pdb (str | Path): Path to the PDB file to be evaluated.
+
+        kwargs (dict): Plugin-specific settings from the YAML configuration, expected to include:
+            - base_pdb (str): Path to the base/reference PDB file used for alignment and clash comparison.
+            - residues_to_align (int): Number of C-terminal residues in chain A to use for alignment.
+            - skip_last_residues (int): Number of residues at the C-terminus to exclude from clash checking.
+    """
+
     # ensure_pyrosetta_initialized()
 
     base_path = kwargs["base_pdb"]

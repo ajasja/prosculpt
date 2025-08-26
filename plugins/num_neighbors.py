@@ -37,7 +37,15 @@ def get_first_helix_range(pose, chain_id="A"):
 
 def filter_backbone(pdb: str | Path, kwargs: dict):
     """
-    Filter that returns True if the number of neighbor residues is within the specified range.
+    Filters structures based on the number of nearby residues surrounding the first helix in chain A.
+
+    Parameters:
+        pdb (str | Path): Path to the PDB file to be evaluated.
+
+        kwargs (dict): Plugin-specific settings from the YAML configuration, expected to include:
+            - min_num_neighbors (int): Minimum allowed number of residues within a given distance of the first helix.
+            - max_num_neighbors (int): Maximum allowed number of such residues.
+            - neighbor_distance (float): Distance threshold in Ångströms for counting neighboring residues.
     """
 
     # ensure_pyrosetta_initialized()
