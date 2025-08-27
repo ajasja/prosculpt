@@ -25,7 +25,9 @@ sampling_temp: 0.1
 backbone_noise: 0.0
 
 use_a3m: False #This test should use this to produce a reasonable output, but I guess that's not the important thing in the test.
-
+#only_run_analysis: True
+calculate_ipsae: True # Whether to calculate ipsae
+ipsae_cutoffs: 15 # Cutoffs for ipsae calculation
 
 defaults:
   - installation

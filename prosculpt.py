@@ -13,6 +13,7 @@ import shutil
 from pathlib import Path
 import string
 import homooligomer_rmsd
+from scripts import ipsae
 
 def get_rmsd_from_coords(native_coords, model_coords, rot, tran):
     model_coords_rotated = np.dot(model_coords, rot) + tran
@@ -406,7 +407,7 @@ def merge_csv(output_dir, output_csv, scores_csv):
 
 
 
-def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False):
+def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False,calculate_ipsae=False,ipsae_cutoffs=15):
 
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "") # add / to path to access json files within
@@ -480,6 +481,13 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
 
         rmsd_list, linker_length = calculate_RMSD_linker_len(cfg, trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry, model_monomer)
         pae = round((np.mean(params['pae'])), 2)
+
+        if calculate_ipsae:
+            ipsae_values=ipsae.main(json_file,model_pdb_file,ipsae_cutoffs,ipsae_cutoffs, False)
+            ipsae_min=ipsae_values[0]
+            ipsae_max=ipsae_values[1]
+
+
 
         #if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
         if symmetry:
@@ -571,6 +579,10 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
         if symmetry or model_monomer:
             dictionary['monomer_rmsd']=monomer_rmsd
             dictionary['monomer_plddt']=monomer_plddt
+
+        if calculate_ipsae:
+            dictionary['ipsae_min']=ipsae_min
+            dictionary['ipsae_max']=ipsae_max
 
         df = pd.DataFrame(dictionary, index=[0])
         path_csv = os.path.join(output_dir, "output.csv")

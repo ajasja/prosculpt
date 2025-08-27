@@ -478,11 +478,9 @@ def final_operations(cfg):
         os.remove(cfg.output_dir+'/final_output.csv')
 
     for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
-        
         trb_num = prosculpt.get_token_value(os.path.basename(model_i), "model_", "(\\d+)") #get 0 from model_0 using reg exp
-
         if 'pdb_path' in cfg:
-            prosculpt.rename_pdb_create_csv(cfg, cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
+            prosculpt.rename_pdb_create_csv(cfg, cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, cfg.pdb_path, cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False), calculate_ipsae=cfg.get("calculate_ipsae", False),ipsae_cutoffs=cfg.get("ipsae_cutoffs", 15))
         else:
             prosculpt.rename_pdb_create_csv(cfg, cfg.output_dir, cfg.rfdiff_out_dir, trb_num, model_i, control_structure_path=None, symmetry=cfg.inference.symmetry, model_monomer=cfg.get("model_monomer", False))
             
