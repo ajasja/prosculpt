@@ -1,30 +1,10 @@
 # ipsae.py
+
+#This script has been modified from https://github.com/DunbrackLab/IPSAE/blob/main/ipsae.py to work with prosculpt
+
+
 # script for calculating the ipSAE score for scoring pairwise protein-protein interactions in AlphaFold2 and AlphaFold3 models
 # https://www.biorxiv.org/content/10.1101/2025.02.10.637595v1
-
-# Also calculates:
-#    pDockQ: Bryant, Pozotti, and Eloffson. https://www.nature.com/articles/s41467-022-28865-w
-#    pDockQ2: Zhu, Shenoy, Kundrotas, Elofsson. https://academic.oup.com/bioinformatics/article/39/7/btad424/7219714
-#    LIS: Kim, Hu, Comjean, Rodiger, Mohr, Perrimon. https://www.biorxiv.org/content/10.1101/2024.02.19.580970v1
-
-# Roland Dunbrack
-# Fox Chase Cancer Center
-# version 3
-# April 6, 2025
-# MIT license: script can be modified and redistributed for non-commercial and commercial use, as long as this information is reproduced.
-
-# includes support for Boltz1 structures and structures with nucleic acids
-
-# It may be necessary to install numpy with the following command:
-#      pip install numpy
-
-# Usage:
-
-#  python ipsae.py <path_to_af2_pae_file>     <path_to_af2_pdb_file>     <pae_cutoff> <dist_cutoff>
-#  python ipsae.py <path_to_af3_pae_file>     <path_to_af3_cif_file>     <pae_cutoff> <dist_cutoff>
-#  python ipsae.py <path_to_boltz1_pae_file>  <path_to_boltz1_cif_file>  <pae_cutoff> <dist_cutoff>
-#
-# All output files will be in same path/folder as cif or pdb file
 
 # Define the ptm and d0 functions
 
@@ -796,6 +776,10 @@ def main(pae_file_path,pdb_path,pae_cutoff,dist_cutoff, print_file):
                     OUT2.write(outstring)
                 
     # Compute interchain ipTM and ipSAE for each chain pair
+    if len(unique_chains) == 1:
+        #print("Only one chain present; no interchain ipTM or ipSAE values to calculate")
+        return ([-1,-1])
+    
     for chain1 in unique_chains:
         for chain2 in unique_chains:
             if chain1 == chain2:
@@ -1077,7 +1061,7 @@ def main(pae_file_path,pdb_path,pae_cutoff,dist_cutoff, print_file):
                     f'{pdb_stem}\n')
                 if not print_file:
                     #print (f'{ipsae_d0res_min[chain1][chain2]:8.6f}')
-                    return ([ipsae_d0res_min[chain1][chain2],ipsae_d0res_max[chain1][chain2]]) #we only return the min between AB. Hopefully we're not doing anything with more than two chains
+                    return ([ipsae_d0res_min[chain1][chain2],ipsae_d0res_max[chain1][chain2]]) #we only return the max and min between AB. Hopefully we're not doing anything with more than two chains
                 else:
                     OUT.write(outstring)
                     PML.write("# " + outstring)

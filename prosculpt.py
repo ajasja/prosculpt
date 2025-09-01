@@ -407,7 +407,7 @@ def merge_csv(output_dir, output_csv, scores_csv):
 
 
 
-def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False,calculate_ipsae=False,ipsae_cutoffs=15):
+def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, control_structure_path, symmetry=None, model_monomer=False,calculate_ipsae=True,ipsae_cutoffs=15):
 
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "") # add / to path to access json files within
