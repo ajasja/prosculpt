@@ -63,8 +63,8 @@ with open(out_command_file, 'w') as f:
             output_dir += f"{i:02d}"
             arguments.append("++output_dir="+output_dir) #This will override the output present in the yaml file with the one with the tasknumber
 
-        arguments.append("-cd "+ yaml_file_dir) 
-        arguments.append("-cn "+ yaml_file_name_no_extension) 
+        arguments.append(f"-cd '{yaml_file_dir}'") 
+        arguments.append(f"-cn '{yaml_file_name_no_extension}'") 
         
         #print("+output_dir="+output_dir)
 
