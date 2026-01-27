@@ -37,7 +37,7 @@ if "task_name" not in yaml_data:
 else:
     task_name=yaml_data["task_name"]
 
-out_command_file = f"ps2slurm_{task_name}_{int(time.time())}.txt"
+out_command_file = f"ps2slurm_{task_name}_{int(time.time_ns())}.txt"
 
 
 
