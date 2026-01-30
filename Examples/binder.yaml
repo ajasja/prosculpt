@@ -24,7 +24,8 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 sampling_temp: 0.1
 backbone_noise: 0.0
 
-use_a3m: False #This test should use this to produce a reasonable output, but I guess that's not the important thing in the test.
+use_a3m: True 
+a3m_dir: Examples/input_data/Insulin_Alignment
 
 
 defaults:
