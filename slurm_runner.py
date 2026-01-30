@@ -16,6 +16,8 @@ current_path= os.getcwd()
 
 
 yaml_file_path = args[0].yaml_file
+yaml_file_path=os.path.abspath(yaml_file_path)
+
 extra_args = args[1].copy()
 yaml_file_dir, yaml_file_name = os.path.split(yaml_file_path)
 yaml_file_name_no_extension = yaml_file_name.rsplit( ".", 1 )[ 0 ]
@@ -23,7 +25,7 @@ yaml_file_name_no_extension = yaml_file_name.rsplit( ".", 1 )[ 0 ]
 with open(yaml_file_path) as yaml_file:
     yaml_data = yaml.safe_load(yaml_file)
 
-with open("config/installation.yaml") as installation_yaml_file:
+with open(os.path.join(slurm_runner_path,"config", "installation.yaml")) as installation_yaml_file:
     installation_yaml_data = yaml.safe_load(installation_yaml_file)
 
 installation_slurm_yaml_data=installation_yaml_data["slurm"]
@@ -35,7 +37,7 @@ if "task_name" not in yaml_data:
 else:
     task_name=yaml_data["task_name"]
 
-out_command_file = f"ps2slurm_{task_name}_{int(time.time())}.txt"
+out_command_file = f"ps2slurm_{task_name}_{int(time.time_ns())}.txt"
 
 
 
@@ -61,8 +63,8 @@ with open(out_command_file, 'w') as f:
             output_dir += f"{i:02d}"
             arguments.append("++output_dir="+output_dir) #This will override the output present in the yaml file with the one with the tasknumber
 
-        arguments.append("-cd "+ yaml_file_dir) 
-        arguments.append("-cn "+ yaml_file_name_no_extension) 
+        arguments.append(f"-cd '{yaml_file_dir}'") 
+        arguments.append(f"-cn '{yaml_file_name_no_extension}'") 
         
         #print("+output_dir="+output_dir)
 
@@ -74,16 +76,17 @@ print(f"Slurm command can be found in {out_command_file}")
 
 options_string=""
 job_specific_keys=[]
-for key, value in slurm_data.items(): 
-    job_specific_keys.append(key)
-    if key=="slurm_options_string":
-        options_string+= f" {value}"
-    else:
-        if len(key)==1:
-            options_string+= " -"
+if slurm_data is not None:
+    for key, value in slurm_data.items(): 
+        job_specific_keys.append(key)
+        if key=="slurm_options_string":
+            options_string+= f" {value}"
         else:
-            options_string+= " --"
-        options_string+= f"{key} {value}"
+            if len(key)==1:
+                options_string+= " -"
+            else:
+                options_string+= " --"
+            options_string+= f"{key} {value}"
 
 #now take the default values from installation.yaml if not present in job yaml
 for key, value in installation_slurm_yaml_data.items(): 
