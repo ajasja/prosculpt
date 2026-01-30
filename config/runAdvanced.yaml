@@ -52,3 +52,30 @@ inference:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
 potentials:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+
+
+# Filters applied to RFDiffusion backbone outputs.
+# Each plugin script should define a `filter_backbone(pdb: str | Path, kwargs: dict)` function
+# that returns True (pass) or False (fail) for a given structure.
+
+rfdiff_backbone_filters:
+  # # === Neighbor Count Filter ===
+  # # Keeps structures only if the number of *non-scaffold* residues within 8Å of the first helix
+  # # (in chain A) falls within the specified range. Excludes residues from chain B (scaffold).
+  - filter_name: num_neighbors
+    filter_script: plugins/num_neighbors.py
+    delete_failed: false           # If False, failed structures are moved to 'failed_filters/'
+    min_num_neighbors: 7         # Lower bound on allowed neighbor count
+    max_num_neighbors: 50         # Upper bound on allowed neighbor count
+    neighbor_distance: 8.0        # Ångström distance for detecting neighboring residues
+    
+
+# === RosettaScripts Clash Detection Filter ===
+  # Uses fa_rep energy term to detect steric clashes between chains A and B.
+  # Rejects structures with estimated inter-chain clashes (based on fa_rep > 10).
+  - filter_name: clash_check_fa_rep
+    filter_script: plugins/clash_check.py
+    delete_failed: false
+    base_pdb: "/home/d12-studenti/Kiyan/prosculpt_projects/Fibers/Roller_fuse/input_structures/2B12.pdb" #Change this to location of base oligomer
+    residues_to_align: 85
+    skip_last_residues: 200

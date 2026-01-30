@@ -9,12 +9,17 @@ import glob
 import re
 import shutil
 import pathlib
+from pathlib import Path
 from omegaconf import open_dict
 from Bio import SeqIO
+from pyrosetta import *
+from plugins.plugin import filter_backbones_after_rfdiff
 from Bio.PDB import PDBParser
 
 
 log = logging.getLogger(__name__)
+
+init("-mute all")
 
 def run_and_log(command, log_func=log.info, dry_run=False, cfg="KEKEKE"):
     """Runs a command using os.system and also logs the command before running using log.info"""
@@ -235,6 +240,25 @@ def get_checkpoint(folder, piece, default=0):
     else:
         log.info(f"Checkpoint {piece} doesn't exist. Returning default value {default}")
         return default
+    
+
+def plugin_filters(cfg):
+    # Extract the filter config
+    filter_config = cfg.get("rfdiff_backbone_filters", {})
+
+    # Set the RFDiffusion output directory
+    rfdiff_output_dir = cfg.rfdiff_out_dir  # Contains *.pdb files
+
+    rfdiff_output_dir = Path(rfdiff_output_dir)
+
+    # Run the plugin system
+    filter_backbones_after_rfdiff(rfdiff_output_dir, filter_config)
+
+    # Check how many .pdb files remain
+    remaining_pdbs = list(rfdiff_output_dir.glob("*.pdb"))
+    if not remaining_pdbs:
+        log.error("All RFDiffusion backbones failed the plugin filters. No structures remain.")
+        raise Exception("All RFDiffusion backbones failed plugin filters — aborting pipeline.")
 
 def do_cycling(cfg):
     """
@@ -613,6 +637,10 @@ def prosculptApp(cfg: DictConfig) -> None:
             pass_config_to_rfdiff(cfg)
             dtimelog("run_rfdiff")
             run_rfdiff(cfg)
+
+            dtimelog("plugin_filters")
+            plugin_filters(cfg)
+
             dtimelog("rechain_rfdiff_pdbs")
             rechain_rfdiff_pdbs(cfg)
         else:
