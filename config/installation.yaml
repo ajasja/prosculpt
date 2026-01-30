@@ -24,7 +24,7 @@ slurm:
   #Do not specify the --array command here. Use the num_tasks parameter in the job yaml file.
   partition: gpu 
   gres: gpu:1
-  nodelist: compute-0-10
+  exclude: compute-0-10
   cpus-per-task: 2
   output: slurm-%A_%a_%x.out
   error: slurm-%A_%a_%x.err
