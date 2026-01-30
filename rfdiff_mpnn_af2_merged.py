@@ -526,8 +526,8 @@ def final_operations(cfg):
     print('do we already have csv files? If we need to re-run stats, we have to delete them: ',os.listdir(cfg.output_dir) )
     if 'output.csv' in os.listdir(cfg.output_dir):
         os.remove(cfg.output_dir+'/output.csv')
-    if 'scores_rg_charge_sap.csv' in os.listdir(cfg.output_dir):
-        os.remove(cfg.output_dir+'/scores_rg_charge_sap.csv')
+    if 'rosetta_scores.csv' in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir+'/scores_rrosetta_scoresg_charge_sap.csv')
     if 'final_output.csv' in os.listdir(cfg.output_dir):
         os.remove(cfg.output_dir+'/final_output.csv')
 
@@ -543,11 +543,11 @@ def final_operations(cfg):
                 
     csv_path = os.path.join(cfg.output_dir, "output.csv") #constructed path 'output.csv defined in rename_pdb_create_csv function
     run_and_log(
-        f'{cfg.prosculpt_python_path} {scripts_folder / "scoring_rg_charge_sap.py"} {csv_path}'
+        f'{cfg.prosculpt_python_path} {scripts_folder / "scoring_script.py"} {csv_path}'
         , cfg=cfg
         )
         
-    scores_rg_path = os.path.join(cfg.output_dir, "scores_rg_charge_sap.csv") #'scores_rg_charge_sap.csv defined in scoring_rg_... script
+    scores_rg_path = os.path.join(cfg.output_dir, "rosetta_scores.csv") #'rosetta_scores.csv defined in scoring_rg_... script
     prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path) #, cfg.get("output_best", True), cfg.get("rmsd_threshold",3),cfg.get("plddt_threshold",90) used for filtering. not needed now.
 
     os.remove(csv_path)

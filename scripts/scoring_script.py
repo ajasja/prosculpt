@@ -97,7 +97,7 @@ else:
 
 """
 # Calculate Rg, charge, and SAP score for each PDB model and write results to output CSV file
-with open(f"{output}/scores_rg_charge_sap.csv", "a") as f:
+with open(f"{output}/rosetta_scores.csv", "a") as f:
     f.write("model_path,rg,charge,sap\n")
     for pdb in data["model_path"]:
         parser = PDBParser()
@@ -119,5 +119,5 @@ for pdb in data['model_path']:
                 'sap': calculate_sap_score(pdb, "A")}
     df = pd.DataFrame(dictionary, index=[0])
 
-    path_csv = os.path.join(output, "scores_rg_charge_sap.csv")
+    path_csv = os.path.join(output, "rosetta_scores.csv")
     df.to_csv(path_csv, mode='a', header=not os.path.exists(path_csv), index=False) # header=not os.path.exists(path_csv) determines if including column names (header) in the CSV
