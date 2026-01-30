@@ -82,7 +82,7 @@ def filter_backbones_after_rfdiff(rfdiff_dir: Path, filter_configs: List[dict]):
     for pdb_file in pdbs:
         try:
             passed_all = True
-
+            trb_file = pdb_file.with_suffix(".trb")
             for filter_fn, config in plugins:
                 # Only pass user-defined kwargs to plugin function
                 kwargs = {
@@ -97,11 +97,16 @@ def filter_backbones_after_rfdiff(rfdiff_dir: Path, filter_configs: List[dict]):
                     passed_all = False
                     if config.get("delete_failed", False):
                         pdb_file.unlink()  # delete file
-                        logger.info(f"Deleted {pdb_file.name} (failed '{config['filter_name']}')")
+                        if trb_file.exists():
+                            trb_file.unlink()  # delete corresponding .trb file
+                        logger.info(f"Deleted {pdb_file.name} and {trb_file.name} (failed '{config['filter_name']}')")
                     else:
                         dest = failed_dir / pdb_file.name
                         shutil.move(str(pdb_file), dest)  # move file
-                        logger.info(f"Moved {pdb_file.name} to {dest} (failed '{config['filter_name']}')")
+                        if trb_file.exists():
+                            trb_file_dest = failed_dir / trb_file.name
+                            shutil.move(str(trb_file), trb_file_dest)  # move corresponding .trb file
+                        logger.info(f"Moved {pdb_file.name} and {trb_file.name} to {dest} (failed '{config['filter_name']}')")
                     break  # stop checking this PDB if it already failed one filter
 
             if passed_all:
