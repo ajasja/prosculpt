@@ -71,6 +71,8 @@ def general_config_prep(cfg):
         cfg.fasta_dir = os.path.join(cfg.mpnn_out_dir, "seqs")
         cfg.rfdiff_pdb = os.path.join(cfg.rfdiff_out_path, '_0.pdb')
 
+        cfg.chains_to_design = cfg.get("chains_to_design", None)  # If not specified, will be determined from contig later
+
         if cfg.get("skipRfDiff", False):
             # We only need to redesign the chains specified in designable_residues
             cfg.chains_to_design = " ".join(sorted({_[0] for _ in cfg.designable_residues}))

@@ -16,7 +16,7 @@ num_tasks: 1
 contig: ['40-40'] # Contig to design
 num_designs_rfdiff: 2 # Number of designs to generate with RFdiffusion
 num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
-chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
+#chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
 af2_mpnn_cycles: 1 # Not used yet?
 model_order: 4 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
