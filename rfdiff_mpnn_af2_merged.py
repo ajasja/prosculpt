@@ -527,7 +527,7 @@ def final_operations(cfg):
     if 'output.csv' in os.listdir(cfg.output_dir):
         os.remove(cfg.output_dir+'/output.csv')
     if 'rosetta_scores.csv' in os.listdir(cfg.output_dir):
-        os.remove(cfg.output_dir+'/scores_rrosetta_scoresg_charge_sap.csv')
+        os.remove(cfg.output_dir+'/rosetta_scores.csv')
     if 'final_output.csv' in os.listdir(cfg.output_dir):
         os.remove(cfg.output_dir+'/final_output.csv')
 
@@ -547,12 +547,11 @@ def final_operations(cfg):
         , cfg=cfg
         )
         
-    scores_rg_path = os.path.join(cfg.output_dir, "rosetta_scores.csv") #'rosetta_scores.csv defined in scoring_rg_... script
-    prosculpt.merge_csv(cfg.output_dir, csv_path, scores_rg_path) #, cfg.get("output_best", True), cfg.get("rmsd_threshold",3),cfg.get("plddt_threshold",90) used for filtering. not needed now.
+    rosetta_scores_path = os.path.join(cfg.output_dir, "rosetta_scores.csv") #'rosetta_scores.csv defined in scoring_rg_... script
+    prosculpt.merge_csv(cfg.output_dir, csv_path, rosetta_scores_path) #, cfg.get("output_best", True), cfg.get("rmsd_threshold",3),cfg.get("plddt_threshold",90) used for filtering. not needed now.
 
     os.remove(csv_path)
-    os.remove(scores_rg_path)
-
+    os.remove(rosetta_scores_path)
 
 def pass_config_to_rfdiff(cfg):
     """
