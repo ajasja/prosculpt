@@ -70,7 +70,12 @@ To run Prosculpt on Slurm, use the `slurm_runner.py` passing it an input yaml fi
 python slurm_runner.py job_parameters.yaml
 ```
 
-If you want to run Prosculpt locally, run the `rfdiff_mpnn_af2_merged.py` directly and modify args as needed.
+If you want to run Prosculpt locally, it can be called as
+```bash
+python rfdiff_mpnn_af2_merged.py -cd config_directory -cn config_file_name
+```
+
+(note that the config file name must go without the yaml extension)
 
 ## Examples
 For usage examples see the /Examples or /Minimal_Prosculpt_script folders
@@ -86,6 +91,31 @@ In order to actually produce diverse results, `--sampling_temp` and `--backbone_
 Natural proteins require AF2 to work with multiple sequence alignments. In order to obtain good results when working with natural proteins, the option "use_a3m" needs to be set to True. This option requires MSAs for each chain in the reference structure. To obtain these MSAs just run each chain in the reference structure separately through AF2 and use the A3M file it produces. Each file needs to contain within the name "Chain_X" where X is the chain ID of the corresponding chain in the reference structure file. These alignment files need to be placed together in a directory and the "a3m_dir" option needs to be set to this directory in the yaml config file or passed through command line. 
 
 Prosculpt generates new "partial alignment" files for each design where natural proteins are modelled using MSAs and designed proteins (or designed portions of hybrid proteins) are not.
+
+## Backbone filtering
+For backbone filtering, custom scripts called plugins are used. A plugin is a python script containing a function called "filter_backbone" which takes a pdb file and any set of arguments and returns true if the pdb passes the filter and false if it doesn't. The content of the function can be defined as needed by the user. To call filters add the following code to your configuration yaml. Examples can be found in the plugins folder and usage example can be found in the examples folder
+
+```
+rfdiff_backbone_filters:
+    - filter_name: [filter_name]
+      filter_script: [filter script file path]
+      delete_failed: [true/false]
+```
+
+## Metrics and scoring script
+
+Prosculpt calculates the following metrics
+
+| Metric  | Meaning |
+| ------------- | ------------- |
+| RMSD  | Full model RMSD to RFDiff backbone  |
+| pLDDT  | full model pLDDT  |
+| RMSD_sculpted  | RMSD of any residues not present in original structure to RFDiff backbone |
+| RMSD_fixed_chains  | RMSD of residues in non-redesigned chains to RFDiff backbone  |
+| RMSD_motif  | RMSD of non-redesigned residues in chains containing redesigned residues  |
+| pae  | Predicted alignment error  |
+
+In addition, a scoring script can be added to calculate extra metrics. The scoring script is a python file called "scoring_script.py" in the scripts folder that outputs a CSV called "rosetta_scores.csv", with a "model_path" column. This CSV file gets merged with the prosculpt metrics for the final output. A default scoring script is included in the scripts folder, which calculates radius of gyration, charge and sap.
 
 ## Inputs: 
 Most input parameters are documented in the examples, as well as the `run.yaml` config file. However, here's some additional info about them:
