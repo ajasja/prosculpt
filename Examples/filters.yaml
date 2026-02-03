@@ -37,4 +37,5 @@ potentials:
 rfdiff_backbone_filters:
   - filter_name: SS_filter
     filter_script: plugins/SS_filter.py
-    delete_failed: false           # If False, failed structures are moved to 'failed_filters/'
+    delete_failed: false           # If False, failed structures are moved to 'failed_filters/'`
+    #argument_name: value         # Lower bound on allowed neighbor count 
