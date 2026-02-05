@@ -389,7 +389,7 @@ def merge_csv(output_dir, output_csv, scores_csv):
     merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
 
     # save merged dataframe to csv file
-    merged_df.to_csv(f'{os.path.join(output_dir, "final_output.csv")}', index=False)
+    merged_df.to_csv(f'{os.path.join(output_dir, "final_output.csv")}', index=False,  float_format="%.1f")
 
 
     # Select best ones and copy to another csv. commented out for now    
@@ -529,7 +529,7 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
         task_id=os.environ.get('SLURM_ARRAY_TASK_ID', 1)
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]}__rmsd_sculpted_{rmsd_list[2]}__rmsd_fixedchains_{rmsd_list[3]}__rmsd_motif_{rmsd_list[4]}__pae_{pae}__out_{output_num}_.pdb"
+        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__out_{output_num}_.pdb"
             #out -> 00 -> number of task
             #rf -> 01 -> number of corresponding rf difff model
             #af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag 
@@ -574,7 +574,7 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
 
         df = pd.DataFrame(dictionary, index=[0])
         path_csv = os.path.join(output_dir, "output.csv")
-        df.to_csv(path_csv, mode='a', header=not os.path.exists(path_csv), index=False)
+        df.to_csv(path_csv, mode='a', header=not os.path.exists(path_csv), index=False,  float_format="%.1f")
 
 
 # vsaka tabelca za svoj task
@@ -616,7 +616,7 @@ def create_dataframe(path_to_files, output_dir): # path = r'content/*partial.pdb
     #columns = ['link_length', 'plddt', 'loop_plddt', 'RMSD', 'model_path', 'sequence', 'score_traceb']
     df = pd.DataFrame(list_of_dicts)
     path_csv = os.path.join(os.path.dirname(output_dir), "output.csv")
-    df.to_csv(path_csv, mode='a', header=not os.path.exists(path_csv), index=False)
+    df.to_csv(path_csv, mode='a', header=not os.path.exists(path_csv), index=False,  float_format="%.1f")
 
 class NumpyInt64Encoder(json.JSONEncoder):
     def default(self, obj):

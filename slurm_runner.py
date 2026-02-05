@@ -99,7 +99,7 @@ for key, value in installation_slurm_yaml_data.items():
         
 
 if not args[0].dry_run:
-    full_command= f"export GROUP_SIZE=1; sbatch -J {task_name} -a 1-{n} {options_string} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}"
+    full_command= f"export GROUP_SIZE=1; sbatch -J {task_name} -a 1-{n} -e logs/slurm-%A_%a.err -o logs/slurm-%A_%a.out  {options_string} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}"
     print(f"Full command is: {full_command}")
     exit_code = os.system(full_command)
     if exit_code == 0:
