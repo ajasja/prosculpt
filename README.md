@@ -40,6 +40,12 @@ Install pyrosetta into the environment
 pip install pyrosetta-installer 
 python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 ```
+
+Install boltz2 into the environment
+```bash
+pip install boltz[cuda] -U
+```
+
 At a location of your choice download the appropriate SIF files, executing the following commands:
 ```bash
 singularity pull rfdiff.sif docker://rosettacommons/rfdiffusion
