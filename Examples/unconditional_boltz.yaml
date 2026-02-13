@@ -20,7 +20,7 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 sampling_temp: 0.1
 backbone_noise: 0.0
 use_a3m: False
-prediction_model: Boltz 
+prediction_model: Boltz2 
 defaults:
   - installation
   - _self_

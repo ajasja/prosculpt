@@ -28,7 +28,7 @@ backbone_noise: 0.0
 use_a3m: True 
 a3m_dir: Examples/input_data/Insulin_Alignment
 model_monomer: True
-prediction_model: Boltz # Choose between "Colabfold" and "Boltz". Default is Colabfold. If using Boltz, make sure to have it installed and configured correctly.
+prediction_model: Boltz2 # Choose between "Colabfold" and "Boltz". Default is Colabfold. If using Boltz, make sure to have it installed and configured correctly.
 
 defaults:
   - installation

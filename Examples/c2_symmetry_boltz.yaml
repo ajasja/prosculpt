@@ -22,7 +22,7 @@ model_order: 4 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 skipRfDiff: False
 use_a3m: False
-prediction_model: Boltz 
+prediction_model: Boltz2 
 defaults:
   - installation
   - _self_

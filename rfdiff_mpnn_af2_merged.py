@@ -98,7 +98,9 @@ def general_config_prep(cfg):
             "chains_to_design", None
         )  # If not specified, will be determined from contig later
 
-        cfg.prediction_model = cfg.get("prediction_model", "Colabfold")
+        cfg.prediction_model = cfg.get(
+            "prediction_model", "Colabfold"
+        )  # Options are Colabfold or Boltz2
         print(f"Prediction model: {cfg.prediction_model}")
 
         if cfg.get("skipRfDiff", False):
@@ -812,7 +814,7 @@ def do_cycling(cfg):
                                             --num-models {num_models}',
                                         cfg=cfg,
                                     )  # Changed from single_sequence
-                else:  # If using Boltz
+                elif cfg.prediction_model == "Boltz2":  # If using Boltz
                     print("Generating custom msa files for Boltz")
 
                     yaml_dir = os.path.join(model_dir, "yaml_inputs")
@@ -856,6 +858,8 @@ def do_cycling(cfg):
                         f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb",
                         cfg=cfg,
                     )
+                else:
+                    log.error(f"Unsupported prediction model: {cfg.prediction_model}")
             else:  # this is the normal mode of operations. Single sequence.
                 if cfg.prediction_model == "Colabfold":
                     if cycle == 0:  # have to run af2 differently in first cycle
@@ -885,7 +889,7 @@ def do_cycling(cfg):
                                         --num-models {num_models}',
                                     cfg=cfg,
                                 )
-                else:  # If using Boltz
+                elif cfg.prediction_model == "Boltz2":  # If using Boltz
                     yaml_dir = os.path.join(model_dir, "yaml_inputs")
                     os.makedirs(yaml_dir, exist_ok=True)
 
@@ -914,7 +918,8 @@ def do_cycling(cfg):
                         f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb",
                         cfg=cfg,
                     )
-
+                else:
+                    log.error(f"Unsupported prediction model: {cfg.prediction_model}")
         save_checkpoint(
             cfg.output_dir, "content_status", 1
         )  ## Content is ok to be copied to cycle_dir
@@ -969,7 +974,7 @@ def final_operations(cfg):
                     symmetry=cfg.inference.symmetry,
                     model_monomer=cfg.get("model_monomer", False),
                 )
-        else:  # If using Boltz
+        elif cfg.prediction_model == "Boltz2":  # If using Boltz
             if "pdb_path" in cfg:
                 prosculpt.rename_pdb_create_csv_boltz(
                     cfg,
@@ -992,7 +997,8 @@ def final_operations(cfg):
                     symmetry=cfg.inference.symmetry,
                     model_monomer=cfg.get("model_monomer", False),
                 )
-
+        else:
+            log.error(f"Unsupported prediction model: {cfg.prediction_model}")
     csv_path = os.path.join(
         cfg.output_dir, "output.csv"
     )  # constructed path 'output.csv defined in rename_pdb_create_csv function
