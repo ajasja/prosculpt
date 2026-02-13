@@ -1,4 +1,4 @@
-task_name: binder_example
+task_name: c2symmetry_example
 
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
@@ -6,37 +6,39 @@ slurm:
   output: slurm-%A_%a_%x.out 
   error: slurm-%A_%a_%x.err
   #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
-  
 
 num_tasks: 1
 
+
 # Config for the current run
-pdb_path: Examples/input_data/insulin_target.pdb # Path to input PDB file || null when building unconditionally
-#output_dir: Examples/Examples_out/binder/ # Path to output directory
-contig: "[B1-150/0 60-80]" # Contig to design
+#pdb_path: /home/akonstantinova/december_2023/symmetry/yamls/p3p4.pdb # Path to input PDB file || null when building unconditionally
+#output_dir:  Examples/Examples_out/c2_symmetry/ # Path to output directory
+contig: ['40-40'] # Contig to design
 num_designs_rfdiff: 2 # Number of designs to generate with RFdiffusion
 num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
 #chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
 af2_mpnn_cycles: 1 # Not used yet?
-model_order: 1 # Choose specific models to cycle in af2-mpnn
+model_order: 4 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
-
-sampling_temp: 0.1
-backbone_noise: 0.0
-
-use_a3m: True 
-a3m_dir: Examples/input_data/Insulin_Alignment
-model_monomer: True
-
+skipRfDiff: False
+use_a3m: False
+prediction_model: Boltz 
 defaults:
   - installation
   - _self_
+  #- override hydra/launcher: submitit_slurm  #what is this?
+
+#pass_to_mpnn: # Groups to pass to proteinMPNN
+
+
+sampling_temp: 0.1
+backbone_noise: 0
 
 pass_to_rfdiff: # Groups to pass to RfDiff
 - inference
 - potentials
-- ppi
-- denoiser
+
+
 
 # Symmetry to sample
 # Available symmetries:
@@ -45,14 +47,15 @@ pass_to_rfdiff: # Groups to pass to RfDiff
 # - Tetrahedral symmetry # call as tetrahedral
 # - Octahedral symmetry # call as octahedral
 # - Icosahedral symmetry # call as icosahedral
-#symmetry: c2
+
 
 inference:
+  symmetry: c2
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
 potentials:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
-ppi:
-  hotspot_res: [A59,A83,A91] # Without quotes! RfDiff expects contigs as lists, not as strings.
-denoiser:
-  noise_scale_ca: 0
-  noise_scale_frame: 0
+  # guiding_potentials: ["type:olig_contacts,weight_intra:1,weight_inter:0.1"]
+  # olig_intra_all: True
+  # olig_inter_all: True
+  # guide_scale: 2.0
+  # guide_decay: quadratic

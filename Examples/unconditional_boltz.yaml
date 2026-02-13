@@ -1,4 +1,4 @@
-task_name: binder_example
+task_name: unconditional_example
 
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
@@ -6,14 +6,10 @@ slurm:
   output: slurm-%A_%a_%x.out 
   error: slurm-%A_%a_%x.err
   #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
-  
 
 num_tasks: 1
 
-# Config for the current run
-pdb_path: Examples/input_data/insulin_target.pdb # Path to input PDB file || null when building unconditionally
-#output_dir: Examples/Examples_out/binder/ # Path to output directory
-contig: "[B1-150/0 60-80]" # Contig to design
+contig: "[150-150]"
 num_designs_rfdiff: 2 # Number of designs to generate with RFdiffusion
 num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
 #chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
@@ -23,36 +19,17 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 
 sampling_temp: 0.1
 backbone_noise: 0.0
-
-use_a3m: True 
-a3m_dir: Examples/input_data/Insulin_Alignment
-model_monomer: True
-
+use_a3m: False
+prediction_model: Boltz 
 defaults:
   - installation
   - _self_
-
+  
 pass_to_rfdiff: # Groups to pass to RfDiff
 - inference
 - potentials
-- ppi
-- denoiser
-
-# Symmetry to sample
-# Available symmetries:
-# - Cyclic symmetry (C_n) # call as c5
-# - Dihedral symmetry (D_n) # call as d5
-# - Tetrahedral symmetry # call as tetrahedral
-# - Octahedral symmetry # call as octahedral
-# - Icosahedral symmetry # call as icosahedral
-#symmetry: c2
 
 inference:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
 potentials:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
-ppi:
-  hotspot_res: [A59,A83,A91] # Without quotes! RfDiff expects contigs as lists, not as strings.
-denoiser:
-  noise_scale_ca: 0
-  noise_scale_frame: 0
