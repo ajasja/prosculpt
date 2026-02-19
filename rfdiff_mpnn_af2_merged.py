@@ -855,7 +855,7 @@ def do_cycling(cfg):
                                 input_yaml_files.append(custom_yaml_path)
 
                     run_and_log(
-                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb",
+                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')}",
                         cfg=cfg,
                     )
                 else:
@@ -915,7 +915,7 @@ def do_cycling(cfg):
                                 # input_yaml_files.append(custom_yaml_path)
 
                     run_and_log(
-                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb",
+                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')}",
                         cfg=cfg,
                     )
                 else:
