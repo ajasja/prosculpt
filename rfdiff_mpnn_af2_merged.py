@@ -101,6 +101,12 @@ def general_config_prep(cfg):
         cfg.prediction_model = cfg.get(
             "prediction_model", "Colabfold"
         )  # Options are Colabfold or Boltz2
+        accepted_prediction_models= ["Colabfold", "Boltz2"]
+        if cfg.prediction_model not in accepted_prediction_models:
+            raise ValueError(
+                f"Invalid prediction model specified: {cfg.prediction_model}. Supported options are {accepted_prediction_models}."
+            )
+
         print(f"Prediction model: {cfg.prediction_model}")
 
         if cfg.get("skipRfDiff", False):

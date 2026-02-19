@@ -46,6 +46,11 @@ Install boltz2 into the environment
 pip install boltz[cuda] -U
 ```
 
+it might be necessary to install compilers for boltz2 to run correctly. The exact command for this is system-dependent. If using conda, it can be done by
+```bash
+conda install -c conda-forge compilers
+```
+
 At a location of your choice download the appropriate SIF files, executing the following commands:
 ```bash
 singularity pull rfdiff.sif docker://rosettacommons/rfdiffusion
