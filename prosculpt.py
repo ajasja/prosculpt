@@ -474,7 +474,7 @@ def make_alignment_file_boltz(sequence_id, sequence, alignment_dir, output_dir):
     alignment_files_sorted = sorted(alignment_files, key=extract_chain_letter)
 
     for idxsequence, sequence in enumerate(sequences):
-
+        sequence = sequence.strip()
         chain_id = chain_ids[idxsequence]
         print(f"Processing chain {chain_id} for {name} with sequence {sequence}...")
 
@@ -500,19 +500,23 @@ def make_alignment_file_boltz(sequence_id, sequence, alignment_dir, output_dir):
                     # read original sequence
                     reference_name = afile.readline()
                     reference_seq = afile.readline()
+                    reference_seq = "".join(
+                        [c for c in reference_seq if not c.islower()]
+                    )
                     # Compute positions to keep
                     positions_to_keep = masked_positions(sequence, reference_seq)
 
                     while True:
                         name_line = afile.readline()
                         seq_line = afile.readline()
+                        seq_line = "".join([c for c in seq_line if not c.islower()])
                         if not seq_line:
                             break
 
                         name_line = name_line.rstrip()
                         seq_line = seq_line.rstrip()
 
-                        masked_seq = ["-"] * len(sequence)
+                        masked_seq = ["-"] * (len(sequence))  # NEEDS A -1
                         # Place masked residues at the correct positions in full_sequence
                         for j, pos in enumerate(positions_to_keep):
                             if j < len(seq_line):
@@ -1094,7 +1098,7 @@ def rename_pdb_create_csv_boltz(
         pde = np.mean(pde_list)
 
         model_pdb_file = glob.glob(os.path.join(directory, "*.pdb"))[0]
-        print(f"DEBUG:residue_data_af2 {residue_data_af2}")
+        # print(f"DEBUG:residue_data_af2 {residue_data_af2}")
         try:
             plddt_sculpted_list = [
                 plddt_list[i]
