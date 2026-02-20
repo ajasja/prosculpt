@@ -1,5 +1,5 @@
 # This config includes installation paths and other constant values
-# Do not modify the {OUTPUT_PATH} tags. They are handled internally by prosculpt. 
+# Tags in brackets like {OUTPUT_PATH} are handled internally by prosculpt and are replaced by the correct path when the command is executed.
 
 rfdiff_run_command:  >- 
                       singularity run --nv 
@@ -12,20 +12,36 @@ rfdiff_run_command:  >-
 mpnn_run_command: singularity exec --nv /home/folivieri/prosculpt/singularity_files/proteinmpnn.sif python /app/proteinmpnn/protein_mpnn_run.py
 
 # bash script that runs before colabfold and sets up the enviorment. Can be set to None.
-colabfold_preparation_script: /home/folivieri/prosculpt/scripts/af2_preparation_script.sh
+colabfold_preparation_script: /home/folivieri/prosculpt_dev/scripts/af2_preparation_script.sh
 # path to af2 model weights can be set by including the --data /path/to/af2/folder. By default ~/.cache is used.
 colabfold_run_command: singularity run --nv /home/folivieri/prosculpt/singularity_files/colabfold.sif colabfold_batch
 
+boltz_options: --cache /home/folivieri/.boltz
+
 #pymol_python_path: singularity exec /home/folivieri/singularity_prosculpt/pymol.sif /usr/bin/python3.13
-pymol_python_path: singularity exec -B /home/folivieri/prosculpt:/home/folivieri/prosculpt /home/folivieri/prosculpt/singularity_files/pymol.sif /usr/bin/python3.13
-prosculpt_python_path: /home/folivieri/miniforge3/envs/prosculpt_test/bin/python
+pymol_python_path: singularity exec -B /home/folivieri/prosculpt_dev:/home/folivieri/prosculpt_dev /home/folivieri/prosculpt/singularity_files/pymol.sif /usr/bin/python3.13
+prosculpt_python_path: /home/folivieri/miniforge3/envs/prosculpt_boltz/bin/python
+
+af3_run_command: >-
+                singularity exec --nv 
+                -B {INPUT_PATH_AF3}:/root/af_input 
+                -B {OUTPUT_PATH_AF3}:/root/af_output 
+                -B /home/folivieri/singularity_prosculpt/af3.bin/:/root/models 
+                -B /home/folivieri/singularity_prosculpt/af3_databases/:/root/public_databases 
+                /home/folivieri/singularity_prosculpt/af3_2.sif 
+                python /app/AlphaPulldown/alphafold3/run_alphafold.py 
+                --input_dir=/root/af_input/
+                --model_dir=/root/models 
+                --output_dir=/root/af_output 
+                --db_dir=/root/public_databases
+
 
 slurm:
   #General slurm parameters that apply to every job (they can be overwritten by individual jobs)
   #Do not specify the --array command here. Use the num_tasks parameter in the job yaml file.
   partition: gpu-a40
   gres: gpu:1
-  exclude: compute-3-18,compute-3-20,compute-0-10
+  exclude: compute-0-11,compute-0-12
   cpus-per-task: 2
   output: slurm-%A_%a_%x.out
   error: slurm-%A_%a_%x.err

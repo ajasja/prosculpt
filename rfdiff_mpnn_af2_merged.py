@@ -101,7 +101,7 @@ def general_config_prep(cfg):
         cfg.prediction_model = cfg.get(
             "prediction_model", "Colabfold"
         )  # Options are Colabfold or Boltz2
-        accepted_prediction_models= ["Colabfold", "Boltz2"]
+        accepted_prediction_models = ["Colabfold", "Boltz2", "AF3"]
         if cfg.prediction_model not in accepted_prediction_models:
             raise ValueError(
                 f"Invalid prediction model specified: {cfg.prediction_model}. Supported options are {accepted_prediction_models}."
@@ -864,6 +864,58 @@ def do_cycling(cfg):
                         f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')}",
                         cfg=cfg,
                     )
+                elif cfg.prediction_model == "AF3":  # If using Af3
+                    print("Generating custom msa files for AF3")
+
+                    json_dir = os.path.join(model_dir, "json_inputs")
+                    os.makedirs(json_dir, exist_ok=True)
+                    alignment_inputs_dir = os.path.join(model_dir, "alignment_inputs")
+                    os.makedirs(alignment_inputs_dir, exist_ok=True)
+                    input_json_files = []
+                    with open(fasta_file) as fasta_f:
+                        a3m_filename = ""
+                        for line in fasta_f:
+                            if line[0] == ">":
+                                sequence_id = "".join(
+                                    [
+                                        c if (c.isalnum() or c == ".") else "_"
+                                        for c in line[1:-1]
+                                    ]
+                                )
+                            else:
+                                mpnn_seq = line
+                                trb_file = os.path.join(
+                                    cfg.rfdiff_out_dir, "_" + str(rf_model_num) + ".trb"
+                                )  #
+                                print(a3m_filename)
+
+                                prosculpt.make_alignment_file_boltz(  # We're using the boltz function because they are the same as the AF3 input format
+                                    sequence_id,
+                                    mpnn_seq,
+                                    cfg.a3m_dir,
+                                    alignment_inputs_dir,
+                                )
+                                custom_json_path = prosculpt.make_AF3_input_json(
+                                    cfg,
+                                    sequence_id,
+                                    mpnn_seq,
+                                    json_dir,
+                                    alignment_inputs_dir,
+                                )
+                                input_json_files.append(custom_json_path)
+
+                    af3_run_command = cfg.af3_run_command
+                    if r"{OUTPUT_PATH_AF3}" in af3_run_command:
+                        af3_run_command = (af3_run_command).replace(
+                            r"{OUTPUT_PATH_AF3}", model_dir
+                        )
+
+                    if r"{INPUT_PATH_AF3}" in af3_run_command:
+                        af3_run_command = (af3_run_command).replace(
+                            r"{INPUT_PATH_AF3}", json_dir
+                        )
+
+                    run_and_log(f"{af3_run_command}", cfg=cfg)
                 else:
                     log.error(f"Unsupported prediction model: {cfg.prediction_model}")
             else:  # this is the normal mode of operations. Single sequence.
@@ -924,6 +976,43 @@ def do_cycling(cfg):
                         f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')}",
                         cfg=cfg,
                     )
+                elif cfg.prediction_model == "AF3":  # If using Af3
+                    json_dir = os.path.join(model_dir, "json_inputs")
+                    os.makedirs(json_dir, exist_ok=True)
+
+                    with open(fasta_file) as fasta_f:
+                        for line in fasta_f:
+                            if line[0] == ">":
+                                sequence_id = "".join(
+                                    [
+                                        c if (c.isalnum() or c == ".") else "_"
+                                        for c in line[1:-1]
+                                    ]
+                                )
+                            else:
+                                mpnn_seq = line
+
+                                custom_yaml_path = prosculpt.make_AF3_input_json(
+                                    cfg,
+                                    sequence_id,
+                                    mpnn_seq,
+                                    json_dir,
+                                    None,
+                                )
+                                # input_yaml_files.append(custom_yaml_path)
+
+                    af3_run_command = cfg.af3_run_command
+                    if r"{OUTPUT_PATH_AF3}" in af3_run_command:
+                        af3_run_command = (af3_run_command).replace(
+                            r"{OUTPUT_PATH_AF3}", model_dir
+                        )
+
+                    if r"{INPUT_PATH_AF3}" in af3_run_command:
+                        af3_run_command = (af3_run_command).replace(
+                            r"{INPUT_PATH_AF3}", json_dir
+                        )
+
+                    run_and_log(af3_run_command)
                 else:
                     log.error(f"Unsupported prediction model: {cfg.prediction_model}")
         save_checkpoint(
@@ -994,6 +1083,29 @@ def final_operations(cfg):
                 )
             else:
                 prosculpt.rename_pdb_create_csv_boltz(
+                    cfg,
+                    cfg.output_dir,
+                    cfg.rfdiff_out_dir,
+                    trb_num,
+                    model_i,
+                    control_structure_path=None,
+                    symmetry=cfg.inference.symmetry,
+                    model_monomer=cfg.get("model_monomer", False),
+                )
+        elif cfg.prediction_model == "AF3":  # If using Af3
+            if "pdb_path" in cfg:
+                prosculpt.rename_pdb_create_csv_AF3(
+                    cfg,
+                    cfg.output_dir,
+                    cfg.rfdiff_out_dir,
+                    trb_num,
+                    model_i,
+                    cfg.pdb_path,
+                    cfg.inference.symmetry,
+                    model_monomer=cfg.get("model_monomer", False),
+                )
+            else:
+                prosculpt.rename_pdb_create_csv_AF3(
                     cfg,
                     cfg.output_dir,
                     cfg.rfdiff_out_dir,

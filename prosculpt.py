@@ -1,5 +1,5 @@
 import pickle
-from Bio.PDB import PDBParser, PDBIO, Superimposer, PPBuilder
+from Bio.PDB import PDBParser, PDBIO, Superimposer, PPBuilder, MMCIFParser
 from Bio.SVDSuperimposer import SVDSuperimposer
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -73,6 +73,73 @@ def make_boltz_input_yaml(
     with open(f"{output_dir}/{model_id}.yaml", "w") as outfile:
         yaml.dump(data, outfile, default_flow_style=False)
     return f"{output_dir}/{model_id}.yaml"
+
+
+def make_AF3_input_json(cfg, model_id, mpnn_sequence, output_dir, input_alignment_dir):
+    chain_ids = []
+    sequences = []
+    letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    # Split multi-chain sequences by colon
+    print(
+        f"splitting mpnn sequence {mpnn_sequence} by colon for AF3 yaml generation..."
+    )
+    split_chains = mpnn_sequence.split(":")
+    for i, chain_seq in enumerate(split_chains):
+        chain_id = f"{letters[i]}"
+        chain_ids.append(chain_id)
+        print(f"Chain ID: {chain_id}, Sequence: {chain_seq}")
+        sequences.append(chain_seq)
+
+    # Make boltz yaml
+    data = dict(sequences=dict())
+    data["name"] = model_id
+    data["sequences"] = []
+    if cfg.use_a3m and input_alignment_dir is not None:
+        for idxsequence, sequence in enumerate(sequences):
+            chain_id = chain_ids[idxsequence]
+            cleaned = "".join(c for c in sequence if c.isalpha())
+            print(
+                f"Chain ID: {chain_ids[idxsequence]}, Sequence: {sequence}, Cleaned Sequence: {cleaned}"
+            )
+            data["sequences"].append(
+                {
+                    "protein": {
+                        "id": chain_id,
+                        "sequence": cleaned,
+                        "unpairedMsaPath": f"{input_alignment_dir}/{model_id}_{chain_id}.a3m",
+                        "pairedMsa": "",
+                        "templates": [],
+                    }
+                }
+            )
+            data["modelSeeds"] = [1]
+            data["dialect"] = "alphafold3"
+            data["version"] = 1
+    else:
+        for idxsequence, sequence in enumerate(sequences):
+            cleaned = "".join(c for c in sequence if c.isalpha())
+            print(
+                f"Chain ID: {chain_ids[idxsequence]}, Sequence: {sequence}, Cleaned Sequence: {cleaned}"
+            )
+            chain_id = chain_ids[idxsequence]
+            data["sequences"].append(
+                {
+                    "protein": {
+                        "id": chain_id,
+                        "sequence": cleaned,
+                        "unpairedMsa": "",
+                        "pairedMsa": "",
+                        "templates": [],
+                    }
+                }
+            )
+            data["modelSeeds"] = [1]
+            data["dialect"] = "alphafold3"
+            data["version"] = 1
+
+    with open(f"{output_dir}/{model_id}.json", "w") as outfile:
+        json.dump(data, outfile)
+    return f"{output_dir}/{model_id}.json"
 
 
 def get_rmsd_from_coords(native_coords, model_coords, rot, tran):
@@ -1236,6 +1303,313 @@ def rename_pdb_create_csv_boltz(
             "path_rfdiff": rfdiff_pdb_path,
         }  # MODEL PATH for scoring_rg_... #jsonfilename for traceability
         dictionary.update(params)
+        if symmetry or model_monomer:
+            dictionary["monomer_rmsd"] = monomer_rmsd
+            dictionary["monomer_plddt"] = monomer_plddt
+
+        df = pd.json_normalize(dictionary)
+        path_csv = os.path.join(output_dir, "output.csv")
+        df.to_csv(
+            path_csv,
+            mode="a",
+            header=not os.path.exists(path_csv),
+            index=False,
+            float_format="%.1f",
+        )
+
+
+def rename_pdb_create_csv_AF3(
+    cfg,
+    output_dir,
+    rfdiff_out_dir,
+    trb_num,
+    model_i,
+    control_structure_path,
+    symmetry=None,
+    model_monomer=False,
+):
+
+    # Preparing paths to acces correct files
+    model_i = os.path.join(model_i, "")  # add / to path to access json files within
+
+    # dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "final_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
+    dir_renamed_pdb = os.path.join(output_dir, "final_pdbs")
+    os.makedirs(
+        dir_renamed_pdb, exist_ok=True
+    )  # directory is created even if some or all of the intermediate directories in the path do not exist
+
+    trb_file = os.path.join(
+        rfdiff_out_dir, f"_{trb_num}.trb"
+    )  # name of corresponding trb file
+    skipRfDiff = cfg.get("skipRfDiff", False)
+    designable_residues = cfg.get("designable_residues", None)
+    partial_diffusion = cfg.get("partial_diffusion", False)
+
+    if not skipRfDiff:
+        with open(trb_file, "rb") as f:
+            trb_dict = pickle.load(f)
+
+        if not partial_diffusion:
+            if "complex_con_ref_idx0" in trb_dict:
+                residue_data_af2 = trb_dict["complex_con_hal_idx0"]
+            else:
+                residue_data_af2 = trb_dict["con_hal_idx0"]
+        else:  # When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
+            # con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
+            # based on the inpaint_seq
+            residue_data_af2 = []
+            abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(
+                control_structure_path, designable_residues
+            )
+            for id0, value in enumerate(trb_dict["inpaint_seq"]):
+
+                if value == True:
+
+                    for key in abeceda:
+                        if key in chainResidOffset:
+
+                            if id0 >= chainResidOffset[key]:
+                                currentResidueChain = key
+                    residue_data_af2.append(id0)
+                    # residue_data_af2.append((currentResidueChain,id0+chainResidOffset[currentResidueChain]))
+
+    else:
+        chainResidOffset, con_hal_pdb_idx_complete = getChainResidOffsets(
+            control_structure_path, designable_residues
+        )
+        residue_data_af2 = [
+            x + (chainResidOffset[chain] - 1) for chain, x in con_hal_pdb_idx_complete
+        ]
+
+    individual_directories = glob.glob(os.path.join(model_i, "T_*"))
+    rfdiff_pdb_path = os.path.join(rfdiff_out_dir, f"_{trb_num}.pdb")
+
+    for (
+        directory
+    ) in individual_directories:  # for each directory in the predictions folder
+        dir_path = Path(directory)
+        model_name = dir_path.parent.name if not dir_path.is_dir() else dir_path.name
+
+        summary_confidences_file = glob.glob(
+            os.path.join(directory, "*summary_confidences.json")
+        )[0]
+
+        confidences_files = glob.glob(os.path.join(directory, "*confidences.json"))
+
+        confidences_file = [
+            f for f in confidences_files if not f.endswith("summary_confidences.json")
+        ][0]
+
+        with open(summary_confidences_file, "r") as f:
+            summary = json.load(f)
+
+        with open(confidences_file, "r") as f:
+            confidences = json.load(f)
+
+        plddt_list = confidences["atom_plddts"]
+        plddt = int(np.mean(plddt_list))
+        pae_list = confidences["pae"]
+        pae = np.mean(pae_list)
+
+        model_cif_file_path = glob.glob(os.path.join(directory, "*.cif"))[0]
+        parser = MMCIFParser(QUIET=True)
+        structure = parser.get_structure("structure", model_cif_file_path)
+        model_pdb_file = Path(model_cif_file_path).with_suffix(".pdb")
+
+        io = PDBIO()
+        io.set_structure(structure)
+        io.save(str(model_pdb_file))
+
+        # print(f"DEBUG:residue_data_af2 {residue_data_af2}")
+        try:
+            plddt_sculpted_list = [
+                plddt_list[i]
+                for i in range(0, len(plddt_list))
+                if i not in residue_data_af2
+            ]
+
+            plddt_sculpted = int(np.mean(plddt_sculpted_list))
+        except NameError:
+            plddt_sculpted = -1
+
+        rmsd_list, linker_length = calculate_RMSD_linker_len(
+            cfg,
+            trb_file,
+            model_pdb_file,
+            control_structure_path,
+            rfdiff_pdb_path,
+            symmetry,
+            model_monomer,
+        )
+
+        # if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
+        if symmetry:
+            monomers_dirname = os.path.join(model_i, "monomers")
+            monomer_cif_file = os.path.join(
+                monomers_dirname,
+                "monomer_" + model_name,
+                "monomer_" + os.path.basename(model_cif_file_path),
+            )
+            parser = MMCIFParser(QUIET=True)
+            structure = parser.get_structure("structure", monomer_cif_file)
+            monomer_pdb_file = Path(monomer_cif_file).with_suffix(".pdb")
+            io = PDBIO()
+            io.set_structure(structure)
+            io.save(str(monomer_pdb_file))
+
+            monomer_rmsd = homooligomer_rmsd.align_monomer(
+                rfdiff_pdb_path, monomer_pdb_file, save_aligned=False
+            )
+            monomer_summary_confidences_file = glob.glob(
+                os.path.join(
+                    monomers_dirname,
+                    "monomer_" + model_name,
+                    "*summary_confidences.json",
+                )
+            )[0]
+
+            monomer_confidences_files = glob.glob(
+                os.path.join(
+                    monomers_dirname, "monomer_" + model_name, "*confidences.json"
+                )
+            )
+
+            monomer_confidences_file = [
+                f
+                for f in monomer_confidences_files
+                if not f.endswith("summary_confidences.json")
+            ][0]
+
+            with open(monomer_summary_confidences_file, "r") as f:
+                summary = json.load(f)
+
+            with open(monomer_confidences_file, "r") as f:
+                monomer_confidences = json.load(f)
+
+            monomer_plddt_list = monomer_confidences["atom_plddts"]
+            monomer_plddt = int(np.mean(monomer_plddt_list))
+            monomer_pae_list = confidences["pae"]
+            monomer_pae = np.mean(monomer_pae_list)
+
+        if model_monomer:
+            monomers_dirname = os.path.join(model_i, "monomers")
+            monomer_cif_file = os.path.join(
+                monomers_dirname,
+                "monomer_" + model_name,
+                "monomer_" + os.path.basename(model_cif_file_path),
+            )
+
+            parser = MMCIFParser(QUIET=True)
+            structure = parser.get_structure("structure", monomer_cif_file)
+            monomer_pdb_file = Path(monomer_cif_file).with_suffix(".pdb")
+            io = PDBIO()
+            io.set_structure(structure)
+            io.save(str(monomer_pdb_file))
+
+            parser = PDBParser(PERMISSIVE=1)
+
+            structure_target = parser.get_structure("target", rfdiff_pdb_path)
+            structure_mobile = parser.get_structure("mobile", monomer_pdb_file)
+
+            target_chain = list(structure_target.get_chains())[0]
+            mobile_chain_res = list(structure_mobile.get_residues())
+            mobile_chain_res = [ind["CA"] for ind in mobile_chain_res]
+            list_rmsd_chains = []
+
+            target_chain_res = list(target_chain.get_residues())
+            target_chain_res = [ind["CA"] for ind in target_chain_res]
+
+            superimposer = Superimposer()
+            superimposer.set_atoms(target_chain_res, mobile_chain_res)
+            superimposer.apply(structure_mobile.get_atoms())
+            list_rmsd_chains.append(superimposer.rms)
+            monomer_rmsd = np.min(list_rmsd_chains)
+            monomer_summary_confidences_file = glob.glob(
+                os.path.join(
+                    monomers_dirname,
+                    "monomer_" + model_name,
+                    "*summary_confidences.json",
+                )
+            )[0]
+            print(
+                f"DEBUG: files in monomer folder {glob.glob(
+                os.path.join(
+                    monomers_dirname, "monomer_" + model_name, "*"
+                ))}"
+            )
+            monomer_confidences_files = glob.glob(
+                os.path.join(
+                    monomers_dirname, "monomer_" + model_name, "*confidences.json"
+                )
+            )
+
+            monomer_confidences_file = [
+                f
+                for f in monomer_confidences_files
+                if not f.endswith("summary_confidences.json")
+            ][0]
+
+            with open(monomer_summary_confidences_file, "r") as f:
+                summary = json.load(f)
+
+            with open(monomer_confidences_file, "r") as f:
+                monomer_confidences = json.load(f)
+
+            monomer_plddt_list = monomer_confidences["atom_plddts"]
+            monomer_plddt = int(np.mean(monomer_plddt_list))
+            monomer_pae_list = confidences["pae"]
+            monomer_pae = np.mean(monomer_pae_list)
+
+        # tracebility
+        output_num = os.path.basename(output_dir)
+        af2_model = "0"  # Right now we're just taking the final model from AF3 instead of the individual ones
+        mpnn_sample = get_token_value(
+            model_name, "_sample_", "(\\d*\\.\\d+|\\d+\\.?\\d*)"
+        )
+        task_id = os.environ.get("SLURM_ARRAY_TASK_ID", 1)
+
+        # Create a new name an copy te af2 model under that name into the output directory
+        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__out_{output_num}_.pdb"
+        # out -> 00 -> number of task
+        # rf -> 01 -> number of corresponding rf difff model
+        # af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag
+        new_pdb_path = os.path.join(dir_renamed_pdb, new_pdb_file)
+
+        try:
+            shutil.copy2(model_pdb_file, new_pdb_path)
+        except OSError as e:
+            print(f"Error copying {model_pdb_file} to {new_pdb_file}: {e}")
+
+        p = PDBParser()
+
+        structure = p.get_structure("model_seq", new_pdb_path)
+
+        ppb = PPBuilder()
+
+        seq = ""
+        for pp in ppb.build_peptides(structure):
+            seq += f":{pp.get_sequence().__str__()}"
+
+        print("new_pdb_file", new_pdb_file)
+        dictionary = {
+            "id": f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}",
+            "link_lenght": (linker_length),
+            "plddt": (plddt),
+            "plddt_sculpted": (plddt_sculpted),
+            "RMSD": f"{rmsd_list[0]:.1f}",
+            #'Rmsd_all_fixed': get_token_value(new_pdb_file, '__rmsd_all_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+            "RMSD_sculpted": f"{rmsd_list[2]:.1f}",
+            "RMSD_fixed_chains": f"{rmsd_list[3]:.1f}",
+            "RMSD_motif": f"{rmsd_list[4]:.1f}",
+            "pae": (pae),
+            "model_path": new_pdb_path,
+            "sequence": seq[1:],
+            "af3_json": summary_confidences_file,
+            "af3_pdb": model_pdb_file,
+            "path_rfdiff": rfdiff_pdb_path,
+        }  # MODEL PATH for scoring_rg_... #jsonfilename for traceability
+        dictionary.update(summary)
         if symmetry or model_monomer:
             dictionary["monomer_rmsd"] = monomer_rmsd
             dictionary["monomer_plddt"] = monomer_plddt
