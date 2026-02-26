@@ -1,4 +1,4 @@
-task_name: filters_example
+task_name: bltz_filters
 
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml

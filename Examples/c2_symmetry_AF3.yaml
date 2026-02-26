@@ -1,4 +1,4 @@
-task_name: c2symmetry_example
+task_name: af3_c2symmetry
 
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml

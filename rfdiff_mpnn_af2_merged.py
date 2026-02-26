@@ -110,9 +110,12 @@ def general_config_prep(cfg):
         print(f"Prediction model: {cfg.prediction_model}")
         cfg.num_models = cfg.get(
             "num_models", 1
-        )  # number of models to output per structure
+        )  # number of models to use per structure
 
-        cfg.model_order = ",".join(str(i) for i in range(1, cfg.num_models + 1))
+        if (
+            cfg.get("model_order", None) is None
+        ):  # If not specified, use default order 1,2,...num_models
+            cfg.model_order = ",".join(str(i) for i in range(1, cfg.num_models + 1))
 
         if cfg.get("skipRfDiff", False):
             # We only need to redesign the chains specified in designable_residues

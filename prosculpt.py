@@ -961,15 +961,36 @@ def rename_pdb_create_csv_colabfold(
         # if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
         if symmetry:
             monomers_dirname = os.path.join(model_i, "monomers")
-            monomer_pdb_file = os.path.join(
-                monomers_dirname, "monomer_" + os.path.basename(model_pdb_file)
+            basename = os.path.basename(model_pdb_file)
+
+            # prefix up to seq_recovery_XXXXX
+            prefix = re.search(r"^(T_.*?seq_recovery_\d+)", basename).group(1)
+
+            # extract model number
+            model_number = re.search(r"_model_(\d+)", basename).group(1)
+
+            # glob pattern: ignore rank completely
+            pattern = os.path.join(
+                monomers_dirname, f"monomer_{prefix}*model_{model_number}_*.pdb"
             )
+            matches = glob.glob(pattern)
+            if not matches:
+                raise FileNotFoundError(f"No matching monomer found for {basename}")
+            monomer_pdb_file = matches[0]  # take the first match
             monomer_rmsd = homooligomer_rmsd.align_monomer(
                 rfdiff_pdb_path, monomer_pdb_file, save_aligned=False
             )
             monomer_params_json = os.path.join(
                 monomers_dirname, "monomer_" + os.path.basename(json_file)
             )
+
+            pattern = os.path.join(
+                monomers_dirname, f"monomer_{prefix}*model_{model_number}_*.json"
+            )
+            matches = glob.glob(pattern)
+            if not matches:
+                raise FileNotFoundError(f"No matching monomer found for {basename}")
+            monomer_params_json = matches[0]  # take the first match
             with open(monomer_params_json, "r") as f:
                 monomer_params = json.load(f)
 
@@ -978,10 +999,25 @@ def rename_pdb_create_csv_colabfold(
 
         if model_monomer:
             monomers_dirname = os.path.join(model_i, "monomers")
-            monomer_pdb_file = os.path.join(
-                monomers_dirname, "monomer_" + os.path.basename(model_pdb_file)
+            basename = os.path.basename(model_pdb_file)
+
+            # prefix up to seq_recovery_XXXXX
+            prefix = re.search(r"^(T_.*?seq_recovery_\d+)", basename).group(1)
+
+            # extract model number
+            model_number = re.search(r"_model_(\d+)", basename).group(1)
+
+            # glob pattern: ignore rank completely
+            pattern = os.path.join(
+                monomers_dirname, f"monomer_{prefix}*model_{model_number}_*.pdb"
             )
 
+            matches = glob.glob(pattern)
+
+            if not matches:
+                raise FileNotFoundError(f"No matching monomer found for {basename}")
+
+            monomer_pdb_file = matches[0]  # take the first match
             parser = PDBParser(PERMISSIVE=1)
 
             structure_target = parser.get_structure("target", rfdiff_pdb_path)
@@ -1000,9 +1036,13 @@ def rename_pdb_create_csv_colabfold(
             superimposer.apply(structure_mobile.get_atoms())
             list_rmsd_chains.append(superimposer.rms)
             monomer_rmsd = np.min(list_rmsd_chains)
-            monomer_params_json = os.path.join(
-                monomers_dirname, "monomer_" + os.path.basename(json_file)
+            pattern = os.path.join(
+                monomers_dirname, f"monomer_{prefix}*model_{model_number}_*.json"
             )
+            matches = glob.glob(pattern)
+            if not matches:
+                raise FileNotFoundError(f"No matching monomer found for {basename}")
+            monomer_params_json = matches[0]  # take the first match
             with open(monomer_params_json, "r") as f:
                 monomer_params = json.load(f)
 
@@ -1148,174 +1188,213 @@ def rename_pdb_create_csv_boltz(
         directory
     ) in individual_directories:  # for each directory in the predictions folder
         dir_path = Path(directory)
+
         model_name = dir_path.parent.name if not dir_path.is_dir() else dir_path.name
 
-        json_file = glob.glob(os.path.join(directory, "*.json"))[0]
-        pae_file = glob.glob(os.path.join(directory, "pae*.npz"))[0]
-        pde_file = glob.glob(os.path.join(directory, "pde*.npz"))[0]
-        plddt_file = glob.glob(os.path.join(directory, "plddt*.npz"))[0]
+        model_pdb_files = glob.glob(os.path.join(directory, "*.pdb"))
 
-        with open(json_file, "r") as f:
-            params = json.load(f)
-        plddt_list = np.load(plddt_file)["plddt"].tolist()
-        plddt = int(np.mean(plddt_list) * 100)
-        pae_list = np.load(pae_file)["pae"].tolist()
-        pae = np.mean(pae_list)
-        pde_list = np.load(pde_file)["pde"].tolist()
-        pde = np.mean(pde_list)
+        for model_pdb_file in model_pdb_files:
+            basename = os.path.basename(model_pdb_file)
+            match = re.search(r"_model_(\d+)", basename)
+            if match:
+                model_number = match.group(1)
+            else:
+                raise ValueError(f"Could not find model number in {basename}")
+            pdb_stem = Path(model_pdb_file).stem
 
-        model_pdb_file = glob.glob(os.path.join(directory, "*.pdb"))[0]
-        # print(f"DEBUG:residue_data_af2 {residue_data_af2}")
-        try:
-            plddt_sculpted_list = [
-                plddt_list[i]
-                for i in range(0, len(plddt_list))
-                if i not in residue_data_af2
-            ]
+            json_file = glob.glob(
+                os.path.join(directory, f"confidence_{pdb_stem}.json")
+            )[0]
+            pae_file = glob.glob(os.path.join(directory, f"pae_{pdb_stem}.npz"))[0]
+            pde_file = glob.glob(os.path.join(directory, f"pde_{pdb_stem}.npz"))[0]
+            plddt_file = glob.glob(os.path.join(directory, f"plddt_{pdb_stem}.npz"))[0]
+            # model_pdb_file = glob.glob(os.path.join(directory, "*.pdb"))[0]
 
-            plddt_sculpted = int(np.mean(plddt_sculpted_list) * 100)
-        except NameError:
-            plddt_sculpted = -1
+            with open(json_file, "r") as f:
+                params = json.load(f)
+            plddt_list = np.load(plddt_file)["plddt"].tolist()
+            plddt = int(np.mean(plddt_list) * 100)
+            pae_list = np.load(pae_file)["pae"].tolist()
+            pae = np.mean(pae_list)
+            pde_list = np.load(pde_file)["pde"].tolist()
+            pde = np.mean(pde_list)
 
-        rmsd_list, linker_length = calculate_RMSD_linker_len(
-            cfg,
-            trb_file,
-            model_pdb_file,
-            control_structure_path,
-            rfdiff_pdb_path,
-            symmetry,
-            model_monomer,
-        )
+            # print(f"DEBUG:residue_data_af2 {residue_data_af2}")
+            try:
+                plddt_sculpted_list = [
+                    plddt_list[i]
+                    for i in range(0, len(plddt_list))
+                    if i not in residue_data_af2
+                ]
 
-        # if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
-        if symmetry:
-            monomers_dirname = os.path.join(model_i, "monomers")
-            monomer_pdb_file = os.path.join(
-                monomers_dirname,
-                "boltz_results_yaml_inputs",
-                "predictions",
-                "monomer_" + model_name,
-                "monomer_" + os.path.basename(model_pdb_file),
-            )
-            monomer_rmsd = homooligomer_rmsd.align_monomer(
-                rfdiff_pdb_path, monomer_pdb_file, save_aligned=False
-            )
-            monomer_json_file = glob.glob(os.path.join(directory, "*.json"))[0]
-            monomer_pae_file = glob.glob(os.path.join(directory, "pae*.npz"))[0]
-            monomer_pde_file = glob.glob(os.path.join(directory, "pde*.npz"))[0]
-            monomer_plddt_file = glob.glob(os.path.join(directory, "plddt*.npz"))[0]
-            with open(monomer_json_file, "r") as f:
-                monomer_params = json.load(f)
-            monomer_plddt_list = np.load(monomer_plddt_file)["plddt"].tolist()
-            monomer_plddt = int(np.mean(monomer_plddt_list) * 100)
-            monomer_pae_list = np.load(monomer_pae_file)["pae"].tolist()
-            monomer_pae = np.mean(monomer_pae_list)
-            monomer_pde_list = np.load(monomer_pde_file)["pde"].tolist()
-            monomer_pde = np.mean(monomer_pde_list)
+                plddt_sculpted = int(np.mean(plddt_sculpted_list) * 100)
+            except NameError:
+                plddt_sculpted = -1
 
-        if model_monomer:
-            monomers_dirname = os.path.join(model_i, "monomers")
-            monomer_pdb_file = os.path.join(
-                monomers_dirname,
-                "boltz_results_yaml_inputs",
-                "predictions",
-                "monomer_" + model_name,
-                "monomer_" + os.path.basename(model_pdb_file),
+            rmsd_list, linker_length = calculate_RMSD_linker_len(
+                cfg,
+                trb_file,
+                model_pdb_file,
+                control_structure_path,
+                rfdiff_pdb_path,
+                symmetry,
+                model_monomer,
             )
 
-            parser = PDBParser(PERMISSIVE=1)
+            # if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
+            if symmetry:
+                monomers_dirname = os.path.join(model_i, "monomers")
+                current_monomer_dirname = os.path.join(
+                    monomers_dirname,
+                    "boltz_results_yaml_inputs",
+                    "predictions",
+                    "monomer_" + model_name,
+                )
 
-            structure_target = parser.get_structure("target", rfdiff_pdb_path)
-            structure_mobile = parser.get_structure("mobile", monomer_pdb_file)
+                monomer_pdb_file = os.path.join(
+                    current_monomer_dirname,
+                    "monomer_" + os.path.basename(model_pdb_file),
+                )
+                monomer_rmsd = homooligomer_rmsd.align_monomer(
+                    rfdiff_pdb_path, monomer_pdb_file, save_aligned=False
+                )
+                monomer_json_file = glob.glob(
+                    os.path.join(current_monomer_dirname, "*.json")
+                )[0]
+                monomer_pae_file = glob.glob(
+                    os.path.join(current_monomer_dirname, f"pae_monomer_{pdb_stem}.npz")
+                )[0]
+                monomer_pde_file = glob.glob(
+                    os.path.join(current_monomer_dirname, f"pde_monomer_{pdb_stem}.npz")
+                )[0]
+                monomer_plddt_file = glob.glob(
+                    os.path.join(
+                        current_monomer_dirname, f"plddt_monomer_{pdb_stem}.npz"
+                    )
+                )[0]
+                with open(monomer_json_file, "r") as f:
+                    monomer_params = json.load(f)
+                monomer_plddt_list = np.load(monomer_plddt_file)["plddt"].tolist()
+                monomer_plddt = int(np.mean(monomer_plddt_list) * 100)
+                monomer_pae_list = np.load(monomer_pae_file)["pae"].tolist()
+                monomer_pae = np.mean(monomer_pae_list)
+                monomer_pde_list = np.load(monomer_pde_file)["pde"].tolist()
+                monomer_pde = np.mean(monomer_pde_list)
 
-            target_chain = list(structure_target.get_chains())[0]
-            mobile_chain_res = list(structure_mobile.get_residues())
-            mobile_chain_res = [ind["CA"] for ind in mobile_chain_res]
-            list_rmsd_chains = []
+            if model_monomer:
+                monomers_dirname = os.path.join(model_i, "monomers")
+                current_monomer_dirname = os.path.join(
+                    monomers_dirname,
+                    "boltz_results_yaml_inputs",
+                    "predictions",
+                    "monomer_" + model_name,
+                )
+                monomer_pdb_file = os.path.join(
+                    current_monomer_dirname,
+                    "monomer_" + os.path.basename(model_pdb_file),
+                )
 
-            target_chain_res = list(target_chain.get_residues())
-            target_chain_res = [ind["CA"] for ind in target_chain_res]
+                parser = PDBParser(PERMISSIVE=1)
 
-            superimposer = Superimposer()
-            superimposer.set_atoms(target_chain_res, mobile_chain_res)
-            superimposer.apply(structure_mobile.get_atoms())
-            list_rmsd_chains.append(superimposer.rms)
-            monomer_rmsd = np.min(list_rmsd_chains)
-            monomer_json_file = glob.glob(os.path.join(directory, "*.json"))[0]
-            monomer_pae_file = glob.glob(os.path.join(directory, "pae*.npz"))[0]
-            monomer_pde_file = glob.glob(os.path.join(directory, "pde*.npz"))[0]
-            monomer_plddt_file = glob.glob(os.path.join(directory, "plddt*.npz"))[0]
-            with open(monomer_json_file, "r") as f:
-                monomer_params = json.load(f)
-            monomer_plddt_list = np.load(monomer_plddt_file)["plddt"].tolist()
-            monomer_plddt = int(np.mean(monomer_plddt_list) * 100)
-            monomer_pae_list = np.load(monomer_pae_file)["pae"].tolist()
-            monomer_pae = np.mean(monomer_pae_list)
-            monomer_pde_list = np.load(monomer_pde_file)["pde"].tolist()
-            monomer_pde = np.mean(monomer_pde_list)
+                structure_target = parser.get_structure("target", rfdiff_pdb_path)
+                structure_mobile = parser.get_structure("mobile", monomer_pdb_file)
 
-        # tracebility
-        output_num = os.path.basename(output_dir)
-        af2_model = "1"  # Boltz only runs one model, so we can just set this to 1. If we wanted to run multiple AF2 models per RFDiffusion model, we would need to change the Boltz code to output the model number in the json filename and then extract it here like we do for the regular ColabFold runs.
-        mpnn_sample = get_token_value(
-            model_name, "_sample_", "(\\d*\\.\\d+|\\d+\\.?\\d*)"
-        )
-        task_id = os.environ.get("SLURM_ARRAY_TASK_ID", 1)
+                target_chain = list(structure_target.get_chains())[0]
+                mobile_chain_res = list(structure_mobile.get_residues())
+                mobile_chain_res = [ind["CA"] for ind in mobile_chain_res]
+                list_rmsd_chains = []
 
-        # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__out_{output_num}_.pdb"
-        # out -> 00 -> number of task
-        # rf -> 01 -> number of corresponding rf difff model
-        # af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag
-        new_pdb_path = os.path.join(dir_renamed_pdb, new_pdb_file)
+                target_chain_res = list(target_chain.get_residues())
+                target_chain_res = [ind["CA"] for ind in target_chain_res]
 
-        try:
-            shutil.copy2(model_pdb_file, new_pdb_path)
-        except OSError as e:
-            print(f"Error copying {model_pdb_file} to {new_pdb_file}: {e}")
+                superimposer = Superimposer()
+                superimposer.set_atoms(target_chain_res, mobile_chain_res)
+                superimposer.apply(structure_mobile.get_atoms())
+                list_rmsd_chains.append(superimposer.rms)
+                monomer_rmsd = np.min(list_rmsd_chains)
+                monomer_json_file = glob.glob(
+                    os.path.join(current_monomer_dirname, "*.json")
+                )[0]
+                monomer_pae_file = glob.glob(
+                    os.path.join(current_monomer_dirname, "pae*.npz")
+                )[0]
+                monomer_pde_file = glob.glob(
+                    os.path.join(current_monomer_dirname, "pde*.npz")
+                )[0]
+                monomer_plddt_file = glob.glob(
+                    os.path.join(current_monomer_dirname, "plddt*.npz")
+                )[0]
+                with open(monomer_json_file, "r") as f:
+                    monomer_params = json.load(f)
+                monomer_plddt_list = np.load(monomer_plddt_file)["plddt"].tolist()
+                monomer_plddt = int(np.mean(monomer_plddt_list) * 100)
+                monomer_pae_list = np.load(monomer_pae_file)["pae"].tolist()
+                monomer_pae = np.mean(monomer_pae_list)
+                monomer_pde_list = np.load(monomer_pde_file)["pde"].tolist()
+                monomer_pde = np.mean(monomer_pde_list)
 
-        p = PDBParser()
+            # tracebility
+            output_num = os.path.basename(output_dir)
+            boltz_model = model_number  # Boltz only runs one model, so we can just set this to 1. If we wanted to run multiple AF2 models per RFDiffusion model, we would need to change the Boltz code to output the model number in the json filename and then extract it here like we do for the regular ColabFold runs.
+            mpnn_sample = get_token_value(
+                model_name, "_sample_", "(\\d*\\.\\d+|\\d+\\.?\\d*)"
+            )
+            task_id = os.environ.get("SLURM_ARRAY_TASK_ID", 1)
 
-        structure = p.get_structure("model_seq", new_pdb_path)
+            # Create a new name an copy te af2 model under that name into the output directory
+            new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{boltz_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__out_{output_num}_.pdb"
+            # out -> 00 -> number of task
+            # rf -> 01 -> number of corresponding rf difff model
+            # af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag
+            new_pdb_path = os.path.join(dir_renamed_pdb, new_pdb_file)
 
-        ppb = PPBuilder()
+            try:
+                shutil.copy2(model_pdb_file, new_pdb_path)
+            except OSError as e:
+                print(f"Error copying {model_pdb_file} to {new_pdb_file}: {e}")
 
-        seq = ""
-        for pp in ppb.build_peptides(structure):
-            seq += f":{pp.get_sequence().__str__()}"
+            p = PDBParser()
 
-        print("new_pdb_file", new_pdb_file)
-        dictionary = {
-            "id": f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}",
-            "link_lenght": (linker_length),
-            "plddt": (plddt),
-            "plddt_sculpted": (plddt_sculpted),
-            "RMSD": f"{rmsd_list[0]:.1f}",
-            #'Rmsd_all_fixed': get_token_value(new_pdb_file, '__rmsd_all_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
-            "RMSD_sculpted": f"{rmsd_list[2]:.1f}",
-            "RMSD_fixed_chains": f"{rmsd_list[3]:.1f}",
-            "RMSD_motif": f"{rmsd_list[4]:.1f}",
-            "pae": (pae),
-            "model_path": new_pdb_path,
-            "sequence": seq[1:],
-            "af2_json": json_file,
-            "af2_pdb": model_pdb_file,
-            "path_rfdiff": rfdiff_pdb_path,
-        }  # MODEL PATH for scoring_rg_... #jsonfilename for traceability
-        dictionary.update(params)
-        if symmetry or model_monomer:
-            dictionary["monomer_rmsd"] = monomer_rmsd
-            dictionary["monomer_plddt"] = monomer_plddt
+            structure = p.get_structure("model_seq", new_pdb_path)
 
-        df = pd.json_normalize(dictionary)
-        path_csv = os.path.join(output_dir, "output.csv")
-        df.to_csv(
-            path_csv,
-            mode="a",
-            header=not os.path.exists(path_csv),
-            index=False,
-            float_format="%.1f",
-        )
+            ppb = PPBuilder()
+
+            seq = ""
+            for pp in ppb.build_peptides(structure):
+                seq += f":{pp.get_sequence().__str__()}"
+
+            print("new_pdb_file", new_pdb_file)
+            dictionary = {
+                "id": f"{task_id}.{trb_num}.{mpnn_sample}.{boltz_model}",
+                "link_lenght": (linker_length),
+                "plddt": (plddt),
+                "plddt_sculpted": (plddt_sculpted),
+                "RMSD": f"{rmsd_list[0]:.1f}",
+                #'Rmsd_all_fixed': get_token_value(new_pdb_file, '__rmsd_all_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
+                "RMSD_sculpted": f"{rmsd_list[2]:.1f}",
+                "RMSD_fixed_chains": f"{rmsd_list[3]:.1f}",
+                "RMSD_motif": f"{rmsd_list[4]:.1f}",
+                "pae": (pae),
+                "model_path": new_pdb_path,
+                "sequence": seq[1:],
+                "af2_json": json_file,
+                "af2_pdb": model_pdb_file,
+                "path_rfdiff": rfdiff_pdb_path,
+            }  # MODEL PATH for scoring_rg_... #jsonfilename for traceability
+            dictionary.update(params)
+            if symmetry or model_monomer:
+                dictionary["monomer_rmsd"] = monomer_rmsd
+                dictionary["monomer_plddt"] = monomer_plddt
+
+            df = pd.json_normalize(dictionary)
+            path_csv = os.path.join(output_dir, "output.csv")
+            df.to_csv(
+                path_csv,
+                mode="a",
+                header=not os.path.exists(path_csv),
+                index=False,
+                float_format="%.1f",
+            )
 
 
 def rename_pdb_create_csv_AF3(

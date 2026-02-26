@@ -1,4 +1,4 @@
-task_name: motif_scaffolding_example
+task_name: bltz_motif_scaffolding
 
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
