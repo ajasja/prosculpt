@@ -1121,22 +1121,26 @@ def prosculptApp(cfg: DictConfig) -> None:
         final_operations(cfg)
 
     else:
-        if not cfg.get("skipRfDiff", False):
-            dtimelog("pass_config_to_rfdiff")
-            pass_config_to_rfdiff(cfg)
-            dtimelog("run_rfdiff")
-            run_rfdiff(cfg)
+        checkpoint_status= get_checkpoint(cfg.output_dir, "content_status", -1)
+        if checkpoint_status==-1:
+            if not cfg.get("skipRfDiff", False):
+                dtimelog("pass_config_to_rfdiff")
+                pass_config_to_rfdiff(cfg)
+                dtimelog("run_rfdiff")
+                run_rfdiff(cfg)
 
-            dtimelog("plugin_filters")
-            plugin_filters(cfg)
+                dtimelog("plugin_filters")
+                plugin_filters(cfg)
 
-            dtimelog("rechain_rfdiff_pdbs")
-            rechain_rfdiff_pdbs(cfg)
+                dtimelog("rechain_rfdiff_pdbs")
+                rechain_rfdiff_pdbs(cfg)
+            else:
+                log.info("*** Skipping RfDiff ***")
+                dtimelog("skipping RfDiff")
+                # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
+                shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
         else:
-            log.info("*** Skipping RfDiff ***")
-            dtimelog("skipping RfDiff")
-            # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
-            shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
+            log.info(f"Checkpoint found with content_status {checkpoint_status}. Skipping RfDiff and plugin filters, going directly to cycling.")
 
         dtimelog("do_cycling")
         do_cycling(cfg)
