@@ -78,6 +78,7 @@ Copy or rename the file config/installation.yaml.singularity_template as config/
 - If multiple users will be using the same installation, it is good to set the boltz2 cache parameter to the current user so that only one set of parameters are downloaded.
 
 If using Boltz2 or Colabfold it is necessary to run a job to allow them to download the parameters. In a slurm cluster you can run:
+
 Colabfold:
 ```bash
 python run_tests.py -t unconditional
