@@ -108,6 +108,11 @@ def general_config_prep(cfg):
             )
 
         print(f"Prediction model: {cfg.prediction_model}")
+        cfg.num_models = cfg.get(
+            "num_models", 1
+        )  # number of models to output per structure
+
+        cfg.model_order = ",".join(str(i) for i in range(1, cfg.num_models + 1))
 
         if cfg.get("skipRfDiff", False):
             # We only need to redesign the chains specified in designable_residues
@@ -747,10 +752,10 @@ def do_cycling(cfg):
             if not os.path.exists(model_dir):
                 os.makedirs(model_dir)
 
-            model_order = str(cfg.model_order).split(
+            model_order_list = str(cfg.model_order).split(
                 ","
             )  # If only one number is passed, Hydra converts it to int
-            num_models = len(model_order)  # model order "1,2,3" -> num of models = 3
+            # num_models = len(model_order)  # model order "1,2,3" -> num of models = 3
 
             if cfg.get("colabfold_preparation_script", False):
                 preparation_command = f"source {cfg.colabfold_preparation_script} && "  # if the preparation script is specified, include it
@@ -801,15 +806,15 @@ def do_cycling(cfg):
                                             {a3m_file} {model_dir} \
                                             --model-order {cfg.model_order} \
                                             {parse_additional_args(cfg, "pass_to_af")} \
-                                            --num-models {num_models}',
+                                            --num-models {cfg.num_models}',
                                 cfg=cfg,
                             )  # changed from single_sequence
                         else:
-                            for model_number in model_order:
+                            for model_number in model_order_list:
                                 if (
                                     af2_model_num == model_number
                                 ):  # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
-                                    num_models = 1
+
                                     run_and_log(
                                         f'{preparation_command}{cfg.colabfold_run_command} \
                                             --model-type alphafold2_multimer_v3 \
@@ -817,7 +822,7 @@ def do_cycling(cfg):
                                             {a3m_file} {model_dir} \
                                             --model-order {model_number} \
                                             {parse_additional_args(cfg, "pass_to_af")} \
-                                            --num-models {num_models}',
+                                            --num-models 1',
                                         cfg=cfg,
                                     )  # Changed from single_sequence
                 elif cfg.prediction_model == "Boltz2":  # If using Boltz
@@ -861,7 +866,7 @@ def do_cycling(cfg):
                                 input_yaml_files.append(custom_yaml_path)
 
                     run_and_log(
-                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')}",
+                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')} --diffusion_samples {cfg.num_models}",
                         cfg=cfg,
                     )
                 elif cfg.prediction_model == "AF3":  # If using Af3
@@ -915,7 +920,10 @@ def do_cycling(cfg):
                             r"{INPUT_PATH_AF3}", json_dir
                         )
 
-                    run_and_log(f"{af3_run_command}", cfg=cfg)
+                    run_and_log(
+                        f"{af3_run_command} --num_diffusion_samples {cfg.num_models}",
+                        cfg=cfg,
+                    )
                 else:
                     log.error(f"Unsupported prediction model: {cfg.prediction_model}")
             else:  # this is the normal mode of operations. Single sequence.
@@ -928,15 +936,15 @@ def do_cycling(cfg):
                                         {fasta_file} {model_dir} \
                                         --model-order {cfg.model_order} \
                                         {parse_additional_args(cfg, "pass_to_af")} \
-                                        --num-models {num_models}',
+                                        --num-models {cfg.num_models}',
                             cfg=cfg,
                         )
                     else:
-                        for model_number in model_order:
+                        for model_number in model_order_list:
                             if (
                                 af2_model_num == model_number
                             ):  # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
-                                num_models = 1
+
                                 run_and_log(
                                     f'{preparation_command}{cfg.colabfold_run_command} \
                                         --model-type alphafold2_multimer_v3 \
@@ -944,7 +952,7 @@ def do_cycling(cfg):
                                         {fasta_file} {model_dir} \
                                         --model-order {model_number} \
                                         {parse_additional_args(cfg, "pass_to_af")} \
-                                        --num-models {num_models}',
+                                        --num-models 1',
                                     cfg=cfg,
                                 )
                 elif cfg.prediction_model == "Boltz2":  # If using Boltz
@@ -973,7 +981,7 @@ def do_cycling(cfg):
                                 # input_yaml_files.append(custom_yaml_path)
 
                     run_and_log(
-                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')}",
+                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')} --diffusion_samples {cfg.num_models}",
                         cfg=cfg,
                     )
                 elif cfg.prediction_model == "AF3":  # If using Af3
@@ -1012,7 +1020,10 @@ def do_cycling(cfg):
                             r"{INPUT_PATH_AF3}", json_dir
                         )
 
-                    run_and_log(af3_run_command)
+                    run_and_log(
+                        f"{af3_run_command} --num_diffusion_samples {cfg.num_models}",
+                        cfg=cfg,
+                    )
                 else:
                     log.error(f"Unsupported prediction model: {cfg.prediction_model}")
         save_checkpoint(
@@ -1181,8 +1192,16 @@ PREVIOUS_MESSAGE = "Before app start"
 def dtimelog(message, final=False):
     global TIMECALC
     global PREVIOUS_MESSAGE
+    global JOB_START_TIME
+
+    # Initialize job start time if not set
+    if "JOB_START_TIME" not in globals() or JOB_START_TIME is None:
+        JOB_START_TIME = time.time()
+
     dt = round(time.time() - TIMECALC, 1)
+
     log.info(f"* * * {PREVIOUS_MESSAGE} lasted {dt} s. Running {message} * * *")
+
     TIMEMEASURES[PREVIOUS_MESSAGE] = dt
     PREVIOUS_MESSAGE = message
     TIMECALC = time.time()
@@ -1191,6 +1210,16 @@ def dtimelog(message, final=False):
         # Print all measures one per line
         for k, v in TIMEMEASURES.items():
             log.info(f"{k} lasted {v} s.")
+
+        # ---- Total duration ----
+        total_seconds = int(time.time() - JOB_START_TIME)
+
+        days = total_seconds // 86400
+        hours = (total_seconds % 86400) // 3600
+        minutes = (total_seconds % 3600) // 60
+        seconds = total_seconds % 60
+
+        log.info(f"Total job duration: {days}d {hours}h {minutes}m {seconds}s")
 
 
 crash_at_error = 0  # Added through command line. Where should the test crash?
