@@ -163,3 +163,4 @@ cython_debug/
 Examples/Examples_out
 outputs/
 .vscode/
+config/installation.yaml
