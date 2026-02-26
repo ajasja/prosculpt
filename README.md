@@ -65,7 +65,7 @@ conda install -c conda-forge compilers
 ```
 
 
-For Alphafold 3 use, request the model parameters following the instructions on the (Alphafold 3 github)[https://github.com/google-deepmind/alphafold3]. Then download the sif file using
+For Alphafold 3 use, request the model parameters following the instructions on the [Alphafold 3 github](https://github.com/google-deepmind/alphafold3). Then download the sif file using
 ```bash
 singularity pull af3_2.sif docker://kosinskilab/alphafold3
 ```
