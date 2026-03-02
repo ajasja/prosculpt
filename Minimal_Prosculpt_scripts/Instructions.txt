@@ -21,7 +21,7 @@ Alignment files are needed to give prosculpt the alignment information for alpha
 To get your alignment files: 
 - Get a fasta file of your input structure (in pymol you can simply do "save example.fasta"). The sequence in the fasta needs to match exactly the sequence in the PDB
     - The fasta file should have each chain as a separate entry in the fasta (So each one has a ">" of their own)
-- Paste that fasta file into our alphafold server (at /home/d12/AF2_MOUNT/in)
+- Model the sequence in the fasta using any structure prediction program like Colabfold
 - Wait to get the AF2 results. 
 - The results will include the PDB models (which you can use as your new input structure. This is recommended, but you don't have to if for some reason your structure is better)
     and also will include the a3m files we will use. Take the a3m files for those chains you will use, and paste them in a folder of their own in your project folder. Each a3m file should
