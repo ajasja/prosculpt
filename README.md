@@ -50,11 +50,6 @@ singularity pull pymol.sif docker://jysgro/pymol:3.1.0_amd_arm
 
 Depending on the prediction model, follow the appropriate instructions (Multiple instructions can be followed and the prediction model selected as desired in the configuration)
 
-For using Colabfold
-```bash
-singularity pull colabfold.sif docker://unionbio/colabfold:w4KMVR7WrKDlCbdQ1BYrjQ-test
-```
-
 For using Boltz2, install boltz2 into the environment
 ```bash
 pip install boltz[cuda] -U
@@ -69,6 +64,12 @@ For Alphafold 3 use, request the model parameters following the instructions on 
 ```bash
 singularity pull af3_2.sif docker://kosinskilab/alphafold3
 ```
+
+For using Colabfold (Note: Colabfold is slower and less convenient than using Boltz2 or AF3 and is not recommended)
+```bash
+singularity pull colabfold.sif docker://unionbio/colabfold:w4KMVR7WrKDlCbdQ1BYrjQ-test
+```
+
 
 Copy or rename the file config/installation.yaml.singularity_template as config/installation.yaml. Then replace the default values with the ones corresponding to your system. Mainly:
 
