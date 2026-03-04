@@ -38,18 +38,29 @@ def make_boltz_input_yaml(
     data = dict(sequences=dict())
     data["sequences"] = []
     if cfg.use_a3m and input_alignment_dir is not None:
+        sequence_to_msa = {}
+
         for idxsequence, sequence in enumerate(sequences):
             chain_id = chain_ids[idxsequence]
             cleaned = "".join(c for c in sequence if c.isalpha())
+
             print(
-                f"Chain ID: {chain_ids[idxsequence]}, Sequence: {sequence}, Cleaned Sequence: {cleaned}"
+                f"Chain ID: {chain_id}, Sequence: {sequence}, Cleaned Sequence: {cleaned}"
             )
+
+            # If we've already seen this exact sequence, reuse its MSA
+            if cleaned in sequence_to_msa:
+                msa_path = sequence_to_msa[cleaned]
+            else:
+                msa_path = f"{input_alignment_dir}/{model_id}_{chain_id}.a3m"
+                sequence_to_msa[cleaned] = msa_path
+
             data["sequences"].append(
                 {
                     "protein": {
                         "id": chain_id,
                         "sequence": cleaned,
-                        "msa": f"{input_alignment_dir}/{model_id}_{chain_id}.a3m",
+                        "msa": msa_path,
                     }
                 }
             )
