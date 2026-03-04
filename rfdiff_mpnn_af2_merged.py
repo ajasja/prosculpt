@@ -761,9 +761,19 @@ def do_cycling(cfg):
             # num_models = len(model_order)  # model order "1,2,3" -> num of models = 3
 
             if cfg.get("colabfold_preparation_script", False):
-                preparation_command = f"source {cfg.colabfold_preparation_script} && "  # if the preparation script is specified, include it
+                colabfold_preparation_command = f"source {cfg.colabfold_preparation_script} && "  # if the preparation script is specified, include it
             else:
-                preparation_command = ""
+                colabfold_preparation_command = ""
+
+            if cfg.get("boltz_preparation_script", False):
+                boltz_preparation_command = f"source {cfg.boltz_preparation_script} && "  # if the preparation script is specified, include it
+            else:
+                boltz_preparation_command = ""
+
+            if cfg.get("af3_preparation_script", False):
+                af3_preparation_command = f"source {cfg.af3_preparation_script} && "  # if the preparation script is specified, include it
+            else:
+                af3_preparation_command = ""
 
             if cfg.get(
                 "use_a3m", False
@@ -803,7 +813,7 @@ def do_cycling(cfg):
                     for a3m_file in input_a3m_files:
                         if cycle == 0:  # have to run af2 differently in first cycle
                             run_and_log(
-                                f'{preparation_command}{cfg.colabfold_run_command} \
+                                f'{colabfold_preparation_command}{cfg.colabfold_run_command} \
                                             --model-type alphafold2_multimer_v3 \
                                             --msa-mode mmseqs2_uniref_env \
                                             {a3m_file} {model_dir} \
@@ -819,7 +829,7 @@ def do_cycling(cfg):
                                 ):  # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
 
                                     run_and_log(
-                                        f'{preparation_command}{cfg.colabfold_run_command} \
+                                        f'{colabfold_preparation_command}{cfg.colabfold_run_command} \
                                             --model-type alphafold2_multimer_v3 \
                                             --msa-mode mmseqs2_uniref_env \
                                             {a3m_file} {model_dir} \
@@ -869,7 +879,7 @@ def do_cycling(cfg):
                                 input_yaml_files.append(custom_yaml_path)
 
                     run_and_log(
-                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')} --diffusion_samples {cfg.num_models}",
+                        f"{boltz_preparation_command}boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')} --diffusion_samples {cfg.num_models}",
                         cfg=cfg,
                     )
                 elif cfg.prediction_model == "AF3":  # If using Af3
@@ -924,7 +934,7 @@ def do_cycling(cfg):
                         )
 
                     run_and_log(
-                        f"{af3_run_command} --num_diffusion_samples {cfg.num_models}",
+                        f"{af3_preparation_command}{af3_run_command} --num_diffusion_samples={cfg.num_models}",
                         cfg=cfg,
                     )
                 else:
@@ -933,7 +943,7 @@ def do_cycling(cfg):
                 if cfg.prediction_model == "Colabfold":
                     if cycle == 0:  # have to run af2 differently in first cycle
                         run_and_log(
-                            f'{preparation_command}{cfg.colabfold_run_command} \
+                            f'{colabfold_preparation_command}{cfg.colabfold_run_command} \
                                         --model-type alphafold2_multimer_v3 \
                                         --msa-mode single_sequence \
                                         {fasta_file} {model_dir} \
@@ -949,7 +959,7 @@ def do_cycling(cfg):
                             ):  # From the af2 model 4 you want only model 4 not also 2 and for 2 only 2 not 4 (--model_order "2,4")
 
                                 run_and_log(
-                                    f'{preparation_command}{cfg.colabfold_run_command} \
+                                    f'{colabfold_preparation_command}{cfg.colabfold_run_command} \
                                         --model-type alphafold2_multimer_v3 \
                                         --msa-mode single_sequence \
                                         {fasta_file} {model_dir} \
@@ -984,7 +994,7 @@ def do_cycling(cfg):
                                 # input_yaml_files.append(custom_yaml_path)
 
                     run_and_log(
-                        f"boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')} --diffusion_samples {cfg.num_models}",
+                        f"{boltz_preparation_command}boltz predict {yaml_dir}/ --out_dir {model_dir} --output_format pdb {cfg.get('boltz_options', '')} --diffusion_samples {cfg.num_models}",
                         cfg=cfg,
                     )
                 elif cfg.prediction_model == "AF3":  # If using Af3
@@ -1024,7 +1034,7 @@ def do_cycling(cfg):
                         )
 
                     run_and_log(
-                        f"{af3_run_command} --num_diffusion_samples {cfg.num_models}",
+                        f"{af3_preparation_command}{af3_run_command} --num_diffusion_samples={cfg.num_models}",
                         cfg=cfg,
                     )
                 else:
@@ -1265,22 +1275,26 @@ def prosculptApp(cfg: DictConfig) -> None:
         final_operations(cfg)
 
     else:
-        if not cfg.get("skipRfDiff", False):
-            dtimelog("pass_config_to_rfdiff")
-            pass_config_to_rfdiff(cfg)
-            dtimelog("run_rfdiff")
-            run_rfdiff(cfg)
+        checkpoint_status= get_checkpoint(cfg.output_dir, "content_status", -1)
+        if checkpoint_status==-1:
+            if not cfg.get("skipRfDiff", False):
+                dtimelog("pass_config_to_rfdiff")
+                pass_config_to_rfdiff(cfg)
+                dtimelog("run_rfdiff")
+                run_rfdiff(cfg)
 
-            dtimelog("plugin_filters")
-            plugin_filters(cfg)
+                dtimelog("plugin_filters")
+                plugin_filters(cfg)
 
-            dtimelog("rechain_rfdiff_pdbs")
-            rechain_rfdiff_pdbs(cfg)
+                dtimelog("rechain_rfdiff_pdbs")
+                rechain_rfdiff_pdbs(cfg)
+            else:
+                log.info("*** Skipping RfDiff ***")
+                dtimelog("skipping RfDiff")
+                # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
+                shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
         else:
-            log.info("*** Skipping RfDiff ***")
-            dtimelog("skipping RfDiff")
-            # Copy input PDB to RfDiff_output_dir and rename it to follow the token scheme
-            shutil.copy(cfg.pdb_path, os.path.join(cfg.rfdiff_out_dir, "_0.pdb"))
+            log.info(f"Checkpoint found with content_status {checkpoint_status}. Skipping RfDiff and plugin filters, going directly to cycling.")
 
         dtimelog("do_cycling")
         do_cycling(cfg)

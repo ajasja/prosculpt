@@ -41,38 +41,53 @@ pip install pyrosetta-installer
 python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
 ```
 
-Install boltz2 into the environment
+At a location of your choice download the appropriate SIF files, executing the following commands:
+```bash
+singularity pull rfdiff.sif docker://rosettacommons/rfdiffusion
+singularity pull proteinmpnn.sif docker://rosettacommons/proteinmpnn
+singularity pull pymol.sif docker://jysgro/pymol:3.1.0_amd_arm
+```
+
+Depending on the prediction model, follow the appropriate instructions (Multiple instructions can be followed and the prediction model selected as desired in the configuration)
+
+For using Boltz2, install boltz2 into the environment
 ```bash
 pip install boltz[cuda] -U
 ```
-
 it might be necessary to install compilers for boltz2 to run correctly. The exact command for this is system-dependent. If using conda, it can be done by
 ```bash
 conda install -c conda-forge compilers
 ```
 
-At a location of your choice download the appropriate SIF files, executing the following commands:
+
+For Alphafold 3 use, request the model parameters following the instructions on the [Alphafold 3 github](https://github.com/google-deepmind/alphafold3). Then download the sif file using
 ```bash
-singularity pull rfdiff.sif docker://rosettacommons/rfdiffusion
-singularity pull proteinmpnn.sif docker://rosettacommons/proteinmpnn
-singularity pull colabfold.sif docker://unionbio/colabfold:w4KMVR7WrKDlCbdQ1BYrjQ-test
-singularity pull pymol.sif docker://jysgro/pymol:3.1.0_amd_arm
+singularity pull af3_2.sif docker://kosinskilab/alphafold3
 ```
-Go into prosculpt/config/installation.yaml and replace the default values with the ones corresponding to your system. Mainly:
+
+For using Colabfold (Note: Colabfold is slower and less convenient than using Boltz2 or AF3 and is not recommended)
+```bash
+singularity pull colabfold.sif docker://unionbio/colabfold:w4KMVR7WrKDlCbdQ1BYrjQ-test
+```
+
+
+Copy or rename the file config/installation.yaml.singularity_template as config/installation.yaml. Then replace the default values with the ones corresponding to your system. Mainly:
+
 - Replace the run command of the sif files with the appropriate commands and paths for your system.
 - Replace the prosculpt_python_path with the python path of your prosculpt env (You can get it by running "which python" with the env active)
 - Replace the slurm options with those that correspond with your cluster (these can then be overwritten by individual job settings)
+- If multiple users will be using the same installation, it is good to set the boltz2 cache parameter to the current user so that only one set of parameters are downloaded.
 
-Now we will run a single test, to allow colabfold to download the weights by executing: (This step uses slurm. If your system doesn't use slurm, just run prosculpt by yourself once)
+If using Boltz2 or Colabfold it is necessary to run a job to allow them to download the parameters. In a slurm cluster you can run:
+
+Colabfold:
 ```bash
 python run_tests.py -t unconditional
 ```
-After this has succesfully ran, you can run all tests by executing:
+Boltz2:
 ```bash
-python run_tests.py
+python run_tests.py -t unconditional_boltz
 ```
-
-After all tests are finished, go into the Examples/Examples_out_{yourdatetime} and check the output txt file to verify all tests have passed. 
 
 ## Usage
 
@@ -86,7 +101,7 @@ If you want to run Prosculpt locally, it can be called as
 python rfdiff_mpnn_af2_merged.py -cd config_directory -cn config_file_name
 ```
 
-(note that the config file name must go without the yaml extension)
+(note that the config file name must be written without the yaml extension)
 
 ## Examples
 For usage examples see the /Examples or /Minimal_Prosculpt_script folders
