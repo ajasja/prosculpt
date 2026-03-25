@@ -480,6 +480,7 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
 
         rmsd_list, linker_length = calculate_RMSD_linker_len(cfg, trb_file, model_pdb_file, control_structure_path, rfdiff_pdb_path,symmetry, model_monomer)
         pae = round((np.mean(params['pae'])), 2)
+        actifptm = round(float(params['actifptm']), 3) if params.get('actifptm') is not None else -1
 
         #if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
         if symmetry:
@@ -529,7 +530,7 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
         task_id=os.environ.get('SLURM_ARRAY_TASK_ID', 1)
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__out_{output_num}_.pdb"
+        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__actifptm_{actifptm}__out_{output_num}_.pdb"
             #out -> 00 -> number of task
             #rf -> 01 -> number of corresponding rf difff model
             #af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag 
@@ -562,6 +563,7 @@ def rename_pdb_create_csv(cfg, output_dir, rfdiff_out_dir, trb_num, model_i, con
                 'RMSD_fixed_chains': get_token_value(new_pdb_file, '__rmsd_fixedchains_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_motif': get_token_value(new_pdb_file, '__rmsd_motif_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'pae': get_token_value(new_pdb_file, '__pae_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
+                'actifptm': get_token_value(new_pdb_file, '__actifptm_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'model_path': new_pdb_path,
                 'sequence' : seq[1:],
                 'af2_json' : json_file,
@@ -607,6 +609,7 @@ def create_dataframe(path_to_files, output_dir): # path = r'content/*partial.pdb
                 #'Rmsd_all_fixed': get_token_value(file_name, '__rmsd_all_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'RMSD_sculpted': get_token_value(file_name, '__rmsd_sculpted_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'pae': get_token_value(file_name, '__pae_', "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
+                'actifptm': get_token_value(file_name, '__actifptm_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
                 'model_path': file_name,
                 'sequence' : seq,
                 'rfdiff model': get_token_value(file_name, '__rf_', "(\\d*\\.\\d+|\\d+\\.?\\d*)")}  #MODEL PATH for scoring_rg_... #jsonfilename for traceability
