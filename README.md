@@ -110,6 +110,7 @@ For usage examples see the /Examples or /Minimal_Prosculpt_script folders
 Sometimes you may want to skip RfDiff and only pass the pdb to ProteinMPNN and AF with a few residues to change. 
 
 Add `skipRfDiff: True` and `designable_residues: [A8, A9, A10, A13, A85]` to the yaml config, where designable_residues contains the residues you want to change.
+If there are non-redesigned chains in the model that you want included in the final model, add the letter chain (without any numbers) to the designable residues.
 
 In order to actually produce diverse results, `--sampling_temp` and `--backbone_noise` passed to ProteinMPNN are increased to `0.3` and `1`, respectively.  
 
