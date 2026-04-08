@@ -176,3 +176,13 @@ Contigs are the most important input (for now, guiding potentials are another in
 In case of errors in any of the sub programs (RfDiffusion, ProteinMPNN, AlphaFold) prosculpt can automatically restart, so that the previous steps are not lost.
 To do so, pass `auto_restart: n`, where `n` ... number of allowed restarts, to the .yaml config.
 
+## Caveats/Troubleshooting
+### Binder design
+* In the input pdb, target must start with chain `B`, and use subsequent chain letters (C, D ...) if it has multiple chains. 
+    * Otherwise, errors arise when passing into ProteinMPNN.
+* Targets should not have missing residues s. t. distance between two residues would be larger than `chain_break_cutoff_A`
+    * Otherwise, rechain.py will start a new chain at that point, causing errors when passing into ProteinMPNN.
+    * Note that even without missing residues, calculated distance after the RfDiffusion step may sometimes be just slightly above 2 Å around prolines, so adjust accordingly. 
+* The `chains_to_design` parameter should not be present at all in the .yaml config file! 
+    * Otherwise, target will be fixed incorrectly and thus its aminoacids changed. 
+
