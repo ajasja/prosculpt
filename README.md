@@ -37,8 +37,7 @@ pip install .
 ```
 Install pyrosetta into the environment
 ```bash
-pip install pyrosetta-installer 
-python -c 'import pyrosetta_installer; pyrosetta_installer.install_pyrosetta()'
+pip install pyrosetta --find-links https://west.rosettacommons.org/pyrosetta/quarterly/release.cxx11thread.serialization
 ```
 
 At a location of your choice download the appropriate SIF files, executing the following commands:
