@@ -1905,15 +1905,18 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
         print(f"Fixed res (according to contig chain breaks): {fixed_res}")
 
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
+        
+        # Fix for multi-chain receptors 
+        complex_con_ref_pdb_idx = trb_data.get('complex_con_ref_pdb_idx', con_hal_idx.copy()) # If not present, it will act as in older versions.
 
-        for chain, idx in con_hal_idx:
+        for (chain, idx), (chain_from_input, idx_from_input) in zip(con_hal_idx, complex_con_ref_pdb_idx):
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
             if not skipRfDiff:
                 if trb_data["inpaint_seq"][
                     idx - 1
                 ]:  # skip residues with FALSE in the inpaint_seq array
-                    fixed_res.setdefault(chain, list()).append(
-                        idx - chainResidOffset[chain]
+                    fixed_res.setdefault(chain_from_input, list()).append(
+                        idx - chainResidOffset[chain_from_input]
                     )
             else:
                 fixed_res.setdefault(chain, list()).append(
