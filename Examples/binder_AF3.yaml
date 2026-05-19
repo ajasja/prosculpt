@@ -3,8 +3,8 @@ task_name: af3_binder
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
   #Do not specify the --array command here. Use the num_tasks parameter below.
-  output: slurm-%A_%a_%x.out 
-  error: slurm-%A_%a_%x.err
+  output: logs/slurm-%A_%a_%x.out 
+  error: logs/slurm-%A_%a_%x.err
   
   #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
   
@@ -25,6 +25,7 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 sampling_temp: 0.1
 backbone_noise: 0.0
 
+use_soluble_model: True # Whether to use the soluble model of ProteinMPNN. Default is True.
 use_a3m: True 
 a3m_dir: Examples/input_data/Insulin_Alignment
 model_monomer: True

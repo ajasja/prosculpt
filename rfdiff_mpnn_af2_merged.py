@@ -655,6 +655,7 @@ def do_cycling(cfg):
 
             # _____________ RUN ProteinMPNN_____________
             # At first cycle, use num_seq_per_target from config. In subsequent cycles, set it to 1.
+
             proteinMPNN_cmd_str = f'{cfg.mpnn_run_command} \
                 --jsonl_path {cfg.path_for_parsed_chains} \
                 --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
@@ -664,7 +665,7 @@ def do_cycling(cfg):
                 --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \
                 --sampling_temp {cfg.sampling_temp} \
                 --backbone_noise {cfg.backbone_noise} \
-                --use_soluble_model  \
+                {"--use_soluble_model" if cfg.get("use_soluble_model", True) else ""} \
                 --omit_AAs {cfg.omit_AAs} \
                 {parse_additional_args(cfg, "pass_to_mpnn")} \
                 --batch_size 1'
