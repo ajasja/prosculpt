@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="prosculpt",
-    version="1.1.1",
+    version="1.1.2",
     url="https://github.com/ajasja/prosculpt",
     author="Ajasja Ljubetič",
     author_email="ajasja.ljubetic@gmail.com",
