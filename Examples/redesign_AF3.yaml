@@ -3,8 +3,8 @@ task_name: af3_redesign
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
   #Do not specify the --array command here. Use the num_tasks parameter below.
-  output: slurm-%A_%a_%x.out 
-  error: slurm-%A_%a_%x.err
+  output: logs/slurm-%A_%a_%x.out 
+  error: logs/slurm-%A_%a_%x.err
   
   #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
   
@@ -16,7 +16,7 @@ pdb_path: Examples/input_data/redesign_target.pdb # Path to input PDB file || nu
 #output_dir: Examples/Examples_out/binder/ # Path to output directory
 contig: "[100-100]" # Contig to design
 num_designs_rfdiff: 1 # Number of designs to generate with RFdiffusion
-num_seq_per_target_mpnn: 10 # Number of sequences to generate per target with MPNN
+num_seq_per_target_mpnn: 70 # Number of sequences to generate per target with MPNN
 #chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
 af2_mpnn_cycles: 1 # Not used yet?
 num_models: 1 # Choose specific models to cycle in af2-mpnn

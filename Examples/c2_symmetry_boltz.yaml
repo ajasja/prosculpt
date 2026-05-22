@@ -3,8 +3,8 @@ task_name: bltz_c2symmetry
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
   #Do not specify the --array command here. Use the num_tasks parameter below.
-  output: slurm-%A_%a_%x.out 
-  error: slurm-%A_%a_%x.err
+  output: logs/slurm-%A_%a_%x.out 
+  error: logs/slurm-%A_%a_%x.err
   #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
 
 num_tasks: 1

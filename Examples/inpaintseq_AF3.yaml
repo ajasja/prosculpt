@@ -3,8 +3,8 @@ task_name: af3_inpaintseq
 slurm:
   #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
   #Do not specify the --array command here. Use the num_tasks parameter below.
-  output: slurm-%A_%a_%x.out 
-  error: slurm-%A_%a_%x.err
+  output: logs/slurm-%A_%a_%x.out 
+  error: logs/slurm-%A_%a_%x.err
   #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
 
 num_tasks: 1
@@ -13,15 +13,15 @@ num_tasks: 1
 # Config for the current run
 pdb_path: Examples/input_data/5TPN.pdb # Path to input PDB file || null when building unconditionally
 #output_dir: Examples/Examples_out/inpaintseq/ # Path to output directory
-contig: "[10-40/A163-181/10-40]" # Contig to design
-num_designs_rfdiff: 2 # Number of designs to generate with RFdiffusion
-num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
+contig: "[5-5/A163-181/5-5]" # Contig to design
+num_designs_rfdiff: 1 # Number of designs to generate with RFdiffusion
+num_seq_per_target_mpnn: 5 # Number of sequences to generate per target with MPNN
 #chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
 af2_mpnn_cycles: 1 # Not used yet?
 num_models: 1 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 
-sampling_temp: 0.1
+sampling_temp: 0.6 #This is very high just so that the example produces highly different sequences
 backbone_noise: 0.0
 use_a3m: False
 prediction_model: AF3 
@@ -48,4 +48,4 @@ inference:
 potentials:
   generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
 contigmap:
-  inpaint_seq: [A163-168/A170-171/A179] # Without quotes! RfDiff expects contigs as lists, not as strings.
+  inpaint_seq: [A170-171/A179] # Without quotes! RfDiff expects contigs as lists, not as strings.
