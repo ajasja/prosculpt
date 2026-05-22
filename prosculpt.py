@@ -15,6 +15,7 @@ import homooligomer_rmsd
 from Bio.Align import PairwiseAligner
 import re
 import yaml
+import copy
 
 
 def make_boltz_input_yaml(
@@ -323,7 +324,7 @@ def calculate_RMSD_linker_len(
 
     # Get different data from trb file depending on the fact if designing a monomer (one chain) or heteromer
     # complex_con_rex_idx present only if there are chains that are completely fixed.
-    # Data structure: con_ref_idx0 = [0, 1, 3, 3, ...]
+    # Data structure: con_ref_idx0 = [0, 1, 2, 3, ...]
     #   Info: array of input pdb AA indices starting 0 (con_ref_pdb_idx), and where they are in the output pdb (con_hal_pdb_idx)
     #   In complex_con_hal_idx0 there is no chain info however RFDIFF changes pdb indeces to go from 1 to n (e.g. 1st AA in chain B has idx 34)
 
@@ -332,20 +333,19 @@ def calculate_RMSD_linker_len(
         selected_residues_data = trb_dict["complex_con_hal_idx0"]
         selected_residues_in_designed_chains = trb_dict["con_hal_idx0"]
         if (
-            len(selected_residues_in_designed_chains) == 0
-            and trb_dict["config"]["contigmap"]["provide_seq"] != None
+            trb_dict["config"]["contigmap"]["provide_seq"] != None
         ):
-            selected_residues_in_designed_chains = np.where(
+            provide_seq_residues = np.where(       
                 [
                     a != b
                     for a, b in zip(trb_dict["inpaint_seq"], trb_dict["inpaint_str"])
                 ]
-            )[
-                0
-            ]  # if this works...
+            )[0]  # if this works...
             print(
-                f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {selected_residues_in_designed_chains}"
+                f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {provide_seq_residues}"
             )
+            selected_residues_in_designed_chains=copy.deepcopy(sorted(list(selected_residues_in_designed_chains)+list(provide_seq_residues))) #We gotta add the provide_seq residues to both lists
+            selected_residues_data=copy.deepcopy(sorted(list(selected_residues_data)+list(provide_seq_residues)))
             # print(selected_residues_in_designed_chains)
 
         # selected_residues_in_fixed_chains=trb_dict['receptor_con_hal_idx0'] #This actually doesn't work and I think it's a bug in RFDiff
@@ -1781,25 +1781,49 @@ def getChainResidOffsets(pdb_file, designable_residues):
     chainResidOffset = {}
     con_hal_idx = []
 
-    parser = PDBParser()
-    chainsInPdb = parser.get_structure("protein", pdb_file).get_chains()
-    for let_chain in chainsInPdb:
-        chainLetter = let_chain.get_id()
-        let_resids = let_chain.get_residues()
-        startingNo = int(next(let_resids).get_id()[1])
-        chainResidOffset.setdefault(chainLetter, startingNo - 1)
-        if designable_residues:
-            # We do this here to avoid PDBparser overhead
-            print("There is designable_residues. [inside getChainResidOffsets]")
-            for r in let_chain.get_residues():
-                # aa has id " ". Heteroatoms have id "W" for water etc. – we don't want them in the PDB (they count as residues and ProteinMPNN throws an out-of-range error)
-                if (
-                    r.get_id()[0].strip() == ""
-                    and f"{chainLetter}{r.get_id()[1]}" not in designable_residues
-                ):
-                    con_hal_idx.append((chainLetter, r.get_id()[1]))
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure("protein", pdb_file)
+
+    global_residue_index = 1
+
+    for chain in structure.get_chains():
+        chain_id = chain.get_id()
+
+        first_residue_seen = False
+
+        for residue in chain.get_residues():
+
+            # Store the global index of the first residue in this chain
+            if not first_residue_seen:
+                chainResidOffset[chain_id] = global_residue_index - 1
+                first_residue_seen = True
+
+            if designable_residues:
+                if f"{chain_id}{residue.get_id()[1]}" not in designable_residues:
+                    con_hal_idx.append((chain_id, residue.get_id()[1]))
+
+            global_residue_index += 1
+
     return chainResidOffset, con_hal_idx
 
+def get_all_residues(pdb_file):
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure("protein", pdb_file)
+
+    residues = []
+    residue_indices=[]
+    counter=0
+    for chain in structure.get_chains():
+        chain_id = chain.get_id()
+
+        for residue in chain.get_residues():
+
+            # residue.get_id() = (hetflag, resseq, insertion_code)
+            hetflag, resseq, icode = residue.get_id()
+            residues.append((chain_id, resseq))
+            residue_indices.append(counter)
+            counter+=1  
+    return residues, residue_indices
 
 def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0):
     skipRfDiff = cfg.get("skipRfDiff", False)
@@ -1810,6 +1834,16 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
 
     contig = cfg.contig
     abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    ##
+    #    chainResidOffset_reference, con_ref_idx = getChainResidOffsets(
+    #        cfg.pdb_path, []
+    #    )
+    #print(f"chainResidOffset_reference: {chainResidOffset_reference}")
+    ref_path=cfg.get("pdb_path", None)
+    if ref_path is not None:
+        print("DEBUG: pdb_path found")
+        all_residues_reference, all_residue_indices_reference = get_all_residues(ref_path)
+        print(f"DEBUG all_residues_reference: {all_residues_reference}")    
 
     for pdb_file in pdb_files:
 
@@ -1862,36 +1896,44 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
                 trb_data = pickle.load(f)
 
             contig = trb_data["config"]["contigmap"]["contigs"][0]
+            partial_diffusion = cfg.get("partial_diffusion", False)
+            
 
-            if "complex_con_hal_pdb_idx" in trb_data:
-                con_hal_idx = trb_data.get(
-                    "complex_con_hal_pdb_idx", []
-                )  # con_hal_pdb_idx #complex_con_hal_pdb_idx
+            con_hal_idx = []
+            for id0, value in enumerate(trb_data["inpaint_seq"]):  # Just define con_hal_idx from inpaint_seq and ignore everything else. This should work
+                if value == True:
+                    for key in abeceda:
+                        if key in chainResidOffset:
+
+                            if id0 >= chainResidOffset[key]:
+                                currentResidueChain = key
+                    con_hal_idx.append(
+                        (
+                            currentResidueChain,
+                            id0 +1
+                        )
+                    )
+            print(f"DEBUG con_hal_idx: {con_hal_idx}")
+
+            if (trb_data["config"]["contigmap"]["provide_seq"] != None):
+                provide_seq_residues = np.where(       
+                [
+                    a != b
+                    for a, b in zip(trb_data["inpaint_seq"], trb_data["inpaint_str"])
+                ]
+                )[
+                    0
+                ]  # if this works...
+                print(
+                    f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {list(provide_seq_residues)}"
+                )
             else:
-                partial_diffusion = cfg.get("partial_diffusion", False)
-                if not partial_diffusion:
-                    con_hal_idx = trb_data.get("con_hal_pdb_idx", [])
-                else:  # When using partial diffusion, RFDiffusion doesn't put anything of the diffused chain on the
-                    # con_hal_pdb_idx (because nothing is technically fixed). This means that we need to recompile it
-                    # based on the inpaint_seq
-                    con_hal_idx = []
-                    for id0, value in enumerate(trb_data["inpaint_seq"]):
-                        if value == True:
-                            for key in abeceda:
-                                if key in chainResidOffset:
-
-                                    if id0 >= chainResidOffset[key]:
-                                        currentResidueChain = key
-                            con_hal_idx.append(
-                                (
-                                    currentResidueChain,
-                                    id0 + chainResidOffset[currentResidueChain],
-                                )
-                            )
+                provide_seq_residues = []
 
             # Process con_hal_idx to extract chain ids and indices
         else:
             con_hal_idx = con_hal_pdb_idx_complete
+            provide_seq_residues = []
 
         # fixed_res should never be empty, otherwise ProteinMPNN will throw a KeyError fixed_position_dict[b['name']][letter]
         # We need to set blank fixed_res for each generated chain (based on contig).
@@ -1902,19 +1944,36 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
             breaks = contig.count("/0 ") + 1
 
         fixed_res = dict(zip(abeceda, [[] for _ in range(breaks)]))
-        print(f"Fixed res (according to contig chain breaks): {fixed_res}")
+        #print(f"Fixed res (according to contig chain breaks): {fixed_res}")
 
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
-        
-        # Fix for multi-chain receptors 
-        complex_con_ref_pdb_idx = trb_data.get('complex_con_ref_pdb_idx', con_hal_idx.copy()) # If not present, it will act as in older versions.
+        # TODO: Fix for multi-chain receptors 
+
+        if not skipRfDiff:
+            con_ref_idx0 = trb_data.get('con_ref_idx0', []) 
+            complex_con_ref_idx0 = trb_data.get('complex_con_ref_idx0', con_ref_idx0)
+        else:
+            con_set = set(con_hal_idx)
+
+            complex_con_ref_idx0 = [
+                i for i, res in enumerate(all_residue_indices_reference)
+                if res not in con_set
+            ]
+        complex_con_ref_idx0 = copy.deepcopy(sorted(list(complex_con_ref_idx0) + list(provide_seq_residues)))
+        print(f"DEBUG: complex_con_ref_idx0 (combined con_ref_idx0 and provide_seq_residues): {complex_con_ref_idx0}")
+        complex_con_ref_pdb_idx = []
+        for id0 in complex_con_ref_idx0:  # Just define con_hal_idx from inpaint_seq and ignore everything else. This should work
+            complex_con_ref_pdb_idx.append(all_residues_reference[id0])
+        print(f"DEBUG complex_con_ref_pdb_idx: {complex_con_ref_pdb_idx}")
 
         for (chain, idx), (chain_from_input, idx_from_input) in zip(con_hal_idx, complex_con_ref_pdb_idx):
             # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
             if not skipRfDiff:
+                print(f"DEBUG: {(chain, idx), (chain_from_input, idx_from_input)} in con_hal_idx and complex_con_ref_pdb_idx")
                 if trb_data["inpaint_seq"][
                     idx - 1
                 ]:  # skip residues with FALSE in the inpaint_seq array
+                    print(f"DEBUG: Residue {chain}{idx} is fixed (True in inpaint_seq)") 
                     fixed_res.setdefault(chain_from_input, list()).append(
                         idx - chainResidOffset[chain_from_input]
                     )
