@@ -11,7 +11,7 @@ parser.add_argument(
     "-t",
     "--tests",
     nargs="+",
-    help="Name of test to run (without extension). If not specified, all tests will be ran.",
+    help="Specify tests to run. You can pass one or more patterns to match (e.g., '*_AF3'). If not specified, all tests will be ran.",
 )
 parser.add_argument(
     "-ls", "--list", action="store_true", help="See list of available tests."
@@ -37,12 +37,8 @@ if args.list:
 # Assign either one test or all to the list
 test_file_list = []
 if args.tests:
-    for test in args.tests:
-        test_filename = "Examples/" + test + ".yaml"
-        assert os.path.exists(
-            test_filename
-        ), "Test not found. Use the name without the extension."
-        test_file_list.append(test_filename)
+    for name in args.tests:
+        test_file_list = list(test_file_list)+ glob.glob(f"Examples/{name}.yaml")
 else:
     for sh_file in glob.glob("Examples/*.yaml"):
         test_file_list.append(sh_file)
