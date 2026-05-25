@@ -1834,11 +1834,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
 
     contig = cfg.contig
     abeceda = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    ##
-    #    chainResidOffset_reference, con_ref_idx = getChainResidOffsets(
-    #        cfg.pdb_path, []
-    #    )
-    #print(f"chainResidOffset_reference: {chainResidOffset_reference}")
+    
     ref_path=cfg.get("pdb_path", None)
     if ref_path is not None:
         print("DEBUG: pdb_path found")
@@ -1967,15 +1963,14 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
         print(f"DEBUG complex_con_ref_pdb_idx: {complex_con_ref_pdb_idx}")
 
         for (chain, idx), (chain_from_input, idx_from_input) in zip(con_hal_idx, complex_con_ref_pdb_idx):
-            # If there are multiple chains, reset the auto_incrementing numbers to 1 for each chain (subtract offset)
             if not skipRfDiff:
                 print(f"DEBUG: {(chain, idx), (chain_from_input, idx_from_input)} in con_hal_idx and complex_con_ref_pdb_idx")
                 if trb_data["inpaint_seq"][
                     idx - 1
                 ]:  # skip residues with FALSE in the inpaint_seq array
                     print(f"DEBUG: Residue {chain}{idx} is fixed (True in inpaint_seq)") 
-                    fixed_res.setdefault(chain_from_input, list()).append(
-                        idx - chainResidOffset[chain_from_input]
+                    fixed_res.setdefault(chain, list()).append(
+                        idx - chainResidOffset[chain]
                     )
             else:
                 fixed_res.setdefault(chain, list()).append(
