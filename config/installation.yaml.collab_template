@@ -1,0 +1,9 @@
+# This config includes installation paths and other constant values
+
+rfdiff_run_command: python /content/RFdiffusion/run_inference.py
+
+mpnn_run_command: python /content/ProteinMPNN/protein_mpnn_run.py
+
+pymol_python_path: python
+
+prosculpt_python_path: python

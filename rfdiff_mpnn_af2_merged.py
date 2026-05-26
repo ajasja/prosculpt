@@ -98,6 +98,7 @@ def general_config_prep(cfg):
             "chains_to_design", None
         )  # If not specified, will be determined from contig later
         cfg.use_a3m = cfg.get("use_a3m", False)  # whether to use a3m files
+        cfg.chain_break_cutoff_A = cfg.get("chain_break_cutoff_A", 2)  # whether to use a3m files
         cfg.prediction_model = cfg.get(
             "prediction_model", "Colabfold"
         )  # Options are Colabfold or Boltz2

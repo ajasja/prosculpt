@@ -1909,7 +1909,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
                             id0 +1
                         )
                     )
-            print(f"DEBUG con_hal_idx: {con_hal_idx}")
+            #print(f"DEBUG con_hal_idx: {con_hal_idx}")
 
             if (trb_data["config"]["contigmap"]["provide_seq"] != None):
                 provide_seq_residues = np.where(       
@@ -1920,9 +1920,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
                 )[
                     0
                 ]  # if this works...
-                print(
-                    f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {list(provide_seq_residues)}"
-                )
+                #print(f"DEBUG: PARTIAL DIFUSSION KEEPING RESIDUES {list(provide_seq_residues)}")
             else:
                 provide_seq_residues = []
 
@@ -1956,19 +1954,19 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
                 if res not in con_set
             ]
         complex_con_ref_idx0 = copy.deepcopy(sorted(list(complex_con_ref_idx0) + list(provide_seq_residues)))
-        print(f"DEBUG: complex_con_ref_idx0 (combined con_ref_idx0 and provide_seq_residues): {complex_con_ref_idx0}")
+        #print(f"DEBUG: complex_con_ref_idx0 (combined con_ref_idx0 and provide_seq_residues): {complex_con_ref_idx0}")
         complex_con_ref_pdb_idx = []
         for id0 in complex_con_ref_idx0:  # Just define con_hal_idx from inpaint_seq and ignore everything else. This should work
             complex_con_ref_pdb_idx.append(all_residues_reference[id0])
-        print(f"DEBUG complex_con_ref_pdb_idx: {complex_con_ref_pdb_idx}")
+        #print(f"DEBUG complex_con_ref_pdb_idx: {complex_con_ref_pdb_idx}")
 
         for (chain, idx), (chain_from_input, idx_from_input) in zip(con_hal_idx, complex_con_ref_pdb_idx):
             if not skipRfDiff:
-                print(f"DEBUG: {(chain, idx), (chain_from_input, idx_from_input)} in con_hal_idx and complex_con_ref_pdb_idx")
+                #print(f"DEBUG: {(chain, idx), (chain_from_input, idx_from_input)} in con_hal_idx and complex_con_ref_pdb_idx")
                 if trb_data["inpaint_seq"][
                     idx - 1
                 ]:  # skip residues with FALSE in the inpaint_seq array
-                    print(f"DEBUG: Residue {chain}{idx} is fixed (True in inpaint_seq)") 
+                    #print(f"DEBUG: Residue {chain}{idx} is fixed (True in inpaint_seq)") 
                     fixed_res.setdefault(chain, list()).append(
                         idx - chainResidOffset[chain]
                     )
