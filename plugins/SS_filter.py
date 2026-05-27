@@ -9,7 +9,10 @@ logger = logging.getLogger(__name__)
 def get_ss_xml():
     return """
 <ROSETTASCRIPTS>
-
+    <MOVERS>
+        <SwitchChainOrder name="take_first_chain" chain_name="A"/>
+        <DumpPdb name="dump_pose" fname="dump.pdb" />
+    </MOVERS>
     <FILTERS>
         <SecondaryStructureCount
             name="ss_count"
@@ -20,7 +23,8 @@ def get_ss_xml():
     </FILTERS>
 
     <PROTOCOLS>
-        <Add filter_name="ss_count" />
+        <Add mover="take_first_chain" />
+        <Add filter="ss_count" />
     </PROTOCOLS>
 
 </ROSETTASCRIPTS>
@@ -38,6 +42,8 @@ def filter_backbone(pdb: str | Path, kwargs: dict):
     pose = pose_from_file(str(pdb))
 
     xml_obj = XmlObjects.create_from_string(get_ss_xml())
+    take_first_chain = xml_obj.get_mover("take_first_chain")
+    applyMover = take_first_chain.apply(pose)
     ss_filter = xml_obj.get_filter("ss_count")
 
     passed = ss_filter.apply(pose)
