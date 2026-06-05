@@ -13,7 +13,7 @@ The main steps are as follows:
 6. Additional evaluation parameters are calculated for these structures using a separate script with Rosetta.
 7. The final output is a CSV file containing AF2 structure path, evaluation parameters etc.
 
-A working Collab can be found [here](https://colab.research.google.com/drive/1LHT7mdQngWrIJfiUki6xcEzaFCfEe0VR?usp=sharing)
+A working Collab can be found [here](https://colab.research.google.com/github/ajasja/prosculpt/blob/main/Prosculpt_Colab.ipynb)
 
 ## Requirements  
 The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionall biopython, hydra-core, pandas and scipy and pyRosetta are required.  
