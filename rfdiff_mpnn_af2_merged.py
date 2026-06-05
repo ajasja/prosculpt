@@ -132,6 +132,9 @@ def general_config_prep(cfg):
 
         if "symmetry" not in cfg.inference:
             cfg.inference.symmetry = None
+        
+        if "write_trajectory" not in cfg.inference:
+            cfg.inference.write_trajectory = False
 
         if "omit_AAs" not in cfg:
             cfg.omit_AAs = "X"  # This is the default also in proteinMPNN
