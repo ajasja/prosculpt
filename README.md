@@ -1,4 +1,4 @@
-# prosculpt
+# Prosculpt
 Protein design and sculpting using Rosetta and Deep learning methods (RFDiff and Alphafold2)
 
 ![image](pipeline_pic.png)
@@ -12,6 +12,8 @@ The main steps are as follows:
 5. Sequences are prepared for the AF2, which folds them into structures.
 6. Additional evaluation parameters are calculated for these structures using a separate script with Rosetta.
 7. The final output is a CSV file containing AF2 structure path, evaluation parameters etc.
+
+A working Collab can be found [here](https://colab.research.google.com/github/ajasja/prosculpt/blob/main/Prosculpt_Colab.ipynb)
 
 ## Requirements  
 The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionall biopython, hydra-core, pandas and scipy and pyRosetta are required.  
