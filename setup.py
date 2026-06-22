@@ -8,7 +8,7 @@ setup(
     author_email="ajasja.ljubetic@gmail.com",
     description="Package includes functions to protein strucutre analysis and data manipulation necessary",
     packages=find_packages(),
-    scripts=["rfdiff_mpnn_af2_merged.py", "prosculpt.py", "scripts/scoring_script.py"],
+    scripts=["prosculpt_run.py", "prosculpt.py", "scripts/scoring_script.py"],
     install_requires=[
         "pandas",
         "omegaconf",

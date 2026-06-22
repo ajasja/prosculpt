@@ -3,7 +3,7 @@ Protein design and sculpting using Rosetta and Deep learning methods (RFDiff and
 
 ![image](pipeline_pic.png)
 ## Description 
-The script `rfdiff_mpnn_af2_merged.py` runs a pipeline to automate the processes of generating protein structures with RFdiffusion, sequence generation with ProteinMPNN, and folding and evaluation with AF2 and Rosetta. Specifically, the script uses motif scaffolding to generate structures (see [RFdiffusion github repository](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md)).
+The script `prosculpt_run.py` runs a pipeline to automate the processes of generating protein structures with RFdiffusion, sequence generation with ProteinMPNN, and folding and evaluation with AF2 and Rosetta. Specifically, the script uses motif scaffolding to generate structures (see [RFdiffusion github repository](https://github.com/RosettaCommons/RFdiffusion/blob/main/README.md)).
 
 The main steps are as follows:
 1. The main inputs are a protein PDB file and a yaml file that specifies how to generate the new structure around the original protein (which parts to keep, etc.). 
@@ -99,7 +99,7 @@ python slurm_runner.py job_parameters.yaml
 
 If you want to run Prosculpt locally, it can be called as
 ```bash
-python rfdiff_mpnn_af2_merged.py -cd config_directory -cn config_file_name
+python prosculpt_run.py -cd config_directory -cn config_file_name
 ```
 
 (note that the config file name must be written without the yaml extension)

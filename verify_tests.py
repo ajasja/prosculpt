@@ -23,7 +23,7 @@ with open(os.path.join(directory,"test_verification_output.txt"), "a+") as outpu
                 print("test_folder is a directory")
                 if os.path.isdir(os.path.join(directory,test_folder,"01")): #Check if 00 folder exists. Not sure what triggers this folder to exist or not.
                     ## ANSWER: Folder number is defined in slurm_runner.py where writing out_command_file (it overwrites the output_dir specified in config, by adding the number. I think it is necessary for making multiple models parallelly). 
-                    ## This folder is then created in rfdiff_mpnn_af2_merged.py general_config_prep(), which is the first function called in the script.
+                    ## This folder is then created in prosculpt_run.py general_config_prep(), which is the first function called in the script.
                     print("01 folder exists")
                     final_output_path=os.path.join(directory,test_folder,"01","final_output.csv")
                 else:

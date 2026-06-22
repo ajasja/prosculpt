@@ -69,7 +69,7 @@ with open(out_command_file, 'w') as f:
         #print("+output_dir="+output_dir)
 
         cmdline = " ".join(arguments) #join all arguments passed that aren't number of tasks or task name
-        line = f"""python {slurm_runner_path}/rfdiff_mpnn_af2_merged.py {cmdline}"""
+        line = f"""python {slurm_runner_path}/prosculpt_run.py {cmdline}"""
         print(line, file=f)
 
 print(f"Slurm command can be found in {out_command_file}")
