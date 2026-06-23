@@ -20,7 +20,6 @@ af2_mpnn_cycles: 1 # Not used yet?
 model_order: 4 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 skipRfDiff: False
-only_run_analysis: True
 
 # designable_residues: []
 
