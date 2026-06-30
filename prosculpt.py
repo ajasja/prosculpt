@@ -1972,7 +1972,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
                     )
             else:
                 fixed_res.setdefault(chain, list()).append(
-                    idx# - chainResidOffset[chain]
+                    idx
                 )
             # RfDiff outputs multiple chains if contig has /0 (chain break)
 
@@ -1982,7 +1982,7 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
 
     #print("_________trb data____", trb_data)
 
-    print("_________ fix pos_________", fixpos)
+    #print("_________ fix pos_________", fixpos)
     file_path = os.path.join(out_path, "fixed_pdbs.jsonl")
     # Save the fixpos dict as a JSON file
     with open(file_path, "w") as outfile:
