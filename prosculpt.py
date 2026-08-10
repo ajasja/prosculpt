@@ -7,6 +7,7 @@ import json
 import glob
 import os
 import numpy as np
+from omegaconf import OmegaConf
 import pandas as pd
 import shutil
 from pathlib import Path
@@ -19,7 +20,7 @@ import copy
 
 
 def make_boltz_input_yaml(
-    cfg, model_id, mpnn_sequence, output_dir, input_alignment_dir
+    cfg, model_id, mpnn_sequence, output_dir, input_alignment_dir,monomer_models
 ):
     chain_ids = []
     sequences = []
@@ -36,7 +37,7 @@ def make_boltz_input_yaml(
         sequences.append(chain_seq)
 
     # Make boltz yaml
-    data = dict(sequences=dict())
+    data = {}
     data["sequences"] = []
     if cfg.use_a3m and input_alignment_dir is not None:
         sequence_to_msa = {}
@@ -82,6 +83,36 @@ def make_boltz_input_yaml(
                 }
             )
 
+    
+    class FlowList(list):
+        pass
+
+    def flow_list_representer(dumper, data):
+        return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
+
+    yaml.add_representer(FlowList, flow_list_representer)
+
+    def flow_list_for_keys(obj, target_keys):
+        """Recursively walk obj; wrap lists in FlowList only when their key is in target_keys."""
+        if isinstance(obj, dict):
+            new_obj = {}
+            for k, v in obj.items():
+                if isinstance(v, list) and k in target_keys:
+                    new_obj[k] = FlowList(flow_list_for_keys(item, target_keys) for item in v)
+                else:
+                    new_obj[k] = flow_list_for_keys(v, target_keys)
+            return new_obj
+        elif isinstance(obj, list):
+            return [flow_list_for_keys(item, target_keys) for item in obj]
+        else:
+            return obj
+
+    data["templates"] = []
+    if cfg.get("boltz2_templates", None) is not None and monomer_models==False:
+        templates = OmegaConf.to_container(cfg.boltz2_templates, resolve=True)
+        data["templates"].append(flow_list_for_keys(templates, target_keys={"template_id","chain_id"}))
+    
+
     with open(f"{output_dir}/{model_id}.yaml", "w") as outfile:
         yaml.dump(data, outfile, default_flow_style=False)
     return f"{output_dir}/{model_id}.yaml"
@@ -103,7 +134,7 @@ def make_AF3_input_json(cfg, model_id, mpnn_sequence, output_dir, input_alignmen
         sequences.append(chain_seq)
 
     # Make boltz yaml
-    data = dict(sequences=dict())
+    data = {}
     data["name"] = model_id
     data["sequences"] = []
     if cfg.use_a3m and input_alignment_dir is not None:
