@@ -855,6 +855,76 @@ def merge_csv(output_dir, output_csv, scores_csv):
     #    shutil.copy(file,os.path.join(output_dir, "best_pdbs"))
 
 
+def get_cycle_pdb_paths(cfg, model_subdict):
+    """
+    Collects the predicted-structure PDB files inside a single af2_out_dir/model_X
+    directory (i.e. one RFdiffusion backbone) so they can be carried over as input
+    to the next ProteinMPNN cycle in do_cycling().
+
+    Each prediction_model lays out its raw output differently, so this can't be a
+    single flat glob:
+      - Colabfold writes T_*.pdb files directly (flat) in model_subdict.
+      - Boltz2 writes T_*_model_*.pdb files nested under
+        model_subdict/boltz_results_yaml_inputs/predictions/<design_name>/
+        (already PDB, no conversion needed).
+      - AF3 writes only mmCIF under model_subdict/T_*/*.cif. Those are converted to
+        a sibling .pdb file in-place (same as rename_pdb_create_csv_AF3 does at the
+        end of the run), so cycling has plain PDBs to work with too.
+
+    Monomer predictions (written under model_subdict/monomers/...) are intentionally
+    excluded -- only the complex structures are cycled back into MPNN.
+    """
+    prediction_model = cfg.prediction_model
+
+    if prediction_model == "Colabfold":
+        return sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
+
+    elif prediction_model == "Boltz2":
+        # Each design directory holds cfg.num_models diffusion-sample decoys
+        # (T_..._model_0.pdb, T_..._model_1.pdb, ...). Carrying all of them
+        # forward would let num_models compound every cycle (num_models^n_cycles
+        # designs instead of num_models); like AF3, cycling should only track one
+        # representative structure per design between cycles, and let num_models
+        # decoys be produced once, at the final fold step.
+        design_dirs = glob.glob(
+            os.path.join(model_subdict, "boltz_results_yaml_inputs", "predictions", "*")
+        )
+        pdb_paths = []
+        for design_dir in design_dirs:
+            decoys = sorted(glob.glob(os.path.join(design_dir, "*.pdb")))
+            if decoys:
+                pdb_paths.append(decoys[0])
+        return sorted(pdb_paths)
+
+    elif prediction_model == "AF3":
+        cif_files = glob.glob(os.path.join(model_subdict, "T_*", "*.cif"))
+        pdb_paths = []
+        for cif_file in cif_files:
+            # AF3 mmCIF files are named like "..._model.cif" (no numeric suffix),
+            # but do_cycling() later extracts an "af_model_num" from the PDB
+            # basename via a "model_(\d+)" regex (used verbatim for Colabfold's
+            # AF2 model index, and for Boltz's "_model_<N>" sample index). AF3 only
+            # ever carries one structure forward per design here, so give it a
+            # synthetic "_model_1" suffix purely so that downstream naming/regex
+            # keeps working -- it is not a real AF3 model index.
+            stem = Path(cif_file).stem
+            if stem.endswith("_model"):
+                stem = stem[: -len("_model")]
+            pdb_file = Path(cif_file).parent / f"{stem}_model_1.pdb"
+            if not pdb_file.exists():
+                parser = MMCIFParser(QUIET=True)
+                structure = parser.get_structure("structure", cif_file)
+                io = PDBIO()
+                io.set_structure(structure)
+                io.save(str(pdb_file))
+            pdb_paths.append(str(pdb_file))
+        return sorted(pdb_paths)
+
+    else:
+        print(f"Unsupported prediction model for cycling: {prediction_model}")
+        return []
+
+
 def rename_pdb_create_csv_colabfold(
     cfg,
     output_dir,

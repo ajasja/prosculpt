@@ -563,7 +563,7 @@ def do_cycling(cfg):
                 # Access all af2 models and put them in one intermediate directory to get the same ored as in the 1st cycle (all pdbs in one directory)
                 for model_subdict in af2_model_subdicts:
                     log.info(f"Model subdict: {model_subdict}")
-                    af2_pdbs = sorted(glob.glob(os.path.join(model_subdict, "T*.pdb")))
+                    af2_pdbs = sorted(prosculpt.get_cycle_pdb_paths(cfg, model_subdict))
                     log.info(f"AF2 pdbs: {af2_pdbs}")
 
                     rf_model_num = prosculpt.get_token_value(
@@ -847,6 +847,14 @@ def do_cycling(cfg):
                     print("Generating custom msa files for Boltz")
 
                     yaml_dir = os.path.join(model_dir, "yaml_inputs")
+                    # Cycling (cycle > 0) calls into this block once per carried-over
+                    # structure, all sharing the same model_dir/rf backbone. Without
+                    # clearing yaml_dir first, jobs from earlier fasta_files in this
+                    # same cycle would still be sitting here, so "boltz predict" (which
+                    # processes everything currently in yaml_dir) would needlessly
+                    # re-run them alongside the new one on every iteration.
+                    if os.path.exists(yaml_dir):
+                        shutil.rmtree(yaml_dir)
                     os.makedirs(yaml_dir, exist_ok=True)
                     alignment_inputs_dir = os.path.join(model_dir, "alignment_inputs")
                     os.makedirs(alignment_inputs_dir, exist_ok=True)
@@ -891,6 +899,14 @@ def do_cycling(cfg):
                     print("Generating custom msa files for AF3")
 
                     json_dir = os.path.join(model_dir, "json_inputs")
+                    # See the matching comment in the Boltz branch above: without
+                    # clearing json_dir first, AF3 would re-predict jobs left over
+                    # from earlier fasta_files in this same cycle on every iteration
+                    # (and AF3 refuses to overwrite an existing job directory, so the
+                    # re-run lands in a timestamp-suffixed duplicate instead --
+                    # breaking the monomer/complex directory pairing downstream).
+                    if os.path.exists(json_dir):
+                        shutil.rmtree(json_dir)
                     os.makedirs(json_dir, exist_ok=True)
                     alignment_inputs_dir = os.path.join(model_dir, "alignment_inputs")
                     os.makedirs(alignment_inputs_dir, exist_ok=True)
@@ -975,6 +991,14 @@ def do_cycling(cfg):
                                 )
                 elif cfg.prediction_model == "Boltz2":  # If using Boltz
                     yaml_dir = os.path.join(model_dir, "yaml_inputs")
+                    # Cycling (cycle > 0) calls into this block once per carried-over
+                    # structure, all sharing the same model_dir/rf backbone. Without
+                    # clearing yaml_dir first, jobs from earlier fasta_files in this
+                    # same cycle would still be sitting here, so "boltz predict" (which
+                    # processes everything currently in yaml_dir) would needlessly
+                    # re-run them alongside the new one on every iteration.
+                    if os.path.exists(yaml_dir):
+                        shutil.rmtree(yaml_dir)
                     os.makedirs(yaml_dir, exist_ok=True)
 
                     with open(fasta_file) as fasta_f:
@@ -1004,6 +1028,14 @@ def do_cycling(cfg):
                     )
                 elif cfg.prediction_model == "AF3":  # If using Af3
                     json_dir = os.path.join(model_dir, "json_inputs")
+                    # See the matching comment in the Boltz branch above: without
+                    # clearing json_dir first, AF3 would re-predict jobs left over
+                    # from earlier fasta_files in this same cycle on every iteration
+                    # (and AF3 refuses to overwrite an existing job directory, so the
+                    # re-run lands in a timestamp-suffixed duplicate instead --
+                    # breaking the monomer/complex directory pairing downstream).
+                    if os.path.exists(json_dir):
+                        shutil.rmtree(json_dir)
                     os.makedirs(json_dir, exist_ok=True)
 
                     with open(fasta_file) as fasta_f:
