@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prosculpt Dashboard</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.1.0/3Dmol-min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">🧬 Prosculpt Dashboard</div>
+  <div class="log-picker">
+    <input id="logPathInput" type="text" placeholder="/path/to/your/run.out or run.log" />
+    <button id="loadBtn">Load</button>
+    <button id="browseBtn" title="Browse filesystem">Browse…</button>
+    <span id="autoRefreshLabel">
+      <label><input type="checkbox" id="autoRefreshToggle" checked> auto-refresh</label>
+    </span>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="overview">Overview</button>
+  <button class="tab-btn" data-tab="backbones">Backbones</button>
+  <button class="tab-btn" data-tab="sequences">Sequences</button>
+  <button class="tab-btn" data-tab="models">Models</button>
+  <button class="tab-btn" data-tab="results">Results</button>
+</nav>
+
+<main>
+  <section id="tab-overview" class="tab-panel active">
+    <div id="errorBanner" class="error-banner hidden"></div>
+    <div class="stepper" id="stepper"></div>
+
+    <div class="card" id="overviewCard">
+      <p class="muted">Enter the path to a Prosculpt log file above and click <b>Load</b> to get started.</p>
+    </div>
+  </section>
+
+  <section id="tab-backbones" class="tab-panel">
+    <div class="split-view">
+      <div class="list-pane" id="backbonesList"><p class="muted">Load a job first.</p></div>
+      <div class="viewer-pane">
+        <div id="backboneViewer" class="mol-viewer"></div>
+        <div id="backboneViewerLabel" class="viewer-label"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-sequences" class="tab-panel">
+    <div id="sequencesContent"><p class="muted">Load a job first.</p></div>
+  </section>
+
+  <section id="tab-models" class="tab-panel">
+    <div class="split-view">
+      <div class="list-pane">
+        <input id="modelsFilter" type="text" placeholder="filter by name…" />
+        <div id="modelsList"><p class="muted">Load a job first.</p></div>
+      </div>
+      <div class="viewer-pane">
+        <div id="modelViewer" class="mol-viewer"></div>
+        <div id="modelMetrics" class="metrics-table"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-results" class="tab-panel">
+    <div class="split-view">
+      <div class="list-pane">
+        <div id="finalPdbsList"><p class="muted">Load a job first.</p></div>
+      </div>
+      <div class="viewer-pane">
+        <div id="resultViewer" class="mol-viewer"></div>
+      </div>
+    </div>
+    <div class="card" id="csvCard">
+      <h3>final_output.csv</h3>
+      <div id="csvTableWrap"><p class="muted">Not available yet.</p></div>
+    </div>
+  </section>
+</main>
+
+<div id="browseModal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <span id="browsePath"></span>
+      <button id="browseCloseBtn">✕</button>
+    </div>
+    <div id="browseEntries" class="browse-entries"></div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
