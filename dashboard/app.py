@@ -15,7 +15,9 @@ needed, e.g.:
 from __future__ import annotations
 
 import csv
+import io
 import os
+import zipfile
 
 from flask import Flask, jsonify, request, send_file, abort
 
@@ -86,7 +88,11 @@ def api_status():
 def api_backbones():
     log_path = request.args.get("log")
     output_dir = _get_output_dir(log_path)
-    return jsonify(P.list_backbones(output_dir))
+    with open(log_path, "r", errors="replace") as f:
+        lines = f.readlines()
+    stage = P.detect_stage(lines)["stage"]
+    filtering_done = stage not in ("setup", "rfdiffusion", "filtering")
+    return jsonify(P.list_backbones(output_dir, filtering_done=filtering_done))
 
 
 @app.route("/api/backbone_pdb")
@@ -123,7 +129,8 @@ def api_sequences():
 def api_models():
     log_path = request.args.get("log")
     output_dir = _get_output_dir(log_path)
-    return jsonify(P.list_models(output_dir))
+    cfg = P.extract_config(log_path, output_dir)
+    return jsonify(P.list_models(output_dir, model_monomer=bool(cfg.get("model_monomer"))))
 
 
 def _resolve_within_output_dir(output_dir: str, path: str) -> str:
@@ -134,6 +141,21 @@ def _resolve_within_output_dir(output_dir: str, path: str) -> str:
     return _safe_join(output_dir, rel)
 
 
+def _resolve_within_output_dir_or_none(output_dir: str, path: str):
+    """Same as _resolve_within_output_dir but returns None instead of
+    aborting the request - for callers (like the zip export) that want to
+    just skip a bad/missing entry rather than fail the whole response."""
+    try:
+        rel = os.path.relpath(path, output_dir) if os.path.isabs(path) else path
+        full = os.path.normpath(os.path.join(output_dir, rel))
+    except Exception:
+        return None
+    base_norm = os.path.normpath(output_dir)
+    if full == base_norm or full.startswith(base_norm + os.sep):
+        return full
+    return None
+
+
 @app.route("/api/model_pdb")
 def api_model_pdb():
     log_path = request.args.get("log")
@@ -141,8 +163,9 @@ def api_model_pdb():
     output_dir = _get_output_dir(log_path)
     full = _resolve_within_output_dir(output_dir, path)
     if not os.path.isfile(full):
-        abort(404, description="pdb not found")
-    return send_file(full, mimetype="chemical/x-pdb")
+        abort(404, description="structure file not found")
+    mimetype = "chemical/x-cif" if full.lower().endswith(".cif") else "chemical/x-pdb"
+    return send_file(full, mimetype=mimetype)
 
 
 @app.route("/api/model_confidence")
@@ -154,6 +177,21 @@ def api_model_confidence():
     if not os.path.isfile(full):
         abort(404, description="confidence file not found")
     return jsonify(P.load_confidence(full))
+
+
+@app.route("/api/trb")
+def api_trb():
+    """Generic .trb reader - takes any path under output_dir, so it works
+    for a backbone's own _N.trb (Backbones tab) and for the RFdiffusion
+    .trb reachable from a final result row's path_rfdiff column (Results
+    tab, path derived client-side by swapping .pdb -> .trb)."""
+    log_path = request.args.get("log")
+    path = request.args.get("path")
+    output_dir = _get_output_dir(log_path)
+    full = _resolve_within_output_dir(output_dir, path)
+    if not os.path.isfile(full):
+        abort(404, description="trb file not found")
+    return jsonify(P.load_trb_provenance(full))
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +231,104 @@ def api_final_csv():
         return jsonify({"columns": [], "rows": []})
     columns, data_rows = rows[0], rows[1:]
     return jsonify({"columns": columns, "rows": data_rows})
+
+
+@app.route("/api/export_filtered", methods=["POST"])
+def api_export_filtered():
+    """Zips up the currently-filtered final_output.csv rows plus the
+    model_path pdb for each of them. (The dashboard's Export button calls
+    this a ".zip" - true .rar creation needs a proprietary external binary
+    that isn't reliably available on a cluster, so .zip is used instead;
+    it needs no extra dependency and every OS can open it natively.)"""
+    log_path = request.args.get("log")
+    data = request.get_json(silent=True) or {}
+    log_path = data.get("log") or log_path
+    row_ids = data.get("row_ids")
+    if not log_path:
+        abort(400, description="Missing log")
+
+    output_dir = _get_output_dir(log_path)
+    csv_path = os.path.join(output_dir, "final_output.csv")
+    if not os.path.isfile(csv_path):
+        abort(404, description="final_output.csv not found")
+
+    with open(csv_path, newline="", errors="replace") as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+    if not rows:
+        abort(404, description="final_output.csv is empty")
+    columns, data_rows = rows[0], rows[1:]
+
+    if row_ids is not None:
+        wanted = {int(i) for i in row_ids}
+        selected_rows = [r for i, r in enumerate(data_rows) if i in wanted]
+    else:
+        selected_rows = data_rows
+
+    if not selected_rows:
+        abort(400, description="No rows selected for export")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        csv_buf = io.StringIO()
+        writer = csv.writer(csv_buf)
+        writer.writerow(columns)
+        writer.writerows(selected_rows)
+        zf.writestr("filtered_output.csv", csv_buf.getvalue())
+
+        if "model_path" in columns:
+            idx = columns.index("model_path")
+            seen = set()
+            for r in selected_rows:
+                p = r[idx] if idx < len(r) else ""
+                if not p or p in seen:
+                    continue
+                seen.add(p)
+                full = _resolve_within_output_dir_or_none(output_dir, p)
+                if full and os.path.isfile(full):
+                    zf.write(full, arcname=os.path.join("models", os.path.basename(full)))
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="prosculpt_filtered_export.zip",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Crash / error log
+# ---------------------------------------------------------------------------
+
+
+@app.route("/api/error_log")
+def api_error_log():
+    """Returns the slurm .err file's content whenever it exists, regardless
+    of whether a crash/cancellation has actually been detected - the
+    dashboard looks this file up unconditionally (see locate_err_file), not
+    only once something looks wrong."""
+    log_path = request.args.get("log")
+    if not log_path:
+        return jsonify({"error": "Missing ?log= parameter"}), 400
+    err_loc = P.locate_err_file(log_path)
+    if not err_loc["err_exists"]:
+        return jsonify({"err_exists": False, "err_path": err_loc["err_path"]})
+    err = P.read_text_file(err_loc["err_path"])
+    return jsonify({"err_exists": True, "err_path": err_loc["err_path"], **err})
+
+
+@app.route("/api/output_log")
+def api_output_log():
+    """Returns the job's own .out log content, for the Output log tab -
+    always available (unlike the .err file) since it's the same file the
+    dashboard already requires to operate."""
+    log_path = request.args.get("log")
+    if not log_path:
+        return jsonify({"error": "Missing ?log= parameter"}), 400
+    if not os.path.isfile(log_path):
+        abort(404, description="log file not found")
+    return jsonify(P.read_text_file(log_path))
 
 
 # ---------------------------------------------------------------------------

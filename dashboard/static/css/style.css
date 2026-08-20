@@ -1,7 +1,25 @@
+/* Dark theme (default). Light theme overrides these same tokens further
+   down - either automatically via prefers-color-scheme, or forced by
+   data-theme on <html> (see the theme toggle button in app.js). Two
+   things are deliberately theme-invariant:
+     - --surface-deep(-2) backs the sequence alignment viewer, the 3D
+       structure viewers, and the log/error <pre> blocks - specialized
+       visualization surfaces that read better staying dark regardless of
+       the app's chrome, the same way a code/terminal panel commonly does
+       in an otherwise-light editor theme.
+     - --text-on-deep / --muted-on-deep are for content that sits on those
+       always-dark surfaces (log text, alignment ruler/labels). They must
+       NOT track --text/--muted, which flip to dark in light theme -
+       putting dark text on the still-dark surface-deep would be
+       unreadable. Same reasoning for the "color by" tint on the Results
+       list/table: that tint is a fixed dark background regardless of
+       theme (see colorForRow() in app.js), so it's paired with a fixed
+       light text color rather than the ambient theme text there too. */
 :root {
   --bg: #0f1420;
   --panel: #161d2e;
   --panel-2: #1d2740;
+  --panel-3: #26325099;
   --border: #2a3550;
   --text: #e6e9f0;
   --muted: #8b93a7;
@@ -10,6 +28,41 @@
   --warn: #f5a623;
   --danger: #ef5a6f;
   --radius: 10px;
+  --surface-deep: #05070c;
+  --surface-deep-2: #0b0f18;
+  --text-on-deep: #e6e9f0;
+  --muted-on-deep: #8b93a7;
+}
+
+/* Light theme: applied automatically when the OS prefers light and the
+   user hasn't explicitly overridden it, or forced via data-theme="light". */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f5fa;
+    --panel: #ffffff;
+    --panel-2: #eef1f8;
+    --panel-3: #dde3f0aa;
+    --border: #d8dde8;
+    --text: #1a2233;
+    --muted: #666f84;
+    --accent: #3f6fe0;
+    --accent-2: #189272;
+    --warn: #a5670a;
+    --danger: #cf3654;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f3f5fa;
+  --panel: #ffffff;
+  --panel-2: #eef1f8;
+  --panel-3: #dde3f0aa;
+  --border: #d8dde8;
+  --text: #1a2233;
+  --muted: #666f84;
+  --accent: #3f6fe0;
+  --accent-2: #189272;
+  --warn: #a5670a;
+  --danger: #cf3654;
 }
 
 * { box-sizing: border-box; }
@@ -74,9 +127,15 @@ button {
 
 button:hover { filter: brightness(1.1); }
 button.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+button.small { padding: 4px 9px; font-size: 11.5px; }
+#themeToggleBtn { padding: 8px 11px; font-size: 15px; line-height: 1; }
 
-#autoRefreshLabel { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; }
+#autoRefreshLabel { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 8px; }
 #autoRefreshLabel label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+
+/* Generic checkbox-with-label control, used above the Backbones/Sequences lists */
+.toggle-label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+.toggle-label input { cursor: pointer; }
 
 .tabs {
   display: flex;
@@ -100,6 +159,15 @@ button.secondary { background: var(--panel-2); border: 1px solid var(--border); 
   color: var(--text);
   border-bottom-color: var(--accent);
 }
+
+/* Error log tab: hidden until a .err file is actually found next to the
+   log (regardless of whether anything has gone wrong yet); switches to a
+   red "alert" look once a crash or cancellation is actually detected. */
+.tab-btn#errorTabBtn { display: none; }
+.tab-btn#errorTabBtn.visible { display: inline-block; }
+.tab-btn#errorTabBtn.alert { color: var(--danger); }
+.tab-btn#errorTabBtn.alert.active { border-bottom-color: var(--danger); }
+.tab-btn#errorTabBtn.alert::before { content: "⚠ "; }
 
 main { padding: 20px; }
 
@@ -128,6 +196,45 @@ main { padding: 20px; }
 }
 .hidden { display: none !important; }
 
+/* Alert banner (Overview + Error log tab) - shared by the crash banner and
+   the cancellation banner, since they're the same kind of "something went
+   wrong" notice with a different icon/message. */
+.alert-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(239, 90, 111, 0.14);
+  border: 1px solid var(--danger);
+  color: #ffd3da;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  font-size: 13.5px;
+}
+.alert-banner .crash-icon { font-size: 22px; flex-shrink: 0; }
+.alert-banner b { color: #fff; }
+.alert-banner a.crash-link { color: #fff; text-decoration: underline; cursor: pointer; }
+.alert-banner code { background: rgba(0,0,0,0.25); padding: 1px 5px; border-radius: 4px; }
+
+/* Shared by the Error log and Output log tabs' <pre> blocks. The error
+   tab tints its text red (it's crash/cancellation-adjacent content); the
+   plain output log keeps the normal text color. */
+.log-pre {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 75vh;
+  overflow-y: auto;
+  color: var(--text-on-deep);
+}
+#errorTabContent pre { color: #ffc9d1; }
+
 /* Stepper */
 .stepper {
   display: flex;
@@ -151,6 +258,24 @@ main { padding: 20px; }
 .step.done { color: var(--accent-2); border-color: var(--accent-2); }
 .step.active { color: white; background: var(--accent); border-color: var(--accent); }
 .step-arrow { color: var(--border); padding: 0 6px; font-size: 16px; }
+
+/* Stage card: sits directly under the stepper and shows what's happening
+   right now - either a simple one-line status, or (for RFdiffusion /
+   Modeling) the fuller progress-bar block. */
+.stage-card {
+  border-left: 3px solid var(--accent);
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+.stage-card:empty { display: none; }
+.stage-message {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 14px;
+}
+.stage-message-icon { font-size: 26px; flex-shrink: 0; line-height: 1; }
+.stage-message p { margin: 0; }
 
 /* Overview */
 .status-grid {
@@ -184,8 +309,36 @@ main { padding: 20px; }
 }
 
 .config-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12.5px;}
-.config-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); }
-.config-table td:first-child { color: var(--muted); width: 220px; }
+.config-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.config-table td:first-child { color: var(--muted); width: 220px; white-space: nowrap; }
+.config-table td.config-nested { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+
+/* Cycle pill */
+.cycle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(91,140,255,0.15);
+  color: var(--accent);
+  border: 1px solid rgba(91,140,255,0.35);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.cycle-note {
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* Step timings */
+#timingContent table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+#timingContent td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+#timingContent td:first-child { color: var(--muted); }
+#timingContent td:last-child { text-align: right; font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+#timingContent tr.total-row td { border-top: 2px solid var(--border); border-bottom: none; font-weight: 700; color: var(--text); padding-top: 10px; }
 
 /* Split view (list + viewer) */
 .split-view {
@@ -222,11 +375,74 @@ main { padding: 20px; }
 .mol-viewer {
   flex: 1;
   min-height: 460px;
-  background: #05070c;
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   position: relative;
 }
 .viewer-label { margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+
+/* Color controls above a structure viewer (Backbones, Models, Results):
+   a "color by" mode select where that tab has one, the background select
+   (always shown, pushed to the far right via .bg-color-wrap's
+   margin-left: auto), and a second row with the chain-palette select
+   (chain mode only) and a legend - either the current chain-to-color
+   mapping, or, in RFdiffusion provenance mode, editable swatches for each
+   residue category. */
+.viewer-color-toolbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.viewer-color-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bg-color-wrap, .chain-palette-wrap { display: flex; align-items: center; gap: 8px; }
+.bg-color-wrap { margin-left: auto; }
+.color-legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+.legend-color-input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.legend-color-input::-webkit-color-swatch-wrapper { padding: 0; }
+.legend-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
+.legend-color-input::-moz-color-swatch { border: none; border-radius: 2px; }
+
+/* Residue click info - a small overlay inside the mol-viewer itself
+   (which stays a fixed dark surface regardless of theme), so it needs the
+   theme-invariant on-deep text color, same reasoning as .log-pre. */
+.residue-info {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  max-width: calc(100% - 20px);
+  background: rgba(5, 7, 12, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  color: var(--text-on-deep);
+  z-index: 5;
+}
+.residue-info .muted { color: var(--muted-on-deep); }
+.residue-info a.clear-link { color: var(--accent-2); cursor: pointer; text-decoration: underline; margin-left: 8px; white-space: nowrap; }
+
+/* Cursor-following hover tooltip - positioned per-frame from NGL's
+   pickingProxy.canvasPosition, so it's absolute within the NGL viewer's
+   own container (appended there directly, not .mol-viewer, in app.js). */
+.residue-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 6;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}
 
 .list-item {
   padding: 9px 10px;
@@ -238,27 +454,44 @@ main { padding: 20px; }
   justify-content: space-between;
   align-items: center;
   gap: 8px;
+  border-left: 4px solid transparent;
 }
 .list-item:hover { background: var(--panel-2); }
 .list-item.selected { background: var(--accent); color: white; }
+/* Results list items may set their own inline background (color-by, D4),
+   which wins over the rule above - fall back to an outline so the
+   selected state stays visible either way. */
+.list-item.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
 .badge {
   font-size: 10.5px;
   padding: 2px 7px;
   border-radius: 999px;
   font-weight: 700;
   white-space: nowrap;
+  border: 1px solid transparent;
 }
-.badge.passed { background: rgba(53,208,168,0.15); color: var(--accent-2); }
-.badge.failed_filter { background: rgba(239,90,111,0.15); color: var(--danger); }
-.badge.complex { background: rgba(91,140,255,0.15); color: var(--accent); }
-.badge.monomer { background: rgba(245,166,35,0.15); color: var(--warn); }
+.badge.passed { background: rgba(53,208,168,0.15); color: var(--accent-2); border-color: rgba(53,208,168,0.4); }
+.badge.failed_filter { background: rgba(239,90,111,0.15); color: var(--danger); border-color: rgba(239,90,111,0.4); }
+.badge.complex { background: rgba(91,140,255,0.15); color: var(--accent); border-color: rgba(91,140,255,0.4); }
+.badge.monomer { background: rgba(245,166,35,0.15); color: var(--warn); border-color: rgba(245,166,35,0.4); }
+/* Neutral - not a filter verdict either way, just "not evaluated yet". */
+.badge.pending { background: rgba(139,147,167,0.15); color: var(--muted); border-color: rgba(139,147,167,0.4); }
+/* A selected list-item's solid accent-blue background washes out the
+   badge's low-opacity tint, so give badges a darker, opaque-ish
+   background + a colored border instead of relying on the tint alone. */
+.list-item.selected .badge { background: rgba(0,0,0,0.3); border-color: currentColor; }
+.list-item.selected .badge.passed { color: #baffe0; }
+.list-item.selected .badge.failed_filter { color: #ffd0d6; }
+.list-item.selected .badge.complex { color: #d6e3ff; }
+.list-item.selected .badge.monomer { color: #ffe6b3; }
+.list-item.selected .badge.pending { color: #dfe3ea; }
 
 .metrics-table { margin-top: 10px; font-size: 12.5px; }
 .metrics-table table { width: 100%; border-collapse: collapse; }
 .metrics-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
 .metrics-table td:first-child { color: var(--muted); }
 
-/* Sequences */
+/* Sequences / alignment viewer (shared between Sequences tab and Results tab) */
 .backbone-block {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -266,22 +499,70 @@ main { padding: 20px; }
   padding: 14px 16px;
   margin-bottom: 14px;
 }
+#sequencesToolbar { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; padding: 12px 20px; }
+#sequencesToolbar .toggle-label { margin-bottom: 0; }
+#sequencesToolbar input[type="number"] {
+  width: 56px; padding: 5px 6px; margin-left: 4px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 12px;
+}
 .backbone-block h4 { margin: 0 0 10px; display: flex; gap: 10px; align-items: center; }
-.seq-row {
+
+.align-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-deep);
+}
+.align-ruler {
+  display: flex;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--muted-on-deep);
+  border-bottom: 1px solid var(--border);
+  padding: 3px 0;
+  position: sticky;
+  top: 0;
+}
+.align-ruler .align-label { flex-shrink: 0; }
+.align-ruler .tick { display: inline-block; width: 1ch; white-space: nowrap; }
+.align-row {
   display: flex;
   align-items: baseline;
-  gap: 10px;
-  margin-bottom: 4px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
-  overflow-x: auto;
   white-space: nowrap;
 }
-.seq-row .seq-label { color: var(--muted); min-width: 190px; flex-shrink: 0; }
+.align-row:not(:last-child) { border-bottom: 1px solid #1a2338; }
+.align-label {
+  position: sticky;
+  left: 0;
+  background: var(--surface-deep-2);
+  color: var(--muted-on-deep);
+  padding: 5px 10px;
+  min-width: 210px;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  z-index: 2;
+}
+.align-label .swatch {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.align-seq { padding: 5px 6px; }
 .aa { display: inline-block; width: 1ch; }
-.chain-sep { color: var(--muted); padding: 0 3px; }
+/* Conserved residues get a solid (not tinted) background + a contrasting
+   text color instead of an outline - readable at 1-character width,
+   where an outline/glow effect just gets lost against the neighbors. */
+.aa.conserved { font-weight: 700; }
+.chain-sep { color: var(--muted-on-deep); padding: 0 3px; }
 
 /* Table (csv) */
+#csvTableWrap { max-height: 60vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
 table.data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 table.data-table th, table.data-table td {
   padding: 7px 10px;
@@ -289,9 +570,93 @@ table.data-table th, table.data-table td {
   text-align: left;
   white-space: nowrap;
 }
-table.data-table th { position: sticky; top: 0; background: var(--panel); cursor: pointer; color: var(--accent); }
-table.data-table tbody tr:hover { background: var(--panel-2); cursor: pointer; }
-#csvTableWrap { max-height: 60vh; overflow: auto; }
+table.data-table th { position: sticky; top: 0; background: var(--panel); cursor: pointer; color: var(--accent); z-index: 3; }
+/* Row striping + color-by tint are applied as inline styles per-row from
+   JS (see renderCsvTable) so the two never fight over the same cells;
+   the sticky id column gets its own explicit inline background too, since
+   a sticky cell needs an opaque cover for the cells scrolling under it. */
+table.data-table tbody tr:hover td { filter: brightness(1.12); cursor: pointer; }
+table.data-table th.id-col, table.data-table td.id-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 1px solid var(--border);
+}
+table.data-table th.id-col { z-index: 4; background: var(--panel); }
+table.data-table td.path-col { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+
+/* Results toolbar / filters / color-by */
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  position: relative;
+}
+.toolbar-group { display: flex; align-items: center; gap: 8px; position: relative; }
+.toolbar-label { color: var(--muted); font-size: 12.5px; }
+#resultsCountWrap { margin-left: auto; font-size: 12.5px; }
+
+select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.filters-badge {
+  background: var(--accent);
+  color: white;
+  border-radius: 999px;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  margin-left: 6px;
+}
+
+.filters-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(480px, 90vw);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+  z-index: 20;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.filters-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.filters-list { display: flex; flex-direction: column; gap: 8px; }
+
+.filter-row { display: grid; grid-template-columns: 1fr 74px 12px 74px; align-items: center; gap: 6px; }
+.filter-row .filter-col-name {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-row input[type="number"] {
+  width: 100%;
+  padding: 5px 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.filter-row .filter-dash { text-align: center; color: var(--muted); }
+.filter-row.filter-active .filter-col-name { color: var(--accent); font-weight: 600; }
 
 /* Modal (browse) */
 .modal {
@@ -326,4 +691,12 @@ table.data-table tbody tr:hover { background: var(--panel-2); cursor: pointer; }
 @media (max-width: 800px) {
   .split-view { grid-template-columns: 1fr; }
   .list-pane { max-height: 260px; }
+  #resultsCountWrap { margin-left: 0; }
+}
+
+@media (max-width: 560px) {
+  .status-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  .stat-box { padding: 10px 12px; }
+  .stat-box .value { font-size: 17px; }
+  .stage-message { flex-direction: column; align-items: flex-start; gap: 8px; }
 }

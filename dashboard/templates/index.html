@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Prosculpt Dashboard</title>
 <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.1.0/3Dmol-min.js"></script>
+<script src="https://unpkg.com/ngl@2.4.0/dist/ngl.js"></script>
 </head>
 <body>
 
@@ -17,7 +17,9 @@
     <button id="browseBtn" title="Browse filesystem">Browse…</button>
     <span id="autoRefreshLabel">
       <label><input type="checkbox" id="autoRefreshToggle" checked> auto-refresh</label>
+      <span id="autoRefreshNote" class="muted hidden"></span>
     </span>
+    <button id="themeToggleBtn" class="secondary" title="Switch theme">☀️</button>
   </div>
 </header>
 
@@ -27,22 +29,69 @@
   <button class="tab-btn" data-tab="sequences">Sequences</button>
   <button class="tab-btn" data-tab="models">Models</button>
   <button class="tab-btn" data-tab="results">Results</button>
+  <button class="tab-btn" data-tab="error" id="errorTabBtn">Error log</button>
+  <button class="tab-btn" data-tab="outputlog">Output log</button>
 </nav>
 
 <main>
   <section id="tab-overview" class="tab-panel active">
     <div id="errorBanner" class="error-banner hidden"></div>
+    <div id="crashBanner" class="alert-banner hidden"></div>
+    <div id="cancelBanner" class="alert-banner hidden"></div>
     <div class="stepper" id="stepper"></div>
+    <div class="card stage-card" id="stageCard"></div>
 
     <div class="card" id="overviewCard">
       <p class="muted">Enter the path to a Prosculpt log file above and click <b>Load</b> to get started.</p>
     </div>
+
+    <div class="card hidden" id="timingCard">
+      <h3>Step timings</h3>
+      <div id="timingContent"></div>
+    </div>
+  </section>
+
+  <section id="tab-error" class="tab-panel">
+    <div id="errorTabContent"><p class="muted">Load a job first.</p></div>
   </section>
 
   <section id="tab-backbones" class="tab-panel">
     <div class="split-view">
-      <div class="list-pane" id="backbonesList"><p class="muted">Load a job first.</p></div>
+      <div class="list-pane">
+        <label class="toggle-label"><input type="checkbox" id="showFilteredToggle" checked> Show filtered out</label>
+        <div id="backbonesFilterNote" class="cycle-note hidden"></div>
+        <div id="backbonesList"><p class="muted">Load a job first.</p></div>
+      </div>
       <div class="viewer-pane">
+        <div class="viewer-color-toolbar">
+          <div class="viewer-color-row">
+            <label class="toolbar-label" for="backboneColorMode">Color residues by</label>
+            <select id="backboneColorMode">
+              <option value="chain">Chain</option>
+              <option value="provenance">RFdiffusion provenance</option>
+            </select>
+            <span class="bg-color-wrap">
+              <label class="toolbar-label" for="backboneBgColorSelect">Background</label>
+              <select id="backboneBgColorSelect" class="bg-color-select">
+                <option value="black">Black</option>
+                <option value="navy">Dark navy</option>
+                <option value="white">White</option>
+                <option value="light">Light gray</option>
+              </select>
+            </span>
+          </div>
+          <div class="viewer-color-row">
+            <span id="backboneChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="backboneChainPaletteSelect">Chain colors</label>
+              <select id="backboneChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+              </select>
+            </span>
+            <div id="backboneColorLegend" class="color-legend hidden"></div>
+          </div>
+        </div>
         <div id="backboneViewer" class="mol-viewer"></div>
         <div id="backboneViewerLabel" class="viewer-label"></div>
       </div>
@@ -50,35 +99,131 @@
   </section>
 
   <section id="tab-sequences" class="tab-panel">
+    <div class="card" id="sequencesToolbar">
+      <label class="toggle-label"><input type="checkbox" id="conservationToggle"> Highlight conserved residues</label>
+      <label class="toolbar-label">Threshold <input type="number" id="conservationThreshold" min="1" max="100" value="90" style="width:56px"> %</label>
+    </div>
     <div id="sequencesContent"><p class="muted">Load a job first.</p></div>
   </section>
 
   <section id="tab-models" class="tab-panel">
+    <div id="modelsCycleNote" class="cycle-note hidden"></div>
     <div class="split-view">
       <div class="list-pane">
         <input id="modelsFilter" type="text" placeholder="filter by name…" />
         <div id="modelsList"><p class="muted">Load a job first.</p></div>
       </div>
       <div class="viewer-pane">
+        <div class="viewer-color-toolbar">
+          <div class="viewer-color-row">
+            <span class="chain-palette-wrap">
+              <label class="toolbar-label" for="modelChainPaletteSelect">Chain colors</label>
+              <select id="modelChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+              </select>
+            </span>
+            <div id="modelColorLegend" class="color-legend hidden"></div>
+            <span class="bg-color-wrap">
+              <label class="toolbar-label" for="modelBgColorSelect">Background</label>
+              <select id="modelBgColorSelect" class="bg-color-select">
+                <option value="black">Black</option>
+                <option value="navy">Dark navy</option>
+                <option value="white">White</option>
+                <option value="light">Light gray</option>
+              </select>
+            </span>
+          </div>
+        </div>
         <div id="modelViewer" class="mol-viewer"></div>
+        <div id="modelViewerLabel" class="viewer-label"></div>
         <div id="modelMetrics" class="metrics-table"></div>
       </div>
     </div>
   </section>
 
   <section id="tab-results" class="tab-panel">
+    <div class="card" id="resultsToolbar">
+      <div class="toolbar-row">
+        <div class="toolbar-group">
+          <button id="filtersBtn" class="secondary">🔧 Filters <span id="filtersBadge" class="filters-badge hidden">0</span></button>
+          <div id="filtersPanel" class="filters-panel hidden">
+            <div class="filters-panel-header">
+              <b>Filter by column value</b>
+              <button id="clearFiltersBtn" class="secondary small">Clear all</button>
+            </div>
+            <div id="filtersList" class="filters-list"></div>
+          </div>
+        </div>
+        <div class="toolbar-group">
+          <label class="toolbar-label" for="colorByField">Color list by</label>
+          <select id="colorByField"><option value="">None</option></select>
+          <select id="colorByDirection">
+            <option value="higher">Higher = better</option>
+            <option value="lower">Lower = better</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <button id="exportFilteredBtn" class="secondary">⬇ Export filtered (.zip)</button>
+        </div>
+        <div class="toolbar-group" id="resultsCountWrap">
+          <span class="muted" id="resultsCount"></span>
+        </div>
+      </div>
+    </div>
+
     <div class="split-view">
       <div class="list-pane">
         <div id="finalPdbsList"><p class="muted">Load a job first.</p></div>
       </div>
       <div class="viewer-pane">
+        <div class="viewer-color-toolbar">
+          <div class="viewer-color-row">
+            <label class="toolbar-label" for="resultsStructColorMode">Color structure by</label>
+            <select id="resultsStructColorMode">
+              <option value="chain">Chain</option>
+              <option value="provenance">RFdiffusion provenance</option>
+            </select>
+            <span class="bg-color-wrap">
+              <label class="toolbar-label" for="resultsBgColorSelect">Background</label>
+              <select id="resultsBgColorSelect" class="bg-color-select">
+                <option value="black">Black</option>
+                <option value="navy">Dark navy</option>
+                <option value="white">White</option>
+                <option value="light">Light gray</option>
+              </select>
+            </span>
+          </div>
+          <div class="viewer-color-row">
+            <span id="resultsChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="resultsChainPaletteSelect">Chain colors</label>
+              <select id="resultsChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+              </select>
+            </span>
+            <div id="resultsColorLegend" class="color-legend hidden"></div>
+          </div>
+        </div>
         <div id="resultViewer" class="mol-viewer"></div>
       </div>
     </div>
+
+    <div class="card" id="resultsAlignCard">
+      <h3>Sequence alignment</h3>
+      <div id="resultsAlignContent"><p class="muted">Not available yet.</p></div>
+    </div>
+
     <div class="card" id="csvCard">
       <h3>final_output.csv</h3>
       <div id="csvTableWrap"><p class="muted">Not available yet.</p></div>
     </div>
+  </section>
+
+  <section id="tab-outputlog" class="tab-panel">
+    <div id="outputLogContent"><p class="muted">Load a job first.</p></div>
   </section>
 </main>
 

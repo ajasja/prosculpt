@@ -2,6 +2,7 @@
 // Vanilla JS, no build step. Talks to the Flask API in app.py.
 
 const STORAGE_KEY = "prosculpt_dashboard_log_path";
+const THEME_KEY = "prosculpt_dashboard_theme";
 const POLL_MS = 5000;
 
 const STAGE_ORDER = ["rfdiffusion", "filtering", "mpnn", "modeling", "scoring", "finished"];
@@ -25,16 +26,44 @@ const AA_COLORS = {
   C: "#ffb703", G: "#adb5bd", P: "#e5989b",
 };
 
+// Columns in final_output.csv that hold filesystem paths - cumbersome in the
+// middle of the table, so they get pushed to the end (see D1 in the spec).
+const PATH_COLUMNS = ["model_path", "af3_json", "af3_pdb", "path_rfdiff"];
+
 let state = {
   logPath: localStorage.getItem(STORAGE_KEY) || "",
   activeTab: "overview",
   lastStatus: null,
   pollTimer: null,
   browsePath: null,
-  selectedModelIdx: null,
+
+  backbonesCache: [],
+  selectedBackboneKey: null,
+  loadedBackboneKey: null,
+  showFilteredBackbones: true,
+  backboneColorMode: "chain", // "chain" | "provenance"
+
+  sequencesCache: null,
+
   modelsCache: [],
-  csvCache: null,
+  selectedModelKey: null,
+  loadedModelStructureKey: null,
+  loadedModelConfKey: null,
+
   csvSort: { col: null, dir: 1 },
+  results: {
+    columns: [],
+    rows: [],
+    numericColumns: [],
+    displayColumns: [],
+    idCol: null,
+    filters: {},
+    colorField: "",
+    colorDirection: "higher",
+    selectedRowId: null,
+  },
+  loadedResultPdbName: null,
+  resultsColorMode: "chain", // "chain" | "provenance"
 };
 
 // ---------------------------------------------------------------------
@@ -74,6 +103,40 @@ function escapeHtml(str) {
   }[c]));
 }
 
+function basename(p) {
+  return String(p || "").split(/[\\/]/).pop();
+}
+
+// Rebuild a scrollable container's contents while keeping its scroll
+// position - a plain innerHTML replace resets scrollTop to 0, which is
+// disruptive on every 5s poll if the user is mid-scroll through a list.
+function rerenderPreservingScroll(el, renderFn) {
+  const top = el.scrollTop;
+  renderFn();
+  el.scrollTop = top;
+}
+
+// ---------------------------------------------------------------------
+// Theme
+// ---------------------------------------------------------------------
+
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  qs("#themeToggleBtn").textContent = theme === "light" ? "🌙" : "☀️";
+  qs("#themeToggleBtn").title = theme === "light" ? "Switch to dark theme" : "Switch to light theme";
+}
+
+function initTheme() {
+  const stored = localStorage.getItem(THEME_KEY);
+  const systemPrefersLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+  applyTheme(stored || (systemPrefersLight ? "light" : "dark"));
+  qs("#themeToggleBtn").addEventListener("click", () => {
+    const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+    applyTheme(next);
+    localStorage.setItem(THEME_KEY, next);
+  });
+}
+
 // ---------------------------------------------------------------------
 // Top bar / log loading
 // ---------------------------------------------------------------------
@@ -85,16 +148,64 @@ function initTopbar() {
   qs("#loadBtn").addEventListener("click", () => {
     state.logPath = input.value.trim();
     localStorage.setItem(STORAGE_KEY, state.logPath);
+    prepareForNewJob();
     refreshAll(true);
   });
   input.addEventListener("keydown", (e) => { if (e.key === "Enter") qs("#loadBtn").click(); });
 
   qs("#autoRefreshToggle").addEventListener("change", (e) => {
+    qs("#autoRefreshNote").classList.add("hidden");
     if (e.target.checked) startPolling(); else stopPolling();
   });
 
   qs("#browseBtn").addEventListener("click", () => openBrowse(state.browsePath || "."));
   qs("#browseCloseBtn").addEventListener("click", () => qs("#browseModal").classList.add("hidden"));
+}
+
+// Loading a (possibly new, possibly still-running) job should always start
+// from a clean slate: auto-refresh resumes even if the previous job we
+// were watching had finished/crashed/been cancelled and auto-stopped
+// polling, and every "don't refetch/redraw a viewer unless the underlying
+// file actually changed" guard gets cleared - those guards compare
+// filenames (backbone name, model path, result pdb name) which are reused
+// across unrelated jobs all the time ("_0.pdb", "model_0", ...), so
+// without this a genuinely different job's structures could silently fail
+// to replace what an earlier job had already drawn into the viewers.
+function prepareForNewJob() {
+  qs("#autoRefreshToggle").checked = true;
+  qs("#autoRefreshNote").classList.add("hidden");
+  startPolling();
+  resetPerJobViewState();
+}
+
+function resetPerJobViewState() {
+  state.backbonesCache = [];
+  state.selectedBackboneKey = null;
+  state.loadedBackboneKey = null;
+
+  state.sequencesCache = null;
+
+  state.modelsCache = [];
+  state.selectedModelKey = null;
+  state.loadedModelStructureKey = null;
+  state.loadedModelConfKey = null;
+
+  state.csvSort = { col: null, dir: 1 };
+  state.results = {
+    columns: [], rows: [], numericColumns: [], displayColumns: [], idCol: null,
+    filters: {}, colorField: "", colorDirection: "higher", selectedRowId: null,
+  };
+  state.loadedResultPdbName = null;
+
+  // Clear anything already drawn immediately, rather than leaving the
+  // previous job's structure on screen until the next tab visit's fetch
+  // happens to overwrite it.
+  ["#backboneViewer", "#modelViewer", "#resultViewer"].forEach((sel) => {
+    const el = qs(sel);
+    if (el) el.innerHTML = "";
+  });
+  const backboneLabel = qs("#backboneViewerLabel"); if (backboneLabel) backboneLabel.textContent = "";
+  const modelLabel = qs("#modelViewerLabel"); if (modelLabel) modelLabel.textContent = "";
 }
 
 async function openBrowse(path) {
@@ -123,6 +234,7 @@ async function openBrowse(path) {
           state.logPath = e.path;
           localStorage.setItem(STORAGE_KEY, state.logPath);
           qs("#browseModal").classList.add("hidden");
+          prepareForNewJob();
           refreshAll(true);
         }
       });
@@ -156,6 +268,8 @@ function refreshActiveTabData() {
   else if (state.activeTab === "sequences") loadSequences();
   else if (state.activeTab === "models") loadModels();
   else if (state.activeTab === "results") loadResults();
+  else if (state.activeTab === "error") loadErrorTab();
+  else if (state.activeTab === "outputlog") loadOutputLog();
 }
 
 // ---------------------------------------------------------------------
@@ -169,6 +283,25 @@ function startPolling() {
 function stopPolling() {
   if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = null;
+}
+
+function isTerminalStatus(status) {
+  return status.stage === "finished" || !!(status.crash && status.crash.crashed) || !!status.cancelled;
+}
+
+function terminalReason(status) {
+  if (status.cancelled) return "job was cancelled";
+  if (status.crash && status.crash.crashed) return "job crashed";
+  return "job finished";
+}
+
+function stopPollingForTerminalState(status) {
+  if (!state.pollTimer) return; // already stopped (or user stopped it manually)
+  stopPolling();
+  qs("#autoRefreshToggle").checked = false;
+  const note = qs("#autoRefreshNote");
+  note.textContent = `(stopped — ${terminalReason(status)})`;
+  note.classList.remove("hidden");
 }
 
 async function refreshAll(showLoadingState) {
@@ -190,12 +323,16 @@ async function loadStatus(showLoadingState) {
       errBanner.textContent = status.error;
       errBanner.classList.remove("hidden");
       qs("#stepper").innerHTML = "";
+      qs("#stageCard").innerHTML = "";
       qs("#overviewCard").innerHTML = `<p class="muted">Fix the log path above and click Load again.</p>`;
+      qs("#timingCard").classList.add("hidden");
       return;
     }
     errBanner.classList.add("hidden");
     renderStepper(status);
     renderOverview(status);
+    renderModelsCycleNote(status);
+    if (isTerminalStatus(status)) stopPollingForTerminalState(status);
   } catch (err) {
     errBanner.textContent = err.message;
     errBanner.classList.remove("hidden");
@@ -215,49 +352,187 @@ function renderStepper(status) {
   qs("#stepper").innerHTML = html;
 }
 
+function cyclePillHtml(cycle) {
+  if (!cycle || !cycle.is_multi_cycle) return "";
+  return ` <span class="cycle-pill">Cycle ${cycle.current_cycle_display} / ${cycle.total_cycles}</span>`;
+}
+
+function simpleStageMessage(icon, html) {
+  return `<div class="stage-message"><span class="stage-message-icon">${icon}</span><p>${html}</p></div>`;
+}
+
+// What's happening right now, shown directly under the stepper: either the
+// full progress-bar block (RFdiffusion / Modeling) or a short status line
+// with an icon for the quicker/simpler stages.
+function renderStageBlock(status, cycleSuffix) {
+  if (status.stage === "rfdiffusion" && status.rfdiffusion) {
+    return renderRfdiffStage(status.rfdiffusion);
+  }
+  if (status.stage === "modeling" && status.modeling) {
+    return renderModelingStage(status.modeling, cycleSuffix);
+  }
+  if (status.stage === "mpnn") {
+    return simpleStageMessage("🧵", `Generating sequences with ProteinMPNN${cycleSuffix} — this step is fast and usually finishes in seconds. Check the <b>Sequences</b> tab once it's done.`);
+  }
+  if (status.stage === "filtering") {
+    return simpleStageMessage("🔍", `Filtering backbones and rebuilding chains before ProteinMPNN — a quick housekeeping step.`);
+  }
+  if (status.stage === "scoring") {
+    return simpleStageMessage(`<span class="spinner"></span>`, `Running final scoring (final_operations)… this produces <code>final_pdbs/</code> and <code>final_output.csv</code>. Check the <b>Results</b> tab once it's done.`);
+  }
+  if (status.stage === "finished") {
+    const fp = (status.scoring && status.scoring.final_pdbs) || [];
+    return simpleStageMessage("✅", `Job finished with <b>${fp.length}</b> final model(s). See the <b>Results</b> tab.`);
+  }
+  return simpleStageMessage("⚙️", `Setting up the run (reading config, preparing RFdiffusion)…`);
+}
+
 function renderOverview(status) {
   const card = qs("#overviewCard");
   const cfg = status.config || {};
   const loc = status.location || {};
+  const job = status.job_info || {};
+  const cycle = status.cycle || {};
+  const errFile = status.err_file || {};
+  const cycleSuffix = cyclePillHtml(cycle);
 
-  let stageBlock = "";
-  if (status.stage === "rfdiffusion" && status.rfdiffusion) {
-    stageBlock = renderRfdiffStage(status.rfdiffusion);
-  } else if (status.stage === "modeling" && status.modeling) {
-    stageBlock = renderModelingStage(status.modeling);
-  } else if (status.stage === "mpnn") {
-    stageBlock = `<p>Generating sequences with ProteinMPNN — this step is fast and usually finishes in seconds. Check the <b>Sequences</b> tab once it's done.</p>`;
-  } else if (status.stage === "filtering") {
-    stageBlock = `<p>Filtering backbones and rebuilding chains before ProteinMPNN — a quick housekeeping step.</p>`;
-  } else if (status.stage === "scoring") {
-    stageBlock = `<p><span class="spinner"></span>Running final scoring (final_operations)… this produces <code>final_pdbs/</code> and <code>final_output.csv</code>. Check the <b>Results</b> tab once it's done.</p>`;
-  } else if (status.stage === "finished") {
-    const fp = (status.scoring && status.scoring.final_pdbs) || [];
-    stageBlock = `<p>✅ Job finished with <b>${fp.length}</b> final model(s). See the <b>Results</b> tab.</p>`;
-  } else {
-    stageBlock = `<p>Setting up the run (reading config, preparing RFdiffusion)…</p>`;
-  }
+  // The "Show full configuration" <details> gets rebuilt below - remember
+  // whether it was open so re-rendering (every poll) doesn't collapse it.
+  const prevDetails = qs("details", card);
+  const wasConfigOpen = prevDetails ? prevDetails.open : false;
+
+  qs("#stageCard").innerHTML = renderStageBlock(status, cycleSuffix);
 
   const errBlock = (status.possible_errors && status.possible_errors.length)
     ? `<div class="card" style="border-color:var(--danger)"><h4 style="margin-top:0;color:var(--danger)">⚠ Possible errors detected in log</h4><pre style="white-space:pre-wrap;font-size:12px;margin:0">${escapeHtml(status.possible_errors.join("\n"))}</pre></div>`
     : "";
+
+  const errLogValue = errFile.err_exists
+    ? `<a class="crash-link" id="gotoErrorTabFromStat">available</a>`
+    : `<span class="muted">not found</span>`;
 
   card.innerHTML = `
     <div class="status-grid">
       <div class="stat-box"><div class="label">Job</div><div class="value small">${escapeHtml(cfg.task_name || "—")}</div></div>
       <div class="stat-box"><div class="label">Prediction model</div><div class="value small">${escapeHtml(cfg.prediction_model || "—")}</div></div>
       <div class="stat-box"><div class="label">Output dir</div><div class="value small" style="word-break:break-all">${escapeHtml(loc.output_dir || "—")}</div></div>
-      <div class="stat-box"><div class="label">Current stage</div><div class="value">${STAGE_LABEL[status.stage] || status.stage}</div></div>
+      <div class="stat-box"><div class="label">Current stage</div><div class="value">${STAGE_LABEL[status.stage] || status.stage}${cycleSuffix}</div></div>
+      <div class="stat-box"><div class="label">Slurm job</div><div class="value small">${job.job_id ? "#" + escapeHtml(job.job_id) : "—"}</div></div>
+      <div class="stat-box"><div class="label">Node</div><div class="value small">${escapeHtml(job.node || "—")}</div></div>
+      <div class="stat-box"><div class="label">Started</div><div class="value small">${escapeHtml(job.started_at || "—")}</div></div>
+      <div class="stat-box"><div class="label">Error log</div><div class="value small">${errLogValue}</div></div>
     </div>
-    <div style="margin-top:18px">${stageBlock}</div>
+    ${renderPlanSummary(status)}
     ${errBlock}
     <details style="margin-top:14px">
-      <summary style="cursor:pointer;color:var(--muted)">Run configuration</summary>
+      <summary style="cursor:pointer;color:var(--muted)">Show full configuration (${Object.keys(cfg).length} keys)</summary>
       <table class="config-table">
-        ${Object.entries(cfg).map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join("")}
+        ${renderConfigRows(cfg)}
       </table>
     </details>
   `;
+
+  const newDetails = qs("details", card);
+  if (newDetails) newDetails.open = wasConfigOpen;
+
+  const gotoLink = qs("#gotoErrorTabFromStat", card);
+  if (gotoLink) gotoLink.addEventListener("click", () => qs('.tab-btn[data-tab="error"]').click());
+
+  renderTimingCard(status.timing);
+  renderStatusBanners(status);
+}
+
+function renderPlanSummary(status) {
+  const cfg = status.config || {};
+  const cycle = status.cycle || {};
+  const backboneSummary = status.backbones_summary || {};
+  const backbones = cfg.num_designs_rfdiff;
+  const accepted = backboneSummary.accepted; // null until filtering has actually finished
+  const perBackbone = cfg.num_seq_per_target_mpnn;
+  const perSeq = cfg.num_models;
+  const cycles = cycle.total_cycles || cfg.af2_mpnn_cycles || 1;
+
+  let plannedDesigns = null;
+  if (typeof backbones === "number" && typeof perBackbone === "number") {
+    plannedDesigns = backbones * perBackbone;
+  }
+  let finalDesigns = null;
+  if (typeof accepted === "number" && typeof perBackbone === "number") {
+    finalDesigns = accepted * perBackbone;
+  }
+
+  const boxes = [
+    { label: "RFdiffusion backbones", value: backbones ?? "—" },
+    { label: "Accepted backbones", value: accepted ?? "—" },
+    { label: "Sequences / backbone", value: perBackbone ?? "—" },
+  ];
+  // Only worth a box when the run actually varies from the trivial case.
+  if (perSeq != null && perSeq !== 1) boxes.push({ label: "Models / sequence", value: perSeq });
+  if (cycles !== 1) boxes.push({ label: "Cycles", value: cycles });
+  boxes.push({ label: "Planned designs", value: plannedDesigns != null ? plannedDesigns.toLocaleString() : "—" });
+  boxes.push({ label: "Final designs", value: finalDesigns != null ? finalDesigns.toLocaleString() : "—" });
+
+  const boxesHtml = boxes.map((b) => `<div class="stat-box"><div class="label">${escapeHtml(b.label)}</div><div class="value">${escapeHtml(String(b.value))}</div></div>`).join("");
+  return `<div class="status-grid" style="margin-top:14px">${boxesHtml}</div>`;
+}
+
+function renderConfigRows(cfg) {
+  return Object.entries(cfg).map(([k, v]) => {
+    if (v !== null && typeof v === "object") {
+      return `<tr><td>${escapeHtml(k)}</td><td class="config-nested">${escapeHtml(JSON.stringify(v, null, 2))}</td></tr>`;
+    }
+    return `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`;
+  }).join("");
+}
+
+function renderTimingCard(timing) {
+  const card = qs("#timingCard");
+  const content = qs("#timingContent");
+  if (!timing || !timing.steps || !timing.steps.length) {
+    card.classList.add("hidden");
+    return;
+  }
+  card.classList.remove("hidden");
+  const rows = timing.steps.map((s) => `<tr><td>${escapeHtml(s.label)}</td><td>${fmtSeconds(s.seconds)}</td></tr>`).join("");
+  const totalRow = timing.total_seconds != null
+    ? `<tr class="total-row"><td>Total job duration</td><td>${fmtSeconds(timing.total_seconds)}</td></tr>`
+    : "";
+  content.innerHTML = `<table>${rows}${totalRow}</table>`;
+}
+
+// Crash banner, cancellation banner, and the Error log tab's visibility/
+// alert state are all driven by the same status fields, so they're kept
+// in sync from one place.
+function renderStatusBanners(status) {
+  const crash = status.crash || {};
+  const errFile = status.err_file || {};
+
+  const crashBanner = qs("#crashBanner");
+  if (crash.crashed) {
+    crashBanner.classList.remove("hidden");
+    const note = errFile.err_exists
+      ? `See the <a class="crash-link" id="gotoErrorTabCrash">Error log</a> tab for the full traceback.`
+      : `No matching slurm error (.err) file was found next to the log.`;
+    crashBanner.innerHTML = `<span class="crash-icon">⚠</span><div><b>This job appears to have crashed.</b> The log contains "There was an error running the command." ${note}</div>`;
+    const link = qs("#gotoErrorTabCrash", crashBanner);
+    if (link) link.addEventListener("click", () => qs('.tab-btn[data-tab="error"]').click());
+  } else {
+    crashBanner.classList.add("hidden");
+  }
+
+  const cancelBanner = qs("#cancelBanner");
+  if (status.cancelled) {
+    cancelBanner.classList.remove("hidden");
+    cancelBanner.innerHTML = `<span class="crash-icon">🛑</span><div><b>This job appears to have been cancelled.</b>${status.cancelled_line ? ` <code>${escapeHtml(status.cancelled_line)}</code>` : ""} See the <a class="crash-link" id="gotoErrorTabCancel">Error log</a> tab.</div>`;
+    const link = qs("#gotoErrorTabCancel", cancelBanner);
+    if (link) link.addEventListener("click", () => qs('.tab-btn[data-tab="error"]').click());
+  } else {
+    cancelBanner.classList.add("hidden");
+  }
+
+  const tabBtn = qs("#errorTabBtn");
+  tabBtn.classList.toggle("visible", !!errFile.err_exists);
+  tabBtn.classList.toggle("alert", !!crash.crashed || !!status.cancelled);
 }
 
 function renderRfdiffStage(rf) {
@@ -274,10 +549,10 @@ function renderRfdiffStage(rf) {
   `;
 }
 
-function renderModelingStage(m) {
+function renderModelingStage(m, cycleSuffix) {
   const pct = m.expected_total ? Math.min(100, Math.round((m.completed / m.expected_total) * 100)) : 0;
   return `
-    <h4 style="margin-top:0">Structure modeling (${escapeHtml(m.prediction_model || "")})</h4>
+    <h4 style="margin-top:0">Structure modeling (${escapeHtml(m.prediction_model || "")})${cycleSuffix || ""}</h4>
     <div class="progress-bar-outer"><div class="progress-bar-inner" style="width:${pct}%"></div></div>
     <div class="status-grid">
       <div class="stat-box"><div class="label">Completed (${escapeHtml(m.unit)})</div><div class="value">${m.completed} / ${m.expected_total ?? "?"}</div></div>
@@ -286,101 +561,680 @@ function renderModelingStage(m) {
       <div class="stat-box"><div class="label">Est. time remaining</div><div class="value small">${fmtSeconds(m.eta_seconds)}</div></div>
     </div>
     <p class="muted" style="margin-top:10px;font-size:12px">
-      ${m.prediction_model && m.prediction_model.toUpperCase().startsWith("BOLTZ")
-        ? "Boltz models all sequences for one RFdiffusion backbone in a single batch, so progress is tracked per backbone batch."
-        : "AlphaFold3 models one designed sequence at a time, so progress is tracked per sequence."}
+      Each unit is one predicted structure (one designed sequence, or - for Boltz - one of its diffusion samples), counted straight off disk as soon as it's written, including monomer predictions when the run models those too.
+      ${cycleSuffix ? " Completed/total reflect the current cycle only (earlier cycles' models are cleared from disk once the next cycle starts); the average time and ETA are estimated from timing across the whole log." : ""}
     </p>
   `;
+}
+
+// ---------------------------------------------------------------------
+// Error log tab
+// ---------------------------------------------------------------------
+
+async function loadErrorTab() {
+  const el = qs("#errorTabContent");
+  const status = state.lastStatus;
+  const errFile = status && status.err_file;
+  if (!errFile || !errFile.err_exists) {
+    el.innerHTML = `<p class="muted">No slurm error file found${errFile && errFile.err_path ? ` (looked for <code>${escapeHtml(errFile.err_path)}</code>)` : ""}.</p>`;
+    return;
+  }
+  el.innerHTML = `<p class="muted">Loading…</p>`;
+  try {
+    const data = await apiGet("/api/error_log");
+    if (!data.err_exists) {
+      el.innerHTML = `<p class="muted">No slurm error file found at <code>${escapeHtml(data.err_path || "?")}</code>.</p>`;
+      return;
+    }
+    let banners = "";
+    if (status.crash && status.crash.crashed) {
+      banners += `<div class="alert-banner"><span class="crash-icon">⚠</span><div><b>This job crashed.</b> The log contains "There was an error running the command."</div></div>`;
+    }
+    if (status.cancelled) {
+      banners += `<div class="alert-banner"><span class="crash-icon">🛑</span><div><b>This job was cancelled.</b>${status.cancelled_line ? ` <code>${escapeHtml(status.cancelled_line)}</code>` : ""}</div></div>`;
+    }
+    const trunc = data.truncated
+      ? `<p class="muted">(truncated — showing the first ${data.content.length.toLocaleString()} of ${data.size.toLocaleString()} bytes)</p>`
+      : "";
+    el.innerHTML = `
+      ${banners}
+      <p class="muted">Contents of <code>${escapeHtml(data.err_path)}</code>:</p>
+      ${trunc}
+      <pre class="log-pre">${escapeHtml(data.content)}</pre>
+    `;
+  } catch (err) {
+    el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Output log tab
+// ---------------------------------------------------------------------
+
+async function loadOutputLog() {
+  const el = qs("#outputLogContent");
+  const prevPre = qs("#outputLogPre", el);
+  // "Smart tail": if the user was scrolled to the bottom (or this is the
+  // first load), keep following the end of the log on every refresh -
+  // otherwise leave their scroll position alone, the same way `tail -f`
+  // stops auto-scrolling once you scroll up to read something.
+  const wasAtBottom = !prevPre || (prevPre.scrollTop + prevPre.clientHeight >= prevPre.scrollHeight - 20);
+  const prevScrollTop = prevPre ? prevPre.scrollTop : 0;
+  try {
+    const data = await apiGet("/api/output_log");
+    if (data.error) throw new Error(data.error);
+    const trunc = data.truncated
+      ? `<p class="muted">(truncated — showing the first ${data.content.length.toLocaleString()} of ${data.size.toLocaleString()} bytes)</p>`
+      : "";
+    el.innerHTML = `
+      <p class="muted">Contents of <code>${escapeHtml(state.logPath)}</code>:</p>
+      ${trunc}
+      <pre class="log-pre" id="outputLogPre">${escapeHtml(data.content)}</pre>
+    `;
+    const pre = qs("#outputLogPre", el);
+    pre.scrollTop = wasAtBottom ? pre.scrollHeight : prevScrollTop;
+  } catch (err) {
+    el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
 }
 
 // ---------------------------------------------------------------------
 // Backbones tab
 // ---------------------------------------------------------------------
 
-let currentBackboneViewer = null;
+function applyBackboneSelectionHighlight() {
+  qsa("#backbonesList .list-item").forEach((el) => {
+    el.classList.toggle("selected", el.dataset.key === state.selectedBackboneKey);
+  });
+}
 
-async function loadBackbones() {
+const BACKBONE_BADGE_LABEL = { passed: "ok", pending: "pending", failed_filter: "filtered" };
+
+function renderBackbonesFilterNote() {
+  const el = qs("#backbonesFilterNote");
+  const anyPending = (state.backbonesCache || []).some((b) => b.status === "pending");
+  el.classList.toggle("hidden", !anyPending);
+  if (anyPending) {
+    el.textContent = `Filtering hasn't finished yet, so these backbones haven't been evaluated — none are tagged "ok" until it does.`;
+  }
+}
+
+function renderBackbonesList() {
   const listEl = qs("#backbonesList");
-  try {
-    const backbones = await apiGet("/api/backbones");
+  renderBackbonesFilterNote();
+  rerenderPreservingScroll(listEl, () => {
+    const all = state.backbonesCache || [];
+    const backbones = state.showFilteredBackbones ? all : all.filter((b) => b.status !== "failed_filter");
     if (!backbones.length) {
-      listEl.innerHTML = `<p class="muted">No backbones generated yet.</p>`;
+      listEl.innerHTML = all.length
+        ? `<p class="muted">All backbones were filtered out — toggle "Show filtered out" to see them.</p>`
+        : `<p class="muted">No backbones generated yet.</p>`;
       return;
     }
     listEl.innerHTML = "";
     backbones.forEach((b) => {
+      // A backbone only ever lives in one place at a time (1_rfdiff/ or
+      // 1_rfdiff/failed_filters/), so its name alone is a stable key -
+      // deliberately *not* including status, since status can legitimately
+      // change (pending -> passed) for the same backbone between polls,
+      // and that shouldn't look like a different backbone got selected.
+      const key = b.name;
       const div = document.createElement("div");
-      div.className = "list-item";
-      div.innerHTML = `<span>${escapeHtml(b.name)}</span><span class="badge ${b.status}">${b.status === "passed" ? "ok" : "filtered"}</span>`;
-      div.addEventListener("click", () => selectBackbone(b, div));
+      div.className = "list-item" + (state.selectedBackboneKey === key ? " selected" : "");
+      div.dataset.key = key;
+      div.innerHTML = `<span>${escapeHtml(b.name)}</span><span class="badge ${b.status}">${BACKBONE_BADGE_LABEL[b.status] || b.status}</span>`;
+      div.addEventListener("click", () => selectBackbone(b));
       listEl.appendChild(div);
     });
-    // auto-select first if nothing selected
-    if (!qs(".list-item.selected", listEl) && backbones.length) {
-      selectBackbone(backbones[0], listEl.children[0]);
-    }
+    const current = backbones.find((b) => b.name === state.selectedBackboneKey) || backbones[0];
+    if (current) selectBackbone(current);
+  });
+}
+
+async function loadBackbones() {
+  const listEl = qs("#backbonesList");
+  try {
+    state.backbonesCache = await apiGet("/api/backbones");
+    renderBackbonesList();
   } catch (err) {
     listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
 }
 
-async function selectBackbone(b, el) {
-  qsa("#backbonesList .list-item").forEach((i) => i.classList.remove("selected"));
-  if (el) el.classList.add("selected");
+async function selectBackbone(b) {
+  const key = b.name;
+  state.selectedBackboneKey = key;
+  applyBackboneSelectionHighlight();
+  // Same structure already showing - don't recreate the 3D viewer (that
+  // would discard the user's current zoom/rotation) just because a poll
+  // tick re-rendered the list.
+  if (state.loadedBackboneKey === key) return;
+  state.loadedBackboneKey = key;
   qs("#backboneViewerLabel").textContent = `${b.name} (${b.status})`;
   const url = `/api/backbone_pdb?log=${encodeURIComponent(state.logPath)}&name=${encodeURIComponent(b.name)}&status=${b.status}`;
-  const pdbText = await fetch(url).then((r) => r.text());
-  renderMol("#backboneViewer", pdbText);
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("pdb not found");
+    const pdbText = await res.text();
+    await renderMol("#backboneViewer", pdbText);
+    if (state.backboneColorMode === "provenance") {
+      await applyProvenanceColoring("#backboneViewer", b.trb_path, qs("#backboneColorLegend"));
+    }
+  } catch (e) {
+    qs("#backboneViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure.</p>`;
+  }
 }
 
-function renderMol(selector, pdbText) {
+const RESIDUE_HIGHLIGHT_RADIUS = 5; // Angstroms - "surrounding residues" cutoff
+
+// ---------------------------------------------------------------------
+// Viewer settings (background color, chain color palette, provenance
+// category colors) - global, shared across all three structure viewers,
+// adjustable from each viewer's own color toolbar (Backbones/Models/
+// Results tabs) and remembered in local storage.
+// ---------------------------------------------------------------------
+
+const VIEWER_SETTINGS_KEY = "prosculpt_dashboard_viewer_settings";
+
+const BACKGROUND_PRESETS = { black: "#05070c", navy: "#0f1420", white: "#ffffff", light: "#e8ebf2" };
+
+// Chain colors: NGL's built-in "chainid" scheme hashes the chain letter
+// into a color that can land on muddy, hard-to-see-on-black tones, so
+// these are curated instead. "cvd" is the Okabe-Ito colorblind-safe set.
+const CHAIN_PALETTES = {
+  vivid: ["#5b9bff", "#ff6b6b", "#4ecdc4", "#ffd166", "#c77dff", "#f4a261", "#06d6a0", "#f72585"],
+  pastel: ["#8ecae6", "#ffb4a2", "#b8f2e6", "#fff3b0", "#d0bfff", "#ffd6a5", "#a0e7b5", "#ffc2e2"],
+  cvd: ["#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"],
+};
+
+const DEFAULT_PROVENANCE_COLORS = { motif: "#ffd166", fixed_chain: "#8b93a7", sculpted: "#06d6a0" };
+
+let viewerSettings = { background: "black", chainPalette: "vivid", provenanceColors: { ...DEFAULT_PROVENANCE_COLORS } };
+
+function loadViewerSettings() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(VIEWER_SETTINGS_KEY) || "{}");
+    if (BACKGROUND_PRESETS[stored.background]) viewerSettings.background = stored.background;
+    if (CHAIN_PALETTES[stored.chainPalette]) viewerSettings.chainPalette = stored.chainPalette;
+    if (stored.provenanceColors && typeof stored.provenanceColors === "object") {
+      Object.keys(DEFAULT_PROVENANCE_COLORS).forEach((cat) => {
+        const v = stored.provenanceColors[cat];
+        if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) viewerSettings.provenanceColors[cat] = v;
+      });
+    }
+  } catch (e) {}
+}
+function saveViewerSettings() {
+  localStorage.setItem(VIEWER_SETTINGS_KEY, JSON.stringify(viewerSettings));
+}
+
+// Registered once; reads the *current* palette live via closure each time
+// it colors an atom, so switching palettes never needs re-registering -
+// just re-coloring (see applyChainPaletteSetting()).
+let chainColorSchemeId = null;
+function chainColorScheme() {
+  if (chainColorSchemeId) return chainColorSchemeId;
+  chainColorSchemeId = NGL.ColormakerRegistry.addScheme(function () {
+    this.atomColor = function (atom) {
+      const palette = CHAIN_PALETTES[viewerSettings.chainPalette] || CHAIN_PALETTES.vivid;
+      return parseInt(palette[atom.chainIndex % palette.length].slice(1), 16);
+    };
+  });
+  return chainColorSchemeId;
+}
+
+// Which chains are actually present in a loaded structure, and where each
+// one starts - used both to render a "which color is which chain" legend
+// (chainIndex, matching what chainColorScheme() keys off) and to normalize
+// RFdiffusion provenance residue numbers onto whatever numbering
+// convention the loaded structure happens to use (see
+// makeProvenanceColorScheme() below).
+function computeStructureChainInfo(structure) {
+  const info = {};
+  structure.eachAtom((atom) => {
+    const c = atom.chainname;
+    if (!(c in info)) info[c] = { minResno: atom.resno, chainIndex: atom.chainIndex };
+    else if (atom.resno < info[c].minResno) info[c].minResno = atom.resno;
+  });
+  return info;
+}
+
+function renderChainLegend(structure) {
+  const info = computeStructureChainInfo(structure);
+  const palette = CHAIN_PALETTES[viewerSettings.chainPalette] || CHAIN_PALETTES.vivid;
+  const chains = Object.entries(info).sort((a, b) => a[1].chainIndex - b[1].chainIndex);
+  return chains.map(([name, { chainIndex }]) =>
+    `<span class="legend-item"><span class="legend-swatch" style="background:${palette[chainIndex % palette.length]}"></span>Chain ${escapeHtml(name)}</span>`
+  ).join("");
+}
+
+// Maps each structure viewer to the color-legend element next to its
+// color-mode toolbar, so a shared helper (refreshChainLegendFor) can
+// update whichever one applies without each caller needing to know.
+const VIEWER_LEGEND_IDS = {
+  "#backboneViewer": "#backboneColorLegend",
+  "#resultViewer": "#resultsColorLegend",
+  "#modelViewer": "#modelColorLegend",
+};
+
+function refreshChainLegendFor(selector) {
+  const entry = viewerRegistry[selector];
+  const legendSel = VIEWER_LEGEND_IDS[selector];
+  if (!entry || !entry.component || !legendSel) return;
+  const legendEl = qs(legendSel);
+  if (!legendEl) return;
+  legendEl.classList.remove("hidden");
+  legendEl.innerHTML = renderChainLegend(entry.component.structure);
+}
+
+// RFdiffusion residue provenance coloring ("color by .trb"): every
+// residue in a generated structure is either part of a grafted motif
+// (present in a redesigned chain but taken from the reference), part of
+// an entirely fixed/non-designed chain, or generated de novo. See
+// parser.load_trb_provenance() for where con_hal_pdb_idx /
+// receptor_con_hal_pdb_idx come from.
+const PROVENANCE_LABELS = { motif: "Motif", fixed_chain: "Fixed chains", sculpted: "Sculpted" };
+
+function buildProvenanceMap(trbData) {
+  const map = {};
+  (trbData.motif || []).forEach(([chain, resno]) => { map[`${chain}:${resno}`] = "motif"; });
+  (trbData.fixed_chain || []).forEach(([chain, resno]) => { map[`${chain}:${resno}`] = "fixed_chain"; });
+  return map;
+}
+
+// Unlike the chain palette (one global scheme that reads shared settings
+// live), each structure has its own provenance map, so a fresh scheme is
+// registered per use rather than trying to share/mutate one - keeps two
+// viewers showing different structures' provenance from stepping on each
+// other. `chainOffsets` (from computeStructureChainInfo, minResno - 1 per
+// chain) normalizes the *loaded structure's* residue numbers onto the
+// chain-local numbering parser.load_trb_provenance() already puts the
+// fixed_chain data in - needed because RFdiffusion's own raw backbone
+// .pdb keeps counting resnums up across chain boundaries instead of
+// resetting per chain like AlphaFold3/Boltz's output does, so the two
+// tabs' structures don't share one numbering convention.
+function makeProvenanceColorScheme(provenanceMap, chainOffsets) {
+  return NGL.ColormakerRegistry.addScheme(function () {
+    this.atomColor = function (atom) {
+      const offset = (chainOffsets && chainOffsets[atom.chainname]) || 0;
+      const category = provenanceMap[`${atom.chainname}:${atom.resno - offset}`] || "sculpted";
+      return parseInt(viewerSettings.provenanceColors[category].slice(1), 16);
+    };
+  });
+}
+
+// Color swatches double as <input type="color"> pickers here so a user
+// can retune the provenance palette; reads viewerSettings.provenanceColors
+// live for its initial value each time it's (re-)rendered, and the picked
+// color takes effect via wireProvenanceLegendColorInputs()/
+// applyProvenanceColorSetting() rather than by re-rendering this markup.
+function renderProvenanceLegend() {
+  return Object.keys(PROVENANCE_LABELS).map((cat) =>
+    `<span class="legend-item"><input type="color" class="legend-color-input" data-category="${cat}" value="${viewerSettings.provenanceColors[cat]}" title="Change ${escapeHtml(PROVENANCE_LABELS[cat])} color">${PROVENANCE_LABELS[cat]}</span>`
+  ).join("");
+}
+
+function wireProvenanceLegendColorInputs(legendEl) {
+  qsa(".legend-color-input", legendEl).forEach((input) => {
+    input.addEventListener("input", (e) => {
+      viewerSettings.provenanceColors[e.target.dataset.category] = e.target.value;
+      saveViewerSettings();
+      applyProvenanceColorSetting();
+    });
+  });
+}
+
+// One NGL Stage per viewer container (#backboneViewer / #modelViewer /
+// #resultViewer), tracked so a later renderMol() call on the same
+// container disposes the old one first - each Stage owns its own WebGL
+// context, and browsers cap how many can be alive at once, so leaving old
+// ones around would eventually break rendering entirely. `generation`
+// guards against a slower, now-stale load (e.g. from rapid-fire clicking
+// through the list) finishing after a newer one and clobbering it.
+// `lastText`/`lastFormat` cache what's currently loaded so a viewer
+// setting change (e.g. chain palette) can re-render without re-fetching.
+// `colorMode` ("chain" | "provenance") tracks which scheme is currently
+// applied, so a global chain-palette change doesn't clobber a viewer
+// that's deliberately showing provenance coloring.
+const viewerRegistry = {};
+
+async function renderMol(selector, structureText, format = "pdb") {
   const el = qs(selector);
+  if (!viewerRegistry[selector]) viewerRegistry[selector] = { stage: null, generation: 0 };
+  const entry = viewerRegistry[selector];
+  const myGeneration = ++entry.generation;
+
+  if (entry.stage) {
+    entry.stage.dispose();
+    entry.stage = null;
+  }
   el.innerHTML = "";
-  const viewer = $3Dmol.createViewer(el, { backgroundColor: "#05070c" });
-  viewer.addModel(pdbText, "pdb");
-  viewer.setStyle({}, { cartoon: { colorscheme: "chainHetatm" } });
-  viewer.zoomTo();
-  viewer.render();
-  return viewer;
+
+  const stage = new NGL.Stage(el, { backgroundColor: BACKGROUND_PRESETS[viewerSettings.background] || BACKGROUND_PRESETS.black });
+  const blob = new Blob([structureText], { type: "text/plain" });
+
+  let component;
+  try {
+    component = await stage.loadFile(blob, { ext: format });
+  } catch (e) {
+    if (myGeneration === entry.generation) {
+      el.innerHTML = `<p class="muted" style="padding:20px">Could not render structure.</p>`;
+    }
+    stage.dispose();
+    return null;
+  }
+  if (myGeneration !== entry.generation) {
+    stage.dispose(); // a newer selection started before this one finished loading
+    return null;
+  }
+
+  entry.stage = stage;
+  entry.component = component;
+  entry.lastText = structureText;
+  entry.lastFormat = format;
+  entry.colorMode = "chain";
+  entry.provenanceSchemeId = null;
+  // NGL's own default tooltip re-shows itself (resets display:block) on
+  // every hover, so a one-time style change doesn't stick - detach it
+  // from the DOM instead. It's still safe for NGL to keep writing to it
+  // internally; it just has nothing to render. Our own app-styled
+  // tooltip (.residue-tooltip, wired up in setupResidueInteraction)
+  // replaces it.
+  if (stage.tooltip && stage.tooltip.parentNode) stage.tooltip.parentNode.removeChild(stage.tooltip);
+  entry.cartoonRepr = component.addRepresentation("cartoon", { color: chainColorScheme() });
+  stage.autoView();
+  setupResidueInteraction(stage, component, el);
+  refreshChainLegendFor(selector);
+  return stage;
+}
+
+// Swaps the cartoon's color scheme on an already-loaded viewer in place -
+// cheap (no reload/re-fetch), and doesn't reset the user's camera
+// position the way rebuilding the whole viewer would.
+function setCartoonColor(selector, colorSchemeId) {
+  const entry = viewerRegistry[selector];
+  if (!entry || !entry.component) return;
+  if (entry.cartoonRepr) entry.component.removeRepresentation(entry.cartoonRepr);
+  entry.cartoonRepr = entry.component.addRepresentation("cartoon", { color: colorSchemeId });
+}
+
+// Background is a cheap, genuinely live stage parameter - applies
+// instantly to every currently-open viewer, no reload needed.
+function applyBackgroundSetting() {
+  const hex = BACKGROUND_PRESETS[viewerSettings.background] || BACKGROUND_PRESETS.black;
+  Object.values(viewerRegistry).forEach((entry) => {
+    if (entry.stage) entry.stage.setParameters({ backgroundColor: hex });
+  });
+}
+
+// chainColorScheme() reads viewerSettings.chainPalette live, so any
+// viewer currently colored "by chain" just needs its cartoon
+// representation (and legend) rebuilt to re-evaluate colors - viewers
+// showing provenance coloring are left alone.
+function applyChainPaletteSetting() {
+  Object.keys(viewerRegistry).forEach((selector) => {
+    const entry = viewerRegistry[selector];
+    if (entry && entry.colorMode !== "provenance") {
+      setCartoonColor(selector, chainColorScheme());
+      refreshChainLegendFor(selector);
+    }
+  });
+}
+
+// makeProvenanceColorScheme() reads viewerSettings.provenanceColors live,
+// so a viewer already showing provenance coloring just needs its cartoon
+// representation rebuilt (via its previously-registered scheme id) to
+// pick up a retuned category color - no need to re-fetch the .trb or
+// rebuild the provenance map itself.
+function applyProvenanceColorSetting() {
+  Object.keys(viewerRegistry).forEach((selector) => {
+    const entry = viewerRegistry[selector];
+    if (entry && entry.colorMode === "provenance" && entry.provenanceSchemeId) {
+      setCartoonColor(selector, entry.provenanceSchemeId);
+    }
+  });
+}
+
+// Fetches a .trb file's provenance data and colors `selector`'s cartoon by
+// it, updating the legend; falls back to chain coloring (with an
+// explanatory note in the legend slot) if there's no .trb path or the
+// fetch fails. Shared by the Backbones and Results tabs' "color residues
+// by" controls.
+async function applyProvenanceColoring(selector, trbPath, legendEl) {
+  const entry = viewerRegistry[selector];
+  if (!entry) return;
+  if (!trbPath) {
+    entry.colorMode = "chain";
+    entry.provenanceSchemeId = null;
+    setCartoonColor(selector, chainColorScheme());
+    if (legendEl) legendEl.innerHTML = `<span class="muted">No .trb file found for this backbone.</span>`;
+    return;
+  }
+  try {
+    const data = await apiGet("/api/trb", { path: trbPath });
+    if (data.error) throw new Error(data.error);
+    const chainInfo = computeStructureChainInfo(entry.component.structure);
+    const chainOffsets = {};
+    Object.keys(chainInfo).forEach((c) => { chainOffsets[c] = chainInfo[c].minResno - 1; });
+    const schemeId = makeProvenanceColorScheme(buildProvenanceMap(data), chainOffsets);
+    entry.colorMode = "provenance";
+    entry.provenanceSchemeId = schemeId;
+    setCartoonColor(selector, schemeId);
+    if (legendEl) {
+      legendEl.innerHTML = renderProvenanceLegend();
+      wireProvenanceLegendColorInputs(legendEl);
+    }
+  } catch (e) {
+    entry.colorMode = "chain";
+    entry.provenanceSchemeId = null;
+    setCartoonColor(selector, chainColorScheme());
+    if (legendEl) legendEl.innerHTML = `<span class="muted">Could not load .trb data: ${escapeHtml(e.message)}</span>`;
+  }
+}
+
+// Click a residue to highlight it plus everything within
+// RESIDUE_HIGHLIGHT_RADIUS Å of it, with a small overlay naming both.
+// Hovering shows a lightweight floating tooltip for quick scanning
+// without disturbing whatever's currently highlighted. Both use NGL's own
+// picking API (stage.signals.clicked/hovered) and its selection language
+// (structure.getAtomSetWithinSelection + getAtomSetWithinGroup for the
+// "everything within N Å, expanded to whole residues" query) - no
+// separate distance/highlight logic needed.
+function setupResidueInteraction(stage, component, container) {
+  const structure = component.structure;
+
+  const info = document.createElement("div");
+  info.className = "residue-info hidden";
+  container.appendChild(info);
+
+  const tooltip = document.createElement("div");
+  tooltip.className = "residue-tooltip hidden";
+  stage.viewer.container.appendChild(tooltip);
+
+  let highlightReprs = [];
+
+  function clearHighlight() {
+    highlightReprs.forEach((r) => component.removeRepresentation(r));
+    highlightReprs = [];
+    info.classList.add("hidden");
+  }
+
+  stage.signals.clicked.add((pickingProxy) => {
+    if (!pickingProxy || !pickingProxy.atom) return;
+    const atom = pickingProxy.atom;
+    clearHighlight();
+
+    const residueSele = `${atom.resno} and :${atom.chainname}`;
+    let neighborCount = 0;
+    try {
+      const nearAtoms = structure.getAtomSetWithinSelection(new NGL.Selection(residueSele), RESIDUE_HIGHLIGHT_RADIUS);
+      const nearResidues = structure.getAtomSetWithinGroup(nearAtoms); // whole residues, not just the atoms caught by the radius
+
+      const seen = new Set();
+      structure.eachAtom((ap) => seen.add(`${ap.chainname}:${ap.resno}`), new NGL.Selection(nearResidues.toSeleString()));
+      seen.delete(`${atom.chainname}:${atom.resno}`);
+      neighborCount = seen.size;
+
+      const neighborSele = `( ${nearResidues.toSeleString()} ) and not ( ${residueSele} )`;
+      // Element (CPK) coloring for both - N blue, O red, S yellow, etc.
+      // The clicked residue is distinguished from its neighbors by
+      // thicker sticks (radiusScale) rather than a flat highlight color,
+      // so the element coloring stays correct on both.
+      highlightReprs.push(component.addRepresentation("licorice", { sele: neighborSele, colorScheme: "element", radiusScale: 1.2 }));
+    } catch (e) {
+      // Highlight is best-effort - the info line below still works even
+      // if the neighbor query fails for some edge-case selection.
+    }
+    highlightReprs.push(component.addRepresentation("licorice", { sele: residueSele, colorScheme: "element", radiusScale: 2.2 }));
+
+    info.innerHTML = `<b>${escapeHtml(atom.resname || "?")} ${escapeHtml(String(atom.resno))}</b> · chain ${escapeHtml(atom.chainname || "?")}
+      <span class="muted">— ${neighborCount} nearby residue${neighborCount === 1 ? "" : "s"} within ${RESIDUE_HIGHLIGHT_RADIUS} Å</span>
+      <a class="clear-link">clear</a>`;
+    info.classList.remove("hidden");
+    info.querySelector(".clear-link").addEventListener("click", clearHighlight);
+  });
+
+  stage.signals.hovered.add((pickingProxy) => {
+    if (pickingProxy && pickingProxy.atom) {
+      const atom = pickingProxy.atom;
+      const cp = pickingProxy.canvasPosition;
+      tooltip.textContent = `${atom.resname || "?"} ${atom.resno}`;
+      tooltip.style.left = `${cp.x + 8}px`;
+      tooltip.style.bottom = `${cp.y + 8}px`;
+      tooltip.classList.remove("hidden");
+    } else {
+      tooltip.classList.add("hidden");
+    }
+  });
+}
+
+// ---------------------------------------------------------------------
+// Shared alignment viewer (Sequences tab + Results tab) - A / D2
+//
+// One shared horizontal scrollbar per group of same-length sequences,
+// rather than one per sequence: all rows sit in a single overflow-x:auto
+// container so scrolling any of them scrolls the whole block, and the
+// label column stays pinned via position:sticky.
+// ---------------------------------------------------------------------
+
+function coloredSeq(seq, conservedChain) {
+  return Array.from(seq).map((c, i) => {
+    const color = AA_COLORS[c] || "#3a4560";
+    const info = conservedChain && conservedChain[i];
+    const highlight = info && info.isConserved && info.char === c;
+    const cls = "aa" + (highlight ? " conserved" : "");
+    // Conserved: solid background in the amino acid's own color with a
+    // fixed dark, high-contrast text color (readable at 1-char width -
+    // an outline/glow was getting lost against the neighboring residues).
+    // Not conserved: the usual faint tint.
+    const style = highlight ? `background:${color};color:#0b0f18` : `background:${color}1a;color:${color}`;
+    return `<span class="${cls}" style="${style}">${c}</span>`;
+  }).join("");
+}
+
+function renderRulerRow(chains) {
+  let out = '<div class="align-ruler"><div class="align-label"></div><div class="align-seq">';
+  let pos = 0;
+  chains.forEach((chain, ci) => {
+    for (let i = 0; i < chain.length; i++) {
+      pos++;
+      out += pos % 10 === 0 ? `<span class="tick">${pos}</span>` : `<span class="tick"></span>`;
+    }
+    if (ci < chains.length - 1) out += '<span class="chain-sep"> </span>';
+  });
+  out += "</div></div>";
+  return out;
+}
+
+function renderAlignmentBlock(rows, options = {}) {
+  // rows: [{label, chains: [seq, ...], swatch?: cssColor}]
+  // options.conservation: per-chain array of {char, isConserved} (Sequences tab only)
+  if (!rows.length) return `<p class="muted">Nothing to show.</p>`;
+  const conservation = options.conservation || null;
+  const ruler = renderRulerRow(rows[0].chains);
+  const body = rows.map((r) => {
+    const chainsHtml = r.chains
+      .map((c, ci) => coloredSeq(c, conservation ? conservation[ci] : null))
+      .join('<span class="chain-sep">/</span>');
+    const swatch = r.swatch ? `<span class="swatch" style="background:${r.swatch}"></span>` : "";
+    return `<div class="align-row"><div class="align-label" title="${escapeHtml(r.label)}">${swatch}${escapeHtml(r.label)}</div><div class="align-seq">${chainsHtml}</div></div>`;
+  }).join("");
+  return `<div class="align-scroll">${ruler}${body}</div>`;
 }
 
 // ---------------------------------------------------------------------
 // Sequences tab
 // ---------------------------------------------------------------------
 
-function coloredSeq(seq) {
-  return Array.from(seq).map((c) => {
-    const color = AA_COLORS[c] || "#3a4560";
-    return `<span class="aa" style="background:${color}1a;color:${color}">${c}</span>`;
-  }).join("");
+// Per-position consensus across a backbone's samples: samples are
+// guaranteed the same length/chain layout (same backbone), so residues
+// line up index-for-index without needing a real alignment algorithm.
+function computeConservation(samples, thresholdPct) {
+  if (!samples.length) return null;
+  const nChains = samples[0].chains.length;
+  const perChain = [];
+  for (let ci = 0; ci < nChains; ci++) {
+    const len = samples[0].chains[ci] ? samples[0].chains[ci].length : 0;
+    const positions = [];
+    for (let pos = 0; pos < len; pos++) {
+      const counts = {};
+      let total = 0;
+      samples.forEach((s) => {
+        const chain = s.chains[ci];
+        if (!chain || pos >= chain.length) return;
+        const c = chain[pos];
+        counts[c] = (counts[c] || 0) + 1;
+        total++;
+      });
+      let bestChar = null, bestCount = 0;
+      Object.entries(counts).forEach(([c, n]) => { if (n > bestCount) { bestCount = n; bestChar = c; } });
+      const pct = total ? (bestCount / total) * 100 : 0;
+      positions.push({ char: bestChar, isConserved: pct >= thresholdPct });
+    }
+    perChain.push(positions);
+  }
+  return perChain;
 }
 
 function renderSeqGroup(title, backbones) {
   if (!backbones.length) return "";
+  const highlightOn = qs("#conservationToggle").checked;
+  const thresholdPct = Math.max(1, Math.min(100, parseFloat(qs("#conservationThreshold").value) || 90));
   let html = `<h3>${escapeHtml(title)}</h3>`;
   backbones.forEach((bb) => {
-    html += `<div class="backbone-block"><h4>${escapeHtml(bb.backbone)} <span class="muted" style="font-size:12px;font-weight:400">(${bb.num_samples} sequence${bb.num_samples === 1 ? "" : "s"})</span></h4>`;
-    bb.samples.forEach((s, i) => {
-      const chainsHtml = s.chains.map((c) => coloredSeq(c)).join('<span class="chain-sep">/</span>');
+    const rows = bb.samples.map((s, i) => {
       const meta = (s.score !== undefined)
-        ? `score ${s.score} · global ${s.global_score} · recovery ${s.seq_recovery}`
+        ? ` — score ${s.score} · global ${s.global_score} · recovery ${s.seq_recovery}`
         : "";
-      html += `<div class="seq-row"><span class="seq-label">sample ${i + 1}${meta ? " — " + escapeHtml(meta) : ""}</span><span>${chainsHtml}</span></div>`;
+      return { label: `sample ${i + 1}${meta}`, chains: s.chains };
     });
+    const conservation = highlightOn ? computeConservation(bb.samples, thresholdPct) : null;
+    html += `<div class="backbone-block"><h4>${escapeHtml(bb.backbone)} <span class="muted" style="font-size:12px;font-weight:400">(${bb.num_samples} sequence${bb.num_samples === 1 ? "" : "s"})</span></h4>`;
+    html += renderAlignmentBlock(rows, { conservation });
     html += `</div>`;
   });
   return html;
 }
 
+function renderSequencesContent() {
+  const el = qs("#sequencesContent");
+  const data = state.sequencesCache;
+  if (!data) {
+    el.innerHTML = `<p class="muted">Load a job first.</p>`;
+    return;
+  }
+  if (!data.backbones.length && !data.monomers.length) {
+    el.innerHTML = `<p class="muted">No sequences generated yet.</p>`;
+    return;
+  }
+  el.innerHTML = renderSeqGroup("Designed sequences", data.backbones) + renderSeqGroup("Monomer sequences", data.monomers);
+}
+
 async function loadSequences() {
   const el = qs("#sequencesContent");
   try {
-    const data = await apiGet("/api/sequences");
-    if (!data.backbones.length && !data.monomers.length) {
-      el.innerHTML = `<p class="muted">No sequences generated yet.</p>`;
-      return;
-    }
-    el.innerHTML = renderSeqGroup("Designed sequences", data.backbones) + renderSeqGroup("Monomer sequences", data.monomers);
+    state.sequencesCache = await apiGet("/api/sequences");
+    renderSequencesContent();
   } catch (err) {
     el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
@@ -390,18 +1244,25 @@ async function loadSequences() {
 // Models tab
 // ---------------------------------------------------------------------
 
-async function loadModels() {
-  const listEl = qs("#modelsList");
-  try {
-    const models = await apiGet("/api/models");
-    state.modelsCache = models;
-    renderModelsList();
-    if (!qsa("#modelsList .list-item.selected").length && models.length) {
-      selectModel(0);
-    }
-  } catch (err) {
-    listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+function renderModelsCycleNote(status) {
+  const el = qs("#modelsCycleNote");
+  const cycle = status && status.cycle;
+  if (!cycle || !cycle.is_multi_cycle) {
+    el.classList.add("hidden");
+    return;
   }
+  el.classList.remove("hidden");
+  el.innerHTML = `${cyclePillHtml(cycle)} Showing models from the current cycle only — earlier cycles' models are cleared from disk when the next cycle starts.`;
+}
+
+function modelKey(m) {
+  return `${m.model}|${m.sequence_name}|${m.model_index}|${m.variant || ""}`;
+}
+
+function applyModelsSelectionHighlight() {
+  qsa("#modelsList .list-item").forEach((el) => {
+    el.classList.toggle("selected", el.dataset.key === state.selectedModelKey);
+  });
 }
 
 function renderModelsList() {
@@ -412,42 +1273,81 @@ function renderModelsList() {
     listEl.innerHTML = `<p class="muted">No models generated yet.</p>`;
     return;
   }
-  listEl.innerHTML = "";
-  models.forEach((m, idx) => {
-    const label = `${m.model} / ${m.sequence_name}` + (m.model_index !== null && m.model_index !== undefined ? ` (model ${m.model_index})` : "");
-    if (filterVal && !label.toLowerCase().includes(filterVal)) return;
-    const div = document.createElement("div");
-    div.className = "list-item" + (idx === state.selectedModelIdx ? " selected" : "");
-    div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span><span class="badge ${m.variant}">${m.variant}</span>`;
-    div.addEventListener("click", () => selectModel(idx));
-    listEl.appendChild(div);
+  rerenderPreservingScroll(listEl, () => {
+    listEl.innerHTML = "";
+    const visible = [];
+    models.forEach((m) => {
+      const label = `${m.model} / ${m.sequence_name}` + (m.model_index !== null && m.model_index !== undefined ? ` (model ${m.model_index})` : "");
+      if (filterVal && !label.toLowerCase().includes(filterVal)) return;
+      visible.push(m);
+      const key = modelKey(m);
+      const div = document.createElement("div");
+      div.className = "list-item" + (state.selectedModelKey === key ? " selected" : "");
+      div.dataset.key = key;
+      const badge = m.variant ? `<span class="badge ${m.variant}">${m.variant}</span>` : "";
+      div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span>${badge}`;
+      div.addEventListener("click", () => selectModel(m));
+      listEl.appendChild(div);
+    });
+    const current = visible.find((m) => modelKey(m) === state.selectedModelKey) || visible[0];
+    if (current) selectModel(current);
   });
 }
 
-async function selectModel(idx) {
-  state.selectedModelIdx = idx;
-  renderModelsList();
-  const m = state.modelsCache[idx];
-  if (!m) return;
+async function loadModels() {
+  const listEl = qs("#modelsList");
+  try {
+    state.modelsCache = await apiGet("/api/models");
+    renderModelsList();
+  } catch (err) {
+    listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
+}
 
-  const metricsEl = qs("#modelMetrics");
-  metricsEl.innerHTML = `<p class="muted">Loading…</p>`;
+async function selectModel(m) {
+  const key = modelKey(m);
+  state.selectedModelKey = key;
+  applyModelsSelectionHighlight();
 
-  if (m.pdb_path) {
-    const url = `/api/model_pdb?log=${encodeURIComponent(state.logPath)}&path=${encodeURIComponent(m.pdb_path)}`;
-    const pdbText = await fetch(url).then((r) => r.text());
-    renderMol("#modelViewer", pdbText);
-  } else {
-    qs("#modelViewer").innerHTML = `<p class="muted" style="padding:20px">No pdb file found yet for this model.</p>`;
+  // Structure and confidence data are fetched/redrawn independently, and
+  // only when the underlying file actually changed (e.g. AF3's .cif
+  // upgrading to a final .pdb, or confidences appearing) - so an
+  // already-loaded 3D view never gets reset just because a poll re-ran
+  // this with the same selection.
+  const structureKey = m.structure_path ? `${m.structure_path}|${m.structure_format}` : null;
+  if (state.loadedModelStructureKey !== structureKey) {
+    state.loadedModelStructureKey = structureKey;
+    const label = qs("#modelViewerLabel");
+    if (structureKey) {
+      const url = `/api/model_pdb?log=${encodeURIComponent(state.logPath)}&path=${encodeURIComponent(m.structure_path)}`;
+      try {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("not found");
+        const text = await res.text();
+        await renderMol("#modelViewer", text, m.structure_format || "pdb");
+        label.textContent = m.structure_format === "cif" ? "Preview from .cif — final .pdb not written yet" : "";
+      } catch (e) {
+        qs("#modelViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure.</p>`;
+        label.textContent = "";
+      }
+    } else {
+      qs("#modelViewer").innerHTML = `<p class="muted" style="padding:20px">No structure file found yet for this model.</p>`;
+      label.textContent = "";
+    }
   }
 
-  if (m.confidence_path) {
-    const url = `/api/model_confidence?log=${encodeURIComponent(state.logPath)}&path=${encodeURIComponent(m.confidence_path)}`;
-    const metrics = await fetch(url).then((r) => r.json());
-    const rows = Object.entries(metrics).map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join("");
-    metricsEl.innerHTML = `<table>${rows}</table>`;
-  } else {
-    metricsEl.innerHTML = `<p class="muted">No confidence metrics found yet.</p>`;
+  const confKey = m.confidence_path || null;
+  if (state.loadedModelConfKey !== confKey) {
+    state.loadedModelConfKey = confKey;
+    const metricsEl = qs("#modelMetrics");
+    if (confKey) {
+      const url = `/api/model_confidence?log=${encodeURIComponent(state.logPath)}&path=${encodeURIComponent(confKey)}`;
+      const metrics = await fetch(url).then((r) => r.json());
+      const rows = Object.entries(metrics).map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join("");
+      metricsEl.innerHTML = `<table>${rows}</table>`;
+    } else {
+      metricsEl.innerHTML = `<p class="muted">No confidence metrics found yet.</p>`;
+    }
   }
 }
 
@@ -455,71 +1355,463 @@ async function selectModel(idx) {
 // Results tab
 // ---------------------------------------------------------------------
 
+function ingestCsv(csv) {
+  const { columns, rows } = csv;
+  const objRows = rows.map((r, i) => {
+    const obj = { __rowId: i };
+    columns.forEach((c, ci) => { obj[c] = r[ci]; });
+    return obj;
+  });
+
+  const numericColumns = columns.filter((c) => {
+    const vals = objRows.map((r) => r[c]).filter((v) => v !== "" && v !== undefined && v !== null);
+    if (!vals.length) return false;
+    return vals.every((v) => !isNaN(parseFloat(v)) && isFinite(v));
+  });
+
+  const idCol = columns.includes("id") ? "id" : null;
+  const pathCols = columns.filter((c) => PATH_COLUMNS.includes(c));
+  const rest = columns.filter((c) => c !== idCol && !pathCols.includes(c));
+  const displayColumns = [...(idCol ? [idCol] : []), ...rest, ...pathCols];
+
+  const prev = state.results;
+  state.results = {
+    columns,
+    rows: objRows,
+    numericColumns,
+    displayColumns,
+    idCol,
+    filters: prev.filters || {},
+    colorField: prev.colorField || "",
+    colorDirection: prev.colorDirection || "higher",
+    selectedRowId: prev.selectedRowId,
+  };
+  // drop filters/colorField that no longer refer to a real numeric column
+  Object.keys(state.results.filters).forEach((c) => {
+    if (!numericColumns.includes(c)) delete state.results.filters[c];
+  });
+  if (state.results.colorField && !numericColumns.includes(state.results.colorField)) {
+    state.results.colorField = "";
+  }
+}
+
+function getFilteredRows() {
+  const { rows, filters } = state.results;
+  const cols = Object.keys(filters);
+  if (!cols.length) return rows;
+  return rows.filter((r) => {
+    for (const col of cols) {
+      const f = filters[col];
+      if (f.min == null && f.max == null) continue;
+      const val = parseFloat(r[col]);
+      if (isNaN(val)) return false;
+      if (f.min != null && val < f.min) return false;
+      if (f.max != null && val > f.max) return false;
+    }
+    return true;
+  });
+}
+
+function computeColorScale(rows) {
+  const { colorField, colorDirection } = state.results;
+  if (!colorField) return null;
+  const vals = rows.map((r) => parseFloat(r[colorField])).filter((v) => !isNaN(v));
+  if (!vals.length) return null;
+  return { min: Math.min(...vals), max: Math.max(...vals), field: colorField, direction: colorDirection };
+}
+
+function colorForRow(row, scale) {
+  if (!scale) return null;
+  const val = parseFloat(row[scale.field]);
+  if (isNaN(val)) return null;
+  let t = scale.max === scale.min ? 1 : (val - scale.min) / (scale.max - scale.min);
+  if (scale.direction === "lower") t = 1 - t;
+  t = Math.max(0, Math.min(1, t));
+  const hue = t * 145; // 0 = red (worst) .. 145 = green (best)
+  // This background is deliberately dark regardless of theme (so the hue
+  // stays legible), so it needs a fixed light text color paired with it -
+  // the ambient theme text turns dark in light mode, which would be
+  // unreadable against it.
+  return { bg: `hsl(${hue}, 42%, 21%)`, accent: `hsl(${hue}, 70%, 52%)`, text: "#eef1f8" };
+}
+
 async function loadResults() {
   const listEl = qs("#finalPdbsList");
-  const csvWrap = qs("#csvTableWrap");
   try {
     const res = await apiGet("/api/results");
-    if (!res.final_pdbs.length) {
-      listEl.innerHTML = `<p class="muted">No final models yet — this appears once final_operations completes.</p>`;
-    } else {
-      listEl.innerHTML = "";
-      res.final_pdbs.forEach((name) => {
-        const div = document.createElement("div");
-        div.className = "list-item";
-        div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</span>`;
-        div.addEventListener("click", async () => {
-          qsa("#finalPdbsList .list-item").forEach((i) => i.classList.remove("selected"));
-          div.classList.add("selected");
-          const url = `/api/final_pdb?log=${encodeURIComponent(state.logPath)}&name=${encodeURIComponent(name)}`;
-          const pdbText = await fetch(url).then((r) => r.text());
-          renderMol("#resultViewer", pdbText);
+    if (!res.csv_exists) {
+      state.results.rows = [];
+      if (!res.final_pdbs.length) {
+        listEl.innerHTML = `<p class="muted">No final models yet — this appears once final_operations completes.</p>`;
+      } else {
+        // Fallback (no csv yet, e.g. mid-scoring): plain filename list.
+        listEl.innerHTML = "";
+        res.final_pdbs.forEach((name) => {
+          const div = document.createElement("div");
+          div.className = "list-item";
+          div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</span>`;
+          div.addEventListener("click", async () => {
+            qsa("#finalPdbsList .list-item").forEach((i) => i.classList.remove("selected"));
+            div.classList.add("selected");
+            const url = `/api/final_pdb?log=${encodeURIComponent(state.logPath)}&name=${encodeURIComponent(name)}`;
+            const pdbText = await fetch(url).then((r) => r.text());
+            await renderMol("#resultViewer", pdbText);
+          });
+          listEl.appendChild(div);
         });
-        listEl.appendChild(div);
-      });
+      }
+      qs("#resultsAlignContent").innerHTML = `<p class="muted">Not available yet.</p>`;
+      qs("#csvTableWrap").innerHTML = `<p class="muted">Not available yet — created once final_operations finishes.</p>`;
+      qs("#resultsCount").textContent = "";
+      populateColorBySelect();
+      renderFiltersList();
+      return;
     }
 
-    if (res.csv_exists) {
-      const csv = await apiGet("/api/final_csv");
-      state.csvCache = csv;
-      renderCsvTable();
-    } else {
-      csvWrap.innerHTML = `<p class="muted">Not available yet — created once final_operations finishes.</p>`;
-    }
+    const csv = await apiGet("/api/final_csv");
+    ingestCsv(csv);
+    populateColorBySelect();
+    renderFiltersList();
+    updateFiltersBadge();
+    renderResultsAll();
   } catch (err) {
     listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
 }
 
+function renderResultsAll() {
+  const total = state.results.rows.length;
+  const shown = getFilteredRows().length;
+  qs("#resultsCount").textContent = total ? `Showing ${shown} / ${total} model${total === 1 ? "" : "s"}` : "";
+  renderResultsList();
+  renderResultsAlignment();
+  renderCsvTable();
+}
+
+function renderResultsList() {
+  const listEl = qs("#finalPdbsList");
+  if (!state.results.rows.length) return; // handled by loadResults fallback path
+  const rows = getFilteredRows();
+  if (!rows.length) {
+    listEl.innerHTML = `<p class="muted">No models match the current filters.</p>`;
+    return;
+  }
+  rerenderPreservingScroll(listEl, () => {
+    const scale = computeColorScale(rows);
+    listEl.innerHTML = "";
+    rows.forEach((row) => {
+      const label = row[state.results.idCol] || basename(row.model_path) || `row ${row.__rowId}`;
+      const div = document.createElement("div");
+      div.className = "list-item" + (state.results.selectedRowId === row.__rowId ? " selected" : "");
+      const color = colorForRow(row, scale);
+      if (color) {
+        div.style.background = color.bg;
+        div.style.borderLeftColor = color.accent;
+        div.style.color = color.text;
+      }
+      div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(label))}</span>`;
+      div.addEventListener("click", () => selectResultRow(row));
+      listEl.appendChild(div);
+    });
+    const current = rows.find((r) => r.__rowId === state.results.selectedRowId) || rows[0];
+    if (current) selectResultRow(current);
+  });
+}
+
+// The .trb sits next to the RFdiffusion pdb that final_output.csv's
+// path_rfdiff column already points to - same basename, .trb extension,
+// same convention as the Backbones tab.
+function trbPathForResultRow(row) {
+  return row.path_rfdiff ? row.path_rfdiff.replace(/\.pdb$/i, ".trb") : null;
+}
+
+async function selectResultRow(row) {
+  state.results.selectedRowId = row.__rowId;
+  renderResultsListSelectionOnly();
+  const pdbName = basename(row.model_path);
+  // Same structure already showing - skip refetching so the viewer's
+  // camera (zoom/rotation) isn't reset on every poll tick.
+  if (state.loadedResultPdbName === pdbName) return;
+  state.loadedResultPdbName = pdbName;
+  if (!pdbName) return;
+  const url = `/api/final_pdb?log=${encodeURIComponent(state.logPath)}&name=${encodeURIComponent(pdbName)}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error("pdb not found");
+    const pdbText = await res.text();
+    await renderMol("#resultViewer", pdbText);
+    if (state.resultsColorMode === "provenance") {
+      await applyProvenanceColoring("#resultViewer", trbPathForResultRow(row), qs("#resultsColorLegend"));
+    }
+  } catch (e) {
+    qs("#resultViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure for this row.</p>`;
+  }
+}
+
+function renderResultsListSelectionOnly() {
+  // Cheap re-render (list is not large) so the highlighted row + viewer stay in sync.
+  const rows = getFilteredRows();
+  const listEl = qs("#finalPdbsList");
+  qsa(".list-item", listEl).forEach((el, i) => {
+    const row = rows[i];
+    if (!row) return;
+    el.classList.toggle("selected", row.__rowId === state.results.selectedRowId);
+  });
+}
+
+function renderResultsAlignment() {
+  const el = qs("#resultsAlignContent");
+  if (!state.results.rows.length) {
+    el.innerHTML = `<p class="muted">Not available yet.</p>`;
+    return;
+  }
+  const rows = getFilteredRows();
+  if (!rows.length) {
+    el.innerHTML = `<p class="muted">No models match the current filters.</p>`;
+    return;
+  }
+  if (!state.results.columns.includes("sequence")) {
+    el.innerHTML = `<p class="muted">final_output.csv has no "sequence" column.</p>`;
+    return;
+  }
+  const scale = computeColorScale(rows);
+
+  // Group by sequence length: unrelated designs won't be the same length,
+  // but this keeps each group's residues lined up in one shared scrollbar.
+  const groups = new Map();
+  rows.forEach((row) => {
+    const seq = row.sequence || "";
+    const key = seq.length;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  });
+
+  const html = [...groups.keys()].sort((a, b) => b - a).map((len) => {
+    const groupRows = groups.get(len);
+    const alignRows = groupRows.map((row) => {
+      const color = colorForRow(row, scale);
+      const label = String(row[state.results.idCol] || basename(row.model_path) || `row ${row.__rowId}`);
+      return { label, chains: String(row.sequence || "").split(":"), swatch: color ? color.accent : null };
+    });
+    return `<div class="backbone-block"><h4>${len} residues <span class="muted" style="font-size:12px;font-weight:400">(${groupRows.length} model${groupRows.length === 1 ? "" : "s"})</span></h4>${renderAlignmentBlock(alignRows)}</div>`;
+  }).join("");
+  el.innerHTML = html;
+}
+
 function renderCsvTable() {
   const wrap = qs("#csvTableWrap");
-  const { columns, rows } = state.csvCache;
-  if (!columns.length) { wrap.innerHTML = `<p class="muted">Empty file.</p>`; return; }
+  if (!state.results.rows.length) {
+    wrap.innerHTML = `<p class="muted">Not available yet.</p>`;
+    return;
+  }
+  const rows = getFilteredRows();
+  if (!rows.length) {
+    wrap.innerHTML = `<p class="muted">No rows match the current filters.</p>`;
+    return;
+  }
+  const { displayColumns, idCol } = state.results;
+  const scale = computeColorScale(rows);
 
   let sortedRows = rows;
   const { col, dir } = state.csvSort;
-  if (col !== null) {
+  if (col) {
     sortedRows = [...rows].sort((a, b) => {
       const av = a[col], bv = b[col];
       const an = parseFloat(av), bn = parseFloat(bv);
       let cmp;
       if (!isNaN(an) && !isNaN(bn)) cmp = an - bn;
-      else cmp = String(av).localeCompare(String(bv));
+      else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
       return cmp * dir;
     });
   }
 
-  const thead = columns.map((c, i) => `<th data-col="${i}">${escapeHtml(c)}${col === i ? (dir === 1 ? " ▲" : " ▼") : ""}</th>`).join("");
-  const tbody = sortedRows.map((r) => `<tr>${r.map((v) => `<td>${escapeHtml(v)}</td>`).join("")}</tr>`).join("");
+  const thead = displayColumns.map((c) => {
+    const cls = c === idCol ? ' class="id-col"' : (PATH_COLUMNS.includes(c) ? ' class="path-col"' : "");
+    const arrow = col === c ? (dir === 1 ? " ▲" : " ▼") : "";
+    return `<th data-col="${escapeHtml(c)}"${cls}>${escapeHtml(c)}${arrow}</th>`;
+  }).join("");
+
+  const tbody = sortedRows.map((r, idx) => {
+    const color = colorForRow(r, scale);
+    const rowBg = color ? color.bg : (idx % 2 === 1 ? "var(--panel-2)" : "transparent");
+    const idCellBg = color ? color.bg : (idx % 2 === 1 ? "var(--panel-2)" : "var(--panel)");
+    // The row's own `color` (inherited by every <td>) is enough to fix
+    // text against the tint everywhere *except* .path-col, which sets its
+    // own `color: var(--muted)` in CSS - an inline style is needed there
+    // to actually win over that class rule.
+    const rowStyle = color ? `background:${rowBg};color:${color.text}` : `background:${rowBg}`;
+    const tds = displayColumns.map((c) => {
+      const isId = c === idCol;
+      const isPath = PATH_COLUMNS.includes(c);
+      const cls = isId ? ' class="id-col"' : (isPath ? ' class="path-col"' : "");
+      const style = isId ? ` style="background:${idCellBg}"` : (isPath && color ? ` style="color:${color.text}"` : "");
+      const val = r[c] ?? "";
+      return `<td${cls}${style} title="${escapeHtml(String(val))}">${escapeHtml(String(val))}</td>`;
+    }).join("");
+    return `<tr style="${rowStyle}" data-row-id="${r.__rowId}">${tds}</tr>`;
+  }).join("");
+
+  const wrapTop = wrap.scrollTop;
   wrap.innerHTML = `<table class="data-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+  wrap.scrollTop = wrapTop;
 
   qsa("th", wrap).forEach((th) => {
     th.addEventListener("click", () => {
-      const c = parseInt(th.dataset.col, 10);
+      const c = th.dataset.col;
       state.csvSort = { col: c, dir: state.csvSort.col === c ? -state.csvSort.dir : 1 };
       renderCsvTable();
     });
   });
+  qsa("tbody tr", wrap).forEach((tr) => {
+    tr.addEventListener("click", () => {
+      const rid = parseInt(tr.dataset.rowId, 10);
+      const row = state.results.rows.find((r) => r.__rowId === rid);
+      if (row) selectResultRow(row);
+    });
+  });
+}
+
+// --- Color-by controls (D4) ---
+
+function populateColorBySelect() {
+  const sel = qs("#colorByField");
+  const dirSel = qs("#colorByDirection");
+  const prev = state.results.colorField;
+  sel.innerHTML = `<option value="">None</option>` + state.results.numericColumns
+    .map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+  sel.value = state.results.numericColumns.includes(prev) ? prev : "";
+  state.results.colorField = sel.value;
+  dirSel.value = state.results.colorDirection;
+}
+
+// --- Filters panel (D3) ---
+
+function initFiltersPanel() {
+  const panel = qs("#filtersPanel");
+  qs("#filtersBtn").addEventListener("click", (e) => {
+    e.stopPropagation();
+    panel.classList.toggle("hidden");
+  });
+  panel.addEventListener("click", (e) => e.stopPropagation());
+  document.addEventListener("click", () => panel.classList.add("hidden"));
+  qs("#clearFiltersBtn").addEventListener("click", () => {
+    state.results.filters = {};
+    renderFiltersList();
+    updateFiltersBadge();
+    renderResultsAll();
+  });
+}
+
+function renderFiltersList() {
+  const el = qs("#filtersList");
+  const cols = state.results.numericColumns || [];
+  if (!cols.length) {
+    el.innerHTML = `<p class="muted" style="margin:0">No numeric columns found yet.</p>`;
+    return;
+  }
+  el.innerHTML = cols.map((c) => {
+    const f = state.results.filters[c] || {};
+    const active = f.min != null || f.max != null;
+    return `
+      <div class="filter-row${active ? " filter-active" : ""}">
+        <span class="filter-col-name" title="${escapeHtml(c)}">${escapeHtml(c)}</span>
+        <input type="number" class="filter-min" data-col="${escapeHtml(c)}" placeholder="min" value="${f.min ?? ""}">
+        <span class="filter-dash">–</span>
+        <input type="number" class="filter-max" data-col="${escapeHtml(c)}" placeholder="max" value="${f.max ?? ""}">
+      </div>`;
+  }).join("");
+  qsa(".filter-min, .filter-max", el).forEach((inp) => {
+    inp.addEventListener("input", () => {
+      const col = inp.dataset.col;
+      const isMin = inp.classList.contains("filter-min");
+      const val = inp.value === "" ? null : parseFloat(inp.value);
+      const f = state.results.filters[col] || {};
+      if (isMin) f.min = val; else f.max = val;
+      if (f.min == null && f.max == null) delete state.results.filters[col];
+      else state.results.filters[col] = f;
+      inp.closest(".filter-row").classList.toggle("filter-active", f.min != null || f.max != null);
+      updateFiltersBadge();
+      renderResultsAll();
+    });
+  });
+}
+
+function updateFiltersBadge() {
+  const n = Object.keys(state.results.filters).length;
+  const badge = qs("#filtersBadge");
+  badge.textContent = String(n);
+  badge.classList.toggle("hidden", n === 0);
+}
+
+// --- Viewer color controls (background / chain palette selects) ---
+// Each structure-viewing tab (Backbones, Models, Results) has its own copy
+// of the background and chain-palette selects, but they all drive the
+// same global `viewerSettings` - one delegated listener handles every
+// copy via a shared class, and syncColorControlSelects() keeps whichever
+// ones aren't currently visible in sync so they don't show a stale value
+// when their tab is switched back to.
+
+function syncColorControlSelects() {
+  qsa(".bg-color-select").forEach((el) => { el.value = viewerSettings.background; });
+  qsa(".chain-palette-select").forEach((el) => { el.value = viewerSettings.chainPalette; });
+}
+
+function initColorControls() {
+  syncColorControlSelects();
+  document.addEventListener("change", (e) => {
+    if (e.target.matches(".bg-color-select")) {
+      viewerSettings.background = e.target.value;
+      saveViewerSettings();
+      syncColorControlSelects();
+      applyBackgroundSetting();
+    } else if (e.target.matches(".chain-palette-select")) {
+      viewerSettings.chainPalette = e.target.value;
+      saveViewerSettings();
+      syncColorControlSelects();
+      applyChainPaletteSetting();
+    }
+  });
+}
+
+// --- Export filtered (F) ---
+
+async function exportFiltered() {
+  if (!state.results.rows.length) return;
+  const rows = getFilteredRows();
+  if (!rows.length) {
+    alert("No rows match the current filters — nothing to export.");
+    return;
+  }
+  const btn = qs("#exportFilteredBtn");
+  const originalText = btn.textContent;
+  btn.textContent = "Exporting…";
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/export_filtered", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ log: state.logPath, row_ids: rows.map((r) => r.__rowId) }),
+    });
+    if (!res.ok) {
+      let msg = res.statusText;
+      try { const j = await res.json(); msg = j.error || j.message || msg; } catch (e) {}
+      throw new Error(msg);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "prosculpt_filtered_export.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert("Export failed: " + err.message);
+  } finally {
+    btn.textContent = originalText;
+    btn.disabled = false;
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -527,9 +1819,62 @@ function renderCsvTable() {
 // ---------------------------------------------------------------------
 
 document.addEventListener("DOMContentLoaded", () => {
+  initTheme();
+  loadViewerSettings();
+  initColorControls();
   initTopbar();
   initTabs();
+  initFiltersPanel();
   qs("#modelsFilter").addEventListener("input", renderModelsList);
+  qs("#showFilteredToggle").addEventListener("change", (e) => {
+    state.showFilteredBackbones = e.target.checked;
+    renderBackbonesList();
+  });
+  qs("#backboneColorMode").addEventListener("change", async (e) => {
+    state.backboneColorMode = e.target.value;
+    const legendEl = qs("#backboneColorLegend");
+    const paletteWrap = qs("#backboneChainPaletteWrap");
+    if (state.backboneColorMode === "provenance") {
+      paletteWrap.classList.add("hidden");
+      const b = (state.backbonesCache || []).find((x) => x.name === state.selectedBackboneKey);
+      await applyProvenanceColoring("#backboneViewer", b ? b.trb_path : null, legendEl);
+    } else {
+      paletteWrap.classList.remove("hidden");
+      setCartoonColor("#backboneViewer", chainColorScheme());
+      const entry = viewerRegistry["#backboneViewer"];
+      if (entry) { entry.colorMode = "chain"; entry.provenanceSchemeId = null; }
+      refreshChainLegendFor("#backboneViewer");
+    }
+  });
+  qs("#resultsStructColorMode").addEventListener("change", async (e) => {
+    state.resultsColorMode = e.target.value;
+    const legendEl = qs("#resultsColorLegend");
+    const paletteWrap = qs("#resultsChainPaletteWrap");
+    if (state.resultsColorMode === "provenance") {
+      paletteWrap.classList.add("hidden");
+      const row = (state.results.rows || []).find((r) => r.__rowId === state.results.selectedRowId);
+      await applyProvenanceColoring("#resultViewer", row ? trbPathForResultRow(row) : null, legendEl);
+    } else {
+      paletteWrap.classList.remove("hidden");
+      setCartoonColor("#resultViewer", chainColorScheme());
+      const entry = viewerRegistry["#resultViewer"];
+      if (entry) { entry.colorMode = "chain"; entry.provenanceSchemeId = null; }
+      refreshChainLegendFor("#resultViewer");
+    }
+  });
+  qs("#conservationToggle").addEventListener("change", renderSequencesContent);
+  qs("#conservationThreshold").addEventListener("input", () => {
+    if (qs("#conservationToggle").checked) renderSequencesContent();
+  });
+  qs("#colorByField").addEventListener("change", (e) => {
+    state.results.colorField = e.target.value;
+    renderResultsAll();
+  });
+  qs("#colorByDirection").addEventListener("change", (e) => {
+    state.results.colorDirection = e.target.value;
+    renderResultsAll();
+  });
+  qs("#exportFilteredBtn").addEventListener("click", exportFiltered);
   if (state.logPath) refreshAll(true);
   startPolling();
 });
