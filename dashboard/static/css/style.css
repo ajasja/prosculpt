@@ -748,6 +748,31 @@ main { padding: 20px; }
 .aa.conserved { font-weight: 700; }
 .chain-sep { color: var(--muted-on-deep); padding: 0 3px; }
 
+/* Pagination footer - shared by the results list, the metrics table, and
+   each alignment-view sequence-length group's own pager
+   (.align-group-pager) - see renderPagerControls() in app.js. Renders
+   empty/collapsed when everything already fits on one page. */
+.pager-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+.pager-bar:empty { padding: 0; }
+.pager-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.pager-btn:hover:not(:disabled) { border-color: var(--accent); }
+.pager-btn:disabled { opacity: 0.4; cursor: default; }
+.pager-info { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
 /* Table (csv) */
 #csvTableWrap { max-height: 60vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
 table.data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }

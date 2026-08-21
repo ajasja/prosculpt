@@ -2125,14 +2125,47 @@ function setupSequencePanelInteraction(container, selector) {
 // job's API a given row belongs to.
 // ---------------------------------------------------------------------
 
+// A production job's result set can be tens of thousands of rows. Both
+// the model list and the metrics table render one row's worth of DOM per
+// row currently in view - at that scale, building it for the whole set
+// at once (as this used to do) freezes the tab for minutes. Bounding how
+// many rows are actually in the DOM at a time keeps each render fast
+// regardless of how big the underlying job is.
+const RESULTS_PAGE_SIZE = 200;
+// Per sequence-length group in the alignment view - see renderAlignment().
+const ALIGN_GROUP_ROW_CAP = 100;
+
+// Small "‹ Prev  1–200 of 15,000  Next ›" footer, shared by the results
+// list and the metrics table. Renders nothing when everything already
+// fits on one page, so it's a no-op for the (very common) small-job case.
+function renderPagerControls(el, page, pageSize, totalCount, onChange) {
+  if (totalCount <= pageSize) { el.innerHTML = ""; return; }
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const start = page * pageSize + 1;
+  const end = Math.min(totalCount, start + pageSize - 1);
+  el.innerHTML = `
+    <button class="pager-btn" ${page === 0 ? "disabled" : ""} data-dir="-1">‹ Prev</button>
+    <span class="pager-info">${start.toLocaleString()}–${end.toLocaleString()} of ${totalCount.toLocaleString()} · page ${page + 1}/${totalPages}</span>
+    <button class="pager-btn" ${page >= totalPages - 1 ? "disabled" : ""} data-dir="1">Next ›</button>
+  `;
+  qsa(".pager-btn", el).forEach((btn) => {
+    if (btn.disabled) return;
+    btn.addEventListener("click", () => onChange(page + parseInt(btn.dataset.dir, 10)));
+  });
+}
+
 function createResultsView(cfg) {
   let results = {
     columns: [], rows: [], numericColumns: [], displayColumns: [], idCol: null,
     filters: {}, colorField: "", colorDirection: "higher", selectedRowId: null,
+    listPage: 0, tablePage: 0,
   };
   let csvSort = { col: null, dir: 1 };
   let loadedPdbKey = null;
   let colorMode = "chain"; // "chain" | "provenance"
+  // Per sequence-length group in the alignment view (keyed by the group's
+  // length) - which ALIGN_GROUP_ROW_CAP-sized page is currently shown.
+  let expandedAlignGroups = new Map();
 
   function ingestCsv(csv) {
     const { columns, rows, rowMeta } = csv;
@@ -2160,7 +2193,12 @@ function createResultsView(cfg) {
       columns, rows: objRows, numericColumns, displayColumns, idCol,
       filters: prev.filters || {}, colorField: prev.colorField || "",
       colorDirection: prev.colorDirection || "higher", selectedRowId: prev.selectedRowId,
+      // Reset to page 1 on every fresh load - the row set may have changed
+      // size/order entirely (new poll tick, new filters upstream), so
+      // whatever page the user was on no longer means anything reliable.
+      listPage: 0, tablePage: 0,
     };
+    expandedAlignGroups = new Map();
     // drop filters/colorField that no longer refer to a real numeric column
     Object.keys(results.filters).forEach((c) => { if (!numericColumns.includes(c)) delete results.filters[c]; });
     if (results.colorField && !numericColumns.includes(results.colorField)) results.colorField = "";
@@ -2258,18 +2296,46 @@ function createResultsView(cfg) {
     renderCsvTableFn();
   }
 
+  // A production job's result set can run into the tens of thousands of
+  // rows - building one DOM element per row (times however many per-row
+  // elements a given view needs, e.g. one <span> per residue in the
+  // alignment view) for the *entire* set at once is what made the list,
+  // table and alignment views freeze the tab for minutes on a large job.
+  // Paging bounds every one of them to RESULTS_PAGE_SIZE rows actually in
+  // the DOM at a time, same idea a normal search results page uses.
+  function pageOf(rows, page, pageSize) {
+    const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+    const clamped = Math.max(0, Math.min(page, totalPages - 1));
+    const start = clamped * pageSize;
+    return { pageRows: rows.slice(start, start + pageSize), clamped, totalPages, start };
+  }
+
   function renderList() {
     const listEl = qs(cfg.ids.list);
+    const pagerEl = qs(cfg.ids.listPager);
     if (!results.rows.length) return; // handled by load()'s fallback path
     const rows = getFilteredRows();
     if (!rows.length) {
       listEl.innerHTML = `<p class="muted">No models match the current filters.</p>`;
+      if (pagerEl) pagerEl.innerHTML = "";
       return;
     }
+    const { pageRows, clamped } = pageOf(rows, results.listPage, RESULTS_PAGE_SIZE);
+    results.listPage = clamped;
+    if (pagerEl) {
+      renderPagerControls(pagerEl, clamped, RESULTS_PAGE_SIZE, rows.length, (newPage) => {
+        results.listPage = newPage;
+        renderList();
+      });
+    }
     rerenderPreservingScroll(listEl, () => {
+      // The color scale (min/max for the red→green gradient) is computed
+      // from the *whole* filtered set, not just this page - otherwise the
+      // same score would render a different color depending on which page
+      // it happened to land on.
       const scale = computeColorScale(rows);
       listEl.innerHTML = "";
-      rows.forEach((row) => {
+      pageRows.forEach((row) => {
         const label = row[results.idCol] || basename(row.model_path) || `row ${row.__rowId}`;
         const div = document.createElement("div");
         div.className = "list-item" + (results.selectedRowId === row.__rowId ? " selected" : "");
@@ -2336,11 +2402,15 @@ function createResultsView(cfg) {
   }
 
   function renderListSelectionOnly() {
-    // Cheap re-render (list is not large) so the highlighted row + viewer stay in sync.
-    const rows = getFilteredRows();
+    // Cheap re-render (only this page's rows are in the DOM) so the
+    // highlighted row + viewer stay in sync. If the selected row isn't on
+    // the page currently shown (e.g. a poll re-selected a row that's now
+    // on a different page), nothing in the visible list gets highlighted -
+    // simpler and safer than silently jumping the user to another page.
+    const { pageRows } = pageOf(getFilteredRows(), results.listPage, RESULTS_PAGE_SIZE);
     const listEl = qs(cfg.ids.list);
     qsa(".list-item", listEl).forEach((el, i) => {
-      const row = rows[i];
+      const row = pageRows[i];
       if (!row) return;
       el.classList.toggle("selected", row.__rowId === results.selectedRowId);
     });
@@ -2373,28 +2443,51 @@ function createResultsView(cfg) {
       groups.get(key).push(row);
     });
 
+    // Each group already only shows 5 rows at a time (CSS-scrolled), but
+    // that scroll cap alone doesn't stop the browser from having to build
+    // one <span> per residue for *every* row in an oversized group up
+    // front - a group with thousands of same-length designs was exactly
+    // what made this view freeze the tab. Each group gets its own pager
+    // (same ALIGN_GROUP_ROW_CAP-sized pages as the list/table use) rather
+    // than an unbounded "show everything" escape hatch - a "show all"
+    // button on a 15,000-row group would just recreate the same freeze
+    // for whoever clicked it.
     const html = [...groups.keys()].sort((a, b) => b - a).map((len) => {
       const groupRows = groups.get(len);
-      const alignRows = groupRows.map((row) => {
+      const groupPage = expandedAlignGroups.get(len) || 0;
+      const { pageRows: shown, clamped } = pageOf(groupRows, groupPage, ALIGN_GROUP_ROW_CAP);
+      expandedAlignGroups.set(len, clamped);
+      const alignRows = shown.map((row) => {
         const color = colorForRow(row, scale);
         let label = String(row[results.idCol] || basename(row.model_path) || `row ${row.__rowId}`);
         if (cfg.isMulti && row.job) label = `${row.job} / ${label}`;
         return { label, chains: String(row.sequence || "").split(":"), swatch: color ? color.accent : null };
       });
-      return `<div class="backbone-block"><h4>${len} residues <span class="muted" style="font-size:12px;font-weight:400">(${groupRows.length} model${groupRows.length === 1 ? "" : "s"})</span></h4>${renderAlignmentBlock(alignRows)}</div>`;
+      return `<div class="backbone-block"><h4>${len} residues <span class="muted" style="font-size:12px;font-weight:400">(${groupRows.length} model${groupRows.length === 1 ? "" : "s"})</span></h4>${renderAlignmentBlock(alignRows)}<div class="pager-bar align-group-pager" data-len="${len}"></div></div>`;
     }).join("");
     el.innerHTML = html;
+    qsa(".align-group-pager", el).forEach((pagerEl) => {
+      const len = parseInt(pagerEl.dataset.len, 10);
+      const groupRows = groups.get(len);
+      renderPagerControls(pagerEl, expandedAlignGroups.get(len) || 0, ALIGN_GROUP_ROW_CAP, groupRows.length, (newPage) => {
+        expandedAlignGroups.set(len, newPage);
+        renderAlignment();
+      });
+    });
   }
 
   function renderCsvTableFn() {
     const wrap = qs(cfg.ids.csvWrap);
+    const pagerEl = qs(cfg.ids.tablePager);
     if (!results.rows.length) {
       wrap.innerHTML = `<p class="muted">Not available yet.</p>`;
+      if (pagerEl) pagerEl.innerHTML = "";
       return;
     }
     const rows = getFilteredRows();
     if (!rows.length) {
       wrap.innerHTML = `<p class="muted">No rows match the current filters.</p>`;
+      if (pagerEl) pagerEl.innerHTML = "";
       return;
     }
     const { displayColumns, idCol } = results;
@@ -2413,13 +2506,22 @@ function createResultsView(cfg) {
       });
     }
 
+    const { pageRows, clamped } = pageOf(sortedRows, results.tablePage, RESULTS_PAGE_SIZE);
+    results.tablePage = clamped;
+    if (pagerEl) {
+      renderPagerControls(pagerEl, clamped, RESULTS_PAGE_SIZE, sortedRows.length, (newPage) => {
+        results.tablePage = newPage;
+        renderCsvTableFn();
+      });
+    }
+
     const thead = displayColumns.map((c) => {
       const cls = c === idCol ? ' class="id-col"' : (PATH_COLUMNS.includes(c) ? ' class="path-col"' : "");
       const arrow = col === c ? (dir === 1 ? " ▲" : " ▼") : "";
       return `<th data-col="${escapeHtml(c)}"${cls}>${escapeHtml(c)}${arrow}</th>`;
     }).join("");
 
-    const tbody = sortedRows.map((r, idx) => {
+    const tbody = pageRows.map((r, idx) => {
       const color = colorForRow(r, scale);
       const rowBg = color ? color.bg : (idx % 2 === 1 ? "var(--panel-2)" : "transparent");
       const idCellBg = color ? color.bg : (idx % 2 === 1 ? "var(--panel-2)" : "var(--panel)");
@@ -2447,6 +2549,7 @@ function createResultsView(cfg) {
       th.addEventListener("click", () => {
         const c = th.dataset.col;
         csvSort = { col: c, dir: csvSort.col === c ? -csvSort.dir : 1 };
+        results.tablePage = 0; // a new sort order means "page 3" means something different now
         renderCsvTableFn();
       });
     });
@@ -2484,6 +2587,7 @@ function createResultsView(cfg) {
     document.addEventListener("click", () => panel.classList.add("hidden"));
     qs(cfg.ids.clearFiltersBtn).addEventListener("click", () => {
       results.filters = {};
+      results.listPage = 0; results.tablePage = 0; // the filtered set is changing
       renderFiltersList();
       updateFiltersBadge();
       renderAll();
@@ -2519,6 +2623,7 @@ function createResultsView(cfg) {
         else results.filters[col] = f;
         inp.closest(".filter-row").classList.toggle("filter-active", f.min != null || f.max != null);
         updateFiltersBadge();
+        results.listPage = 0; results.tablePage = 0; // the filtered set is changing
         renderAll();
       });
     });
@@ -2630,7 +2735,9 @@ function createResultsView(cfg) {
     results = {
       columns: [], rows: [], numericColumns: [], displayColumns: [], idCol: null,
       filters: {}, colorField: "", colorDirection: "higher", selectedRowId: null,
+      listPage: 0, tablePage: 0,
     };
+    expandedAlignGroups = new Map();
     csvSort = { col: null, dir: 1 };
     loadedPdbKey = null;
     colorMode = "chain";
@@ -2706,6 +2813,7 @@ const resultsView = createResultsView({
     filtersBtn: "#filtersBtn", filtersPanel: "#filtersPanel", filtersList: "#filtersList",
     filtersBadge: "#filtersBadge", clearFiltersBtn: "#clearFiltersBtn", exportBtn: "#exportFilteredBtn",
     structColorMode: "#resultsStructColorMode", chainPaletteWrap: "#resultsChainPaletteWrap",
+    listPager: "#resultsListPager", tablePager: "#resultsTablePager",
   },
   viewerSelector: "#resultViewer",
   isMulti: false,
@@ -2725,6 +2833,7 @@ const allResultsView = createResultsView({
     filtersBtn: "#allFiltersBtn", filtersPanel: "#allFiltersPanel", filtersList: "#allFiltersList",
     filtersBadge: "#allFiltersBadge", clearFiltersBtn: "#allClearFiltersBtn", exportBtn: "#allExportFilteredBtn",
     structColorMode: "#allResultsStructColorMode", chainPaletteWrap: "#allResultsChainPaletteWrap",
+    listPager: "#allResultsListPager", tablePager: "#allResultsTablePager",
   },
   viewerSelector: "#allResultViewer",
   isMulti: true,

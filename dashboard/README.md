@@ -350,7 +350,18 @@ sync over time, so both tabs share one implementation instead.
   binary that isn't reliably available on a cluster, so `.zip` is used
   instead; no extra dependency, opens natively everywhere) containing the
   currently-filtered rows as `filtered_output.csv` plus each of their
-  `model_path` pdb files.
+  `model_path` pdb files. A production job's result set can run into the
+  tens of thousands of rows, so the model list, the metrics table, and
+  each alignment-view sequence-length group are all **paginated** at 200
+  rows (100 for an alignment group) per page rather than building DOM for
+  every row at once - a small **‹ Prev / Next ›** footer appears once a
+  set has more than one page. Filters and export still act on the *whole*
+  filtered set regardless of which page you're looking at (a filtered
+  export downloads every matching row, not just the current page); only
+  what's actually built into the DOM is capped. Applying/clearing a
+  filter or changing the metrics table's sort column jumps back to page 1
+  of the affected view, since "page 3" means something different once the
+  underlying row set or order has changed.
 
 ## Design notes / known limitations
 
