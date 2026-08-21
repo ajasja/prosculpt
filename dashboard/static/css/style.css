@@ -395,6 +395,21 @@ main { padding: 20px; }
   transition: width 0.4s ease;
 }
 
+/* All jobs overview */
+#allOverviewList { display: flex; flex-direction: column; gap: 12px; }
+.job-overview-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.job-overview-card:hover { border-color: var(--accent); }
+.job-overview-head { display: flex; align-items: center; gap: 10px; }
+.job-overview-name { font-weight: 600; font-size: 14.5px; }
+.job-overview-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 12px; gap: 10px; }
+
 .config-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12.5px;}
 .config-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
 .config-table td:first-child { color: var(--muted); width: 220px; white-space: nowrap; }

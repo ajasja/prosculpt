@@ -402,22 +402,86 @@ function renderActiveJobBanner() {
     `<span class="muted" title="${escapeHtml(state.logPath)}">(${escapeHtml(state.logPath)})</span>`;
 }
 
+// Picks which of RFdiffusion's or the modeling stage's own progress
+// counters is the relevant "current stage" one to show for a job: while
+// a job is actually in that stage its own ETA applies, but once it's
+// moved on (mpnn/filtering sit between rfdiffusion and modeling; scoring/
+// finished sit after modeling) the counters stay at their final value on
+// disk, so showing them still reads as "done" rather than going blank.
+function jobOverviewProgress(status) {
+  const stage = status.stage;
+  if ((stage === "modeling" || stage === "scoring" || stage === "finished") && status.modeling) {
+    const m = status.modeling;
+    const unit = m.unit ? m.unit.charAt(0).toUpperCase() + m.unit.slice(1) : "Model";
+    return {
+      label: `${unit}s done`,
+      value: `${m.completed} / ${m.expected_total ?? "?"}`,
+      pct: m.expected_total ? Math.min(100, Math.round((m.completed / m.expected_total) * 100)) : 0,
+      eta: stage === "modeling" ? m.eta_seconds : null,
+    };
+  }
+  if (status.rfdiffusion) {
+    const rf = status.rfdiffusion;
+    return {
+      label: "Backbones done",
+      value: `${rf.completed} / ${rf.total ?? "?"}`,
+      pct: rf.total ? Math.min(100, Math.round((rf.completed / rf.total) * 100)) : 0,
+      eta: stage === "rfdiffusion" ? rf.eta_seconds : null,
+    };
+  }
+  return null;
+}
+
+// One card per tracked job, summarizing exactly the numbers the single
+// job's own Overview tab computes (same status payload, same "accepted
+// backbones × sequences/backbone" planned-designs math) - so switching
+// to a job's own Overview tab never shows different math than this
+// glanced-at-from-the-list version did.
+function renderJobOverviewCard(logPath) {
+  const cls = statusClassFor(logPath);
+  const badgeClass = cls === "finished" ? "passed" : (cls === "crashed" || cls === "cancelled") ? "failed_filter" : "pending";
+  const label = jobLabel(logPath);
+  const head = `
+    <div class="job-overview-head">
+      <span class="job-chip-dot ${cls}"></span>
+      <span class="job-overview-name" title="${escapeHtml(logPath)}">${escapeHtml(label)}</span>
+      <span class="badge ${badgeClass}">${escapeHtml(statusTextFor(logPath))}</span>
+    </div>`;
+
+  const entry = state.jobStatuses[logPath];
+  const status = entry && entry.status;
+  if (!status || status.error) {
+    const msg = status && status.error ? status.error : "Loading…";
+    return `<div class="job-overview-card" data-log="${escapeHtml(logPath)}">${head}<p class="muted" style="margin:8px 0 0">${escapeHtml(msg)}</p></div>`;
+  }
+
+  const progress = jobOverviewProgress(status);
+  const backboneSummary = status.backbones_summary || {};
+  const accepted = backboneSummary.accepted; // null until filtering has finished
+  const perBackbone = status.config ? status.config.num_seq_per_target_mpnn : null;
+  const finalDesigns = (typeof accepted === "number" && typeof perBackbone === "number") ? accepted * perBackbone : null;
+
+  const boxes = [
+    progress ? { label: progress.label, value: progress.value } : { label: "Progress", value: "—" },
+    { label: "ETA (current stage)", value: progress && progress.eta != null ? fmtSeconds(progress.eta) : "—" },
+    { label: "Accepted backbones", value: accepted != null ? `${accepted} / ${backboneSummary.total ?? "?"}` : "pending" },
+    { label: "Total designs", value: finalDesigns != null ? finalDesigns.toLocaleString() : "—" },
+  ];
+  const boxesHtml = boxes.map((b) => `<div class="stat-box"><div class="label">${escapeHtml(b.label)}</div><div class="value small">${escapeHtml(String(b.value))}</div></div>`).join("");
+  const bar = progress ? `<div class="progress-bar-outer" style="margin:10px 0 0"><div class="progress-bar-inner" style="width:${progress.pct}%"></div></div>` : "";
+
+  return `<div class="job-overview-card" data-log="${escapeHtml(logPath)}">${head}${bar}<div class="status-grid job-overview-grid">${boxesHtml}</div></div>`;
+}
+
 function renderAllOverview() {
   const el = qs("#allOverviewList");
   if (!state.jobs.length) {
     el.innerHTML = `<p class="muted">Add a job above to get started.</p>`;
     return;
   }
-  el.innerHTML = "";
-  state.jobs.forEach((logPath) => {
-    const cls = statusClassFor(logPath);
-    const badgeClass = cls === "finished" ? "passed" : (cls === "crashed" || cls === "cancelled") ? "failed_filter" : "pending";
-    const div = document.createElement("div");
-    div.className = "list-item";
-    div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(logPath)}">${escapeHtml(jobLabel(logPath))}</span>` +
-      `<span class="badge ${badgeClass}">${escapeHtml(statusTextFor(logPath))}</span>`;
-    div.addEventListener("click", () => switchToJob(logPath));
-    el.appendChild(div);
+  el.innerHTML = state.jobs.map((logPath) => renderJobOverviewCard(logPath)).join("");
+  qsa(".job-overview-card", el).forEach((card) => {
+    card.addEventListener("click", () => switchToJob(card.dataset.log));
   });
 }
 

@@ -202,8 +202,20 @@ currently active (and stops once a job reaches a terminal state, same
 reasoning as auto-refresh) so the chips and the overview list stay
 current in the background.
 
-**All jobs overview** is a flat list of every tracked job and its current
-stage or terminal state - click a row to switch to that job's own tabs.
+**All jobs overview** is a card per tracked job - click one to switch to
+that job's own tabs. Each card summarizes exactly what the single job's
+own Overview tab shows: a progress box for whichever stage's counters are
+most relevant right now ("Backbones done" while in/before RFdiffusion,
+"Structures done" once modeling has started or finished, so a card never
+goes blank just because a job has moved on to a later stage), an ETA for
+that box (only filled in while the job is *actively* in that stage - a
+job sitting in a later stage like scoring shows "—" rather than a stale
+ETA), how many backbones passed filtering (blank/"pending" until
+filtering has actually finished), and a "Total designs" count (accepted
+backbones × sequences/backbone, same math as the single job Overview's
+"Final designs" box). A job the dashboard can't resolve at all
+(e.g. a log with no `output_dir:`/`PWD:` line) shows a short error message
+in place of the metrics instead of a broken card.
 
 **All jobs results** is the Results tab, unioned across every tracked
 job: one combined list/table/alignment view/structure viewer, with a
