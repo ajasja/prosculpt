@@ -41,12 +41,28 @@ def _get_output_dir(log_path: str) -> str:
     return loc["output_dir"]
 
 
+def _is_within(candidate: str, base: str) -> bool:
+    # realpath() resolves symlinks/bind-mounts, so two different-looking
+    # absolute paths that point at the same real location compare equal -
+    # HPC storage very commonly exposes one directory under more than one
+    # absolute path (e.g. a project directory reachable both at its "real"
+    # location and via a symlink into a user's home folder), and `1_rfdiff/`
+    # in particular is a plausible candidate for living on a different,
+    # relocated/archived storage tier than the rest of output_dir. A purely
+    # lexical prefix check rejects a perfectly legitimate file the moment it
+    # arrives expressed via a different alias than the one `base` resolved
+    # to - realpath() doesn't require the path to exist to be resolved, so
+    # this is safe to call even for a path that turns out not to be there.
+    base_real = os.path.realpath(base)
+    full_real = os.path.realpath(candidate)
+    return full_real == base_real or full_real.startswith(base_real + os.sep)
+
+
 def _safe_join(base: str, *parts: str) -> str:
     """Join and ensure the result stays inside `base` (avoid path traversal
     from the file-browser / pdb-fetch endpoints)."""
     full = os.path.normpath(os.path.join(base, *parts))
-    base_norm = os.path.normpath(base)
-    if not (full == base_norm or full.startswith(base_norm + os.sep)):
+    if not _is_within(full, base):
         abort(400, description="Invalid path")
     return full
 
@@ -150,10 +166,7 @@ def _resolve_within_output_dir_or_none(output_dir: str, path: str):
         full = os.path.normpath(os.path.join(output_dir, rel))
     except Exception:
         return None
-    base_norm = os.path.normpath(output_dir)
-    if full == base_norm or full.startswith(base_norm + os.sep):
-        return full
-    return None
+    return full if _is_within(full, output_dir) else None
 
 
 @app.route("/api/model_pdb")

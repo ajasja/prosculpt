@@ -365,6 +365,18 @@ sync over time, so both tabs share one implementation instead.
 
 ## Design notes / known limitations
 
+- **File-serving paths are checked by *real* location, not by string.**
+  Every endpoint that serves a file under `output_dir` (`.trb`, model pdbs,
+  confidence json, ...) re-validates the requested path actually resolves
+  inside `output_dir` before reading it (`_is_within()` in `app.py`), using
+  `os.path.realpath()` rather than a plain string-prefix check. This
+  matters on HPC storage in particular: it's common for a project
+  directory to be reachable under more than one absolute path (e.g. a
+  symlink or bind-mount from a user's home folder into shared/Ceph
+  storage, or an older archived-elsewhere `1_rfdiff/`), and a lexical
+  check would reject a perfectly legitimate file the moment it's expressed
+  via a different alias than the one `output_dir` happened to resolve to -
+  `realpath()` resolves symlinks first, so both aliases compare equal.
 - **Filesystem is ground truth, the log gives rates.** Counts and listings
   (how many backbones exist, which sequences/models exist) are read
   straight off disk, not inferred from the log — this keeps things correct
