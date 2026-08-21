@@ -297,6 +297,96 @@ def api_export_filtered():
     )
 
 
+def _job_label(log_path: str) -> str:
+    """Same derivation the frontend uses for a job's short display name
+    (see jobLabel() in app.js) - kept in lockstep so the "source_job"
+    column and the zip's per-job model subfolders match what the user
+    sees on screen."""
+    base = os.path.basename(log_path)
+    return os.path.splitext(base)[0]
+
+
+@app.route("/api/export_filtered_multi", methods=["POST"])
+def api_export_filtered_multi():
+    """Same idea as /api/export_filtered, but across every tracked job at
+    once (the "All jobs results" tab's Export button): one combined CSV
+    (columns are the union across jobs - a job missing a given column
+    just gets a blank for it - plus a "source_job" column), and each
+    job's model pdbs kept in their own subfolder under models/ so two
+    jobs' identically-named model files can't collide in the zip."""
+    data = request.get_json(silent=True) or {}
+    jobs = data.get("jobs")
+    if not jobs:
+        abort(400, description="Missing jobs")
+
+    all_columns: list[str] = []
+    per_job_selected: list[tuple[str, str, list[str], list[list[str]]]] = []  # (log_path, label, columns, rows)
+
+    for job in jobs:
+        log_path = job.get("log")
+        row_ids = job.get("row_ids")
+        if not log_path:
+            continue
+        output_dir = _get_output_dir(log_path)
+        csv_path = os.path.join(output_dir, "final_output.csv")
+        if not os.path.isfile(csv_path):
+            continue
+        with open(csv_path, newline="", errors="replace") as f:
+            reader = csv.reader(f)
+            rows = list(reader)
+        if not rows:
+            continue
+        columns, data_rows = rows[0], rows[1:]
+        if row_ids is not None:
+            wanted = {int(i) for i in row_ids}
+            selected_rows = [r for i, r in enumerate(data_rows) if i in wanted]
+        else:
+            selected_rows = data_rows
+        if not selected_rows:
+            continue
+        for c in columns:
+            if c not in all_columns:
+                all_columns.append(c)
+        per_job_selected.append((log_path, _job_label(log_path), columns, selected_rows))
+
+    if not per_job_selected:
+        abort(400, description="No rows selected for export")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        csv_buf = io.StringIO()
+        writer = csv.writer(csv_buf)
+        writer.writerow(["source_job", *all_columns])
+        for log_path, label, columns, selected_rows in per_job_selected:
+            col_index = {c: i for i, c in enumerate(columns)}
+            for r in selected_rows:
+                writer.writerow([label, *(r[col_index[c]] if c in col_index and col_index[c] < len(r) else "" for c in all_columns)])
+        zf.writestr("filtered_output.csv", csv_buf.getvalue())
+
+        for log_path, label, columns, selected_rows in per_job_selected:
+            if "model_path" not in columns:
+                continue
+            output_dir = _get_output_dir(log_path)
+            idx = columns.index("model_path")
+            seen = set()
+            for r in selected_rows:
+                p = r[idx] if idx < len(r) else ""
+                if not p or p in seen:
+                    continue
+                seen.add(p)
+                full = _resolve_within_output_dir_or_none(output_dir, p)
+                if full and os.path.isfile(full):
+                    zf.write(full, arcname=os.path.join("models", label, os.path.basename(full)))
+
+    buf.seek(0)
+    return send_file(
+        buf,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="prosculpt_all_jobs_filtered_export.zip",
+    )
+
+
 # ---------------------------------------------------------------------------
 # Crash / error log
 # ---------------------------------------------------------------------------

@@ -30,12 +30,26 @@ const AA_COLORS = {
 // middle of the table, so they get pushed to the end (see D1 in the spec).
 const PATH_COLUMNS = ["model_path", "af3_json", "af3_pdb", "path_rfdiff"];
 
+// state.logPath is "the currently active job" - the one the per-job tabs
+// (Overview/Backbones/.../Output log) show. Multi-job tracking adds a
+// layer above that: state.jobs is every job being watched, and
+// state.topView picks between showing the active job's tabs ("job") or
+// one of the two aggregate tabs ("all-overview"/"all-results") - see
+// switchTopView()/switchToJob() further down. The Results-tab-shaped
+// state that used to live directly on `state` (results/csvSort/
+// loadedResultPdbName/resultsColorMode) now lives inside createResultsView()'s
+// own closure instead, once per view instance, so the per-job Results tab
+// and the All jobs results tab don't share (or fight over) one copy of it.
 let state = {
   logPath: localStorage.getItem(STORAGE_KEY) || "",
   activeTab: "overview",
   lastStatus: null,
   pollTimer: null,
   browsePath: null,
+
+  jobs: [], // ordered list of tracked log paths
+  jobStatuses: {}, // logPath -> { status, terminal }
+  topView: "job", // "job" | "all-overview" | "all-results"
 
   backbonesCache: [],
   selectedBackboneKey: null,
@@ -49,21 +63,7 @@ let state = {
   selectedModelKey: null,
   loadedModelStructureKey: null,
   loadedModelConfKey: null,
-
-  csvSort: { col: null, dir: 1 },
-  results: {
-    columns: [],
-    rows: [],
-    numericColumns: [],
-    displayColumns: [],
-    idCol: null,
-    filters: {},
-    colorField: "",
-    colorDirection: "higher",
-    selectedRowId: null,
-  },
-  loadedResultPdbName: null,
-  resultsColorMode: "chain", // "chain" | "provenance"
+  modelsColorMode: "chain", // "chain" | "provenance"
 };
 
 // ---------------------------------------------------------------------
@@ -73,9 +73,12 @@ let state = {
 function qs(sel, root = document) { return root.querySelector(sel); }
 function qsa(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
 
+// params.log lets a caller target a specific job's API explicitly (the
+// All jobs tabs, where a row/job isn't necessarily the active one) -
+// otherwise this defaults to whichever job is currently active.
 async function apiGet(path, params = {}) {
   const url = new URL(path, window.location.origin);
-  params.log = state.logPath;
+  params.log = params.log || state.logPath;
   Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) url.searchParams.set(k, v); });
   const res = await fetch(url);
   if (!res.ok) {
@@ -143,15 +146,20 @@ function initTheme() {
 
 function initTopbar() {
   const input = qs("#logPathInput");
-  input.value = state.logPath;
 
   qs("#loadBtn").addEventListener("click", () => {
-    state.logPath = input.value.trim();
-    localStorage.setItem(STORAGE_KEY, state.logPath);
-    prepareForNewJob();
-    refreshAll(true);
+    addJobs(input.value);
+    input.value = "";
   });
-  input.addEventListener("keydown", (e) => { if (e.key === "Enter") qs("#loadBtn").click(); });
+  // Plain Enter adds the job(s) (matching the old single-line input's
+  // behavior); Shift+Enter inserts an actual newline instead, for typing
+  // a second path by hand rather than pasting a multi-line list.
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      qs("#loadBtn").click();
+    }
+  });
 
   qs("#autoRefreshToggle").addEventListener("change", (e) => {
     qs("#autoRefreshNote").classList.add("hidden");
@@ -160,6 +168,12 @@ function initTopbar() {
 
   qs("#browseBtn").addEventListener("click", () => openBrowse(state.browsePath || "."));
   qs("#browseCloseBtn").addEventListener("click", () => qs("#browseModal").classList.add("hidden"));
+  qs("#browseAddSelectedBtn").addEventListener("click", () => {
+    const selected = qsa(".browse-entry input[type=checkbox]:checked").map((cb) => cb.dataset.path);
+    if (!selected.length) return;
+    addJobs(selected.join("\n"));
+    qs("#browseModal").classList.add("hidden");
+  });
 }
 
 // Loading a (possibly new, possibly still-running) job should always start
@@ -190,12 +204,7 @@ function resetPerJobViewState() {
   state.loadedModelStructureKey = null;
   state.loadedModelConfKey = null;
 
-  state.csvSort = { col: null, dir: 1 };
-  state.results = {
-    columns: [], rows: [], numericColumns: [], displayColumns: [], idCol: null,
-    filters: {}, colorField: "", colorDirection: "higher", selectedRowId: null,
-  };
-  state.loadedResultPdbName = null;
+  resultsView.reset();
 
   // Clear anything already drawn immediately, rather than leaving the
   // previous job's structure on screen until the next tab visit's fetch
@@ -206,10 +215,15 @@ function resetPerJobViewState() {
   });
   const backboneLabel = qs("#backboneViewerLabel"); if (backboneLabel) backboneLabel.textContent = "";
   const modelLabel = qs("#modelViewerLabel"); if (modelLabel) modelLabel.textContent = "";
+  const resultsSeq = qs("#resultsSequenceContent"); if (resultsSeq) resultsSeq.innerHTML = "";
 }
 
+// File rows get a checkbox instead of loading immediately on click, so
+// several jobs can be picked in one visit before committing with "Add
+// selected jobs" (directories still navigate on click, same as before).
 async function openBrowse(path) {
   qs("#browseModal").classList.remove("hidden");
+  updateBrowseSelectedCount();
   try {
     const data = await fetch(`/api/browse?path=${encodeURIComponent(path)}`).then((r) => r.json());
     state.browsePath = data.path;
@@ -226,23 +240,221 @@ async function openBrowse(path) {
     data.entries.forEach((e) => {
       const div = document.createElement("div");
       div.className = "browse-entry";
-      div.innerHTML = `${e.is_dir ? "📁" : "📄"} ${escapeHtml(e.name)}`;
-      div.addEventListener("click", () => {
-        if (e.is_dir) openBrowse(e.path);
-        else {
-          qs("#logPathInput").value = e.path;
-          state.logPath = e.path;
-          localStorage.setItem(STORAGE_KEY, state.logPath);
-          qs("#browseModal").classList.add("hidden");
-          prepareForNewJob();
-          refreshAll(true);
-        }
-      });
+      if (e.is_dir) {
+        div.innerHTML = `📁 ${escapeHtml(e.name)}`;
+        div.addEventListener("click", () => openBrowse(e.path));
+      } else {
+        div.innerHTML = `<input type="checkbox" data-path="${escapeHtml(e.path)}"> 📄 ${escapeHtml(e.name)}`;
+        const cb = div.querySelector("input");
+        cb.addEventListener("change", updateBrowseSelectedCount);
+        div.addEventListener("click", (ev) => { if (ev.target.tagName !== "INPUT") cb.click(); });
+      }
       wrap.appendChild(div);
     });
   } catch (err) {
     qs("#browseEntries").innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
+}
+
+function updateBrowseSelectedCount() {
+  const n = qsa(".browse-entry input[type=checkbox]:checked").length;
+  qs("#browseSelectedCount").textContent = n ? `${n} selected` : "";
+  qs("#browseAddSelectedBtn").disabled = n === 0;
+}
+
+// ---------------------------------------------------------------------
+// Multi-job tracking: the top-level selector (two "All jobs ..." tabs
+// plus one chip per tracked job) above the per-job tab bar.
+// ---------------------------------------------------------------------
+
+const JOBS_STORAGE_KEY = "prosculpt_dashboard_jobs";
+
+function jobLabel(logPath) {
+  const base = basename(logPath);
+  return base.replace(/\.[^.]+$/, "") || logPath;
+}
+
+function persistJobs() {
+  localStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(state.jobs));
+}
+
+function loadJobsFromStorage() {
+  try {
+    const stored = JSON.parse(localStorage.getItem(JOBS_STORAGE_KEY) || "[]");
+    if (Array.isArray(stored)) state.jobs = stored.filter((p) => typeof p === "string" && p);
+  } catch (e) {}
+  // Backward compatibility: a pre-multi-job session only ever persisted a
+  // single active log path (STORAGE_KEY) - fold that in as a tracked job
+  // too so upgrading doesn't silently drop what was already loaded.
+  if (state.logPath && !state.jobs.includes(state.logPath)) state.jobs.unshift(state.logPath);
+}
+
+// Splits on newlines or commas so pasting several paths at once (or the
+// Browse modal's multi-select "Add selected jobs") works the same way a
+// single "paste one path, click Add job" does.
+function addJobs(rawInput) {
+  const paths = rawInput.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
+  if (!paths.length) return;
+  let last = null;
+  paths.forEach((p) => {
+    if (!state.jobs.includes(p)) {
+      state.jobs.push(p);
+      fetchJobStatus(p); // don't wait for the next poll tick to know its stage
+    }
+    last = p;
+  });
+  persistJobs();
+  renderJobTabsBar();
+  if (last) switchToJob(last);
+}
+
+function removeJob(logPath) {
+  const idx = state.jobs.indexOf(logPath);
+  if (idx === -1) return;
+  state.jobs.splice(idx, 1);
+  delete state.jobStatuses[logPath];
+  persistJobs();
+  if (state.logPath === logPath && state.topView === "job") {
+    if (state.jobs.length) {
+      switchToJob(state.jobs[0]);
+    } else {
+      state.logPath = "";
+      localStorage.removeItem(STORAGE_KEY);
+      stopPolling();
+      showTopView("all-overview");
+    }
+  } else {
+    renderJobTabsBar();
+    if (state.topView === "all-overview") renderAllOverview();
+  }
+}
+
+function switchToJob(logPath) {
+  state.logPath = logPath;
+  localStorage.setItem(STORAGE_KEY, logPath);
+  prepareForNewJob();
+  refreshAll(true);
+  // Jump back to the Overview tab for the newly-active job, rather than
+  // leaving whatever tab was selected for a *previous* job showing that
+  // job's now-irrelevant content until the user happens to click it again.
+  const overviewBtn = qs('.tab-btn[data-tab="overview"]');
+  if (overviewBtn) overviewBtn.click();
+  showTopView("job");
+}
+
+function showTopView(view) {
+  state.topView = view;
+  qs("#jobView").classList.toggle("hidden", view !== "job");
+  qs("#tab-all-overview").classList.toggle("hidden", view !== "all-overview");
+  qs("#tab-all-results").classList.toggle("hidden", view !== "all-results");
+  renderJobTabsBar();
+  renderActiveJobBanner();
+  if (view === "all-overview") renderAllOverview();
+  else if (view === "all-results") allResultsView.load();
+}
+
+function statusClassFor(logPath) {
+  const entry = state.jobStatuses[logPath];
+  if (!entry || !entry.status || entry.status.error) return "";
+  const status = entry.status;
+  if (status.cancelled) return "cancelled";
+  if (status.crash && status.crash.crashed) return "crashed";
+  if (status.stage === "finished") return "finished";
+  return "running";
+}
+
+function statusTextFor(logPath) {
+  const entry = state.jobStatuses[logPath];
+  if (!entry || !entry.status) return "loading…";
+  const status = entry.status;
+  if (status.error) return "error";
+  if (status.cancelled) return "cancelled";
+  if (status.crash && status.crash.crashed) return "crashed";
+  if (status.stage === "finished") return "finished";
+  return STAGE_LABEL[status.stage] || status.stage || "running";
+}
+
+function renderJobTabsBar() {
+  qsa(".job-tab-btn.special").forEach((btn) => {
+    btn.classList.toggle("active", state.topView === btn.dataset.top);
+  });
+  const wrap = qs("#jobChips");
+  wrap.innerHTML = "";
+  state.jobs.forEach((logPath) => {
+    const chip = document.createElement("button");
+    chip.className = "job-chip" + (state.topView === "job" && state.logPath === logPath ? " active" : "");
+    chip.innerHTML = `<span class="job-chip-dot ${statusClassFor(logPath)}"></span>` +
+      `<span title="${escapeHtml(logPath)}">${escapeHtml(jobLabel(logPath))}</span>` +
+      `<span class="job-chip-remove" title="Stop tracking this job">✕</span>`;
+    chip.addEventListener("click", (e) => {
+      if (e.target.closest(".job-chip-remove")) { removeJob(logPath); return; }
+      switchToJob(logPath);
+    });
+    wrap.appendChild(chip);
+  });
+}
+
+function renderActiveJobBanner() {
+  const el = qs("#activeJobBanner");
+  if (state.topView !== "job" || !state.logPath) { el.classList.add("hidden"); return; }
+  el.classList.remove("hidden");
+  el.innerHTML = `Viewing job: <b>${escapeHtml(jobLabel(state.logPath))}</b> ` +
+    `<span class="muted" title="${escapeHtml(state.logPath)}">(${escapeHtml(state.logPath)})</span>`;
+}
+
+function renderAllOverview() {
+  const el = qs("#allOverviewList");
+  if (!state.jobs.length) {
+    el.innerHTML = `<p class="muted">Add a job above to get started.</p>`;
+    return;
+  }
+  el.innerHTML = "";
+  state.jobs.forEach((logPath) => {
+    const cls = statusClassFor(logPath);
+    const badgeClass = cls === "finished" ? "passed" : (cls === "crashed" || cls === "cancelled") ? "failed_filter" : "pending";
+    const div = document.createElement("div");
+    div.className = "list-item";
+    div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(logPath)}">${escapeHtml(jobLabel(logPath))}</span>` +
+      `<span class="badge ${badgeClass}">${escapeHtml(statusTextFor(logPath))}</span>`;
+    div.addEventListener("click", () => switchToJob(logPath));
+    el.appendChild(div);
+  });
+}
+
+function initJobTabsBar() {
+  qsa(".job-tab-btn.special").forEach((btn) => {
+    btn.addEventListener("click", () => showTopView(btn.dataset.top));
+  });
+}
+
+// A lightweight, always-on sweep (independent of the active job's own
+// auto-refresh toggle) that keeps every tracked job's status - and hence
+// its chip's color dot / the All jobs overview list - current. Skips a
+// job once it's reached a terminal state, same reasoning as
+// stopPollingForTerminalState() for the active job's own polling: no
+// point re-fetching something that can't change anymore.
+async function fetchJobStatus(logPath) {
+  try {
+    const status = await apiGet("/api/status", { log: logPath });
+    state.jobStatuses[logPath] = { status, terminal: !status.error && isTerminalStatus(status) };
+  } catch (e) {
+    state.jobStatuses[logPath] = { status: { error: e.message }, terminal: false };
+  }
+  renderJobTabsBar();
+  if (state.topView === "all-overview") renderAllOverview();
+}
+
+function refreshAllJobStatuses() {
+  state.jobs.forEach((logPath) => {
+    const entry = state.jobStatuses[logPath];
+    if (entry && entry.terminal) return;
+    fetchJobStatus(logPath);
+  });
+}
+
+function startJobStatusPolling() {
+  refreshAllJobStatuses();
+  setInterval(refreshAllJobStatuses, POLL_MS);
 }
 
 // ---------------------------------------------------------------------
@@ -267,7 +479,7 @@ function refreshActiveTabData() {
   if (state.activeTab === "backbones") loadBackbones();
   else if (state.activeTab === "sequences") loadSequences();
   else if (state.activeTab === "models") loadModels();
-  else if (state.activeTab === "results") loadResults();
+  else if (state.activeTab === "results") resultsView.load();
   else if (state.activeTab === "error") loadErrorTab();
   else if (state.activeTab === "outputlog") loadOutputLog();
 }
@@ -741,41 +953,78 @@ const BACKGROUND_PRESETS = { black: "#05070c", navy: "#0f1420", white: "#ffffff"
 // Chain colors: NGL's built-in "chainid" scheme hashes the chain letter
 // into a color that can land on muddy, hard-to-see-on-black tones, so
 // these are curated instead. "cvd" is the Okabe-Ito colorblind-safe set.
+// Each palette is ordered so its first two entries - by far the most
+// common case, a 2-chain binder/receptor design - contrast strongly with
+// each other, not just technically differ.
 const CHAIN_PALETTES = {
   vivid: ["#5b9bff", "#ff6b6b", "#4ecdc4", "#ffd166", "#c77dff", "#f4a261", "#06d6a0", "#f72585"],
   pastel: ["#8ecae6", "#ffb4a2", "#b8f2e6", "#fff3b0", "#d0bfff", "#ffd6a5", "#a0e7b5", "#ffc2e2"],
   cvd: ["#56B4E9", "#E69F00", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7", "#999999"],
+  bright: ["#00e5ff", "#ff1744", "#76ff03", "#ffea00", "#d500f9", "#ff9100", "#00e676", "#f50057"],
+  sunset: ["#ff5e5b", "#fcbf49", "#e63946", "#ff9f1c", "#ffbf69", "#d62828", "#f77f00", "#ffa5ab"],
+  ocean: ["#00b4d8", "#7209b7", "#48cae4", "#3a86ff", "#80ffdb", "#4895ef", "#90e0ef", "#4cc9f0"],
 };
 
 const DEFAULT_PROVENANCE_COLORS = { motif: "#ffd166", fixed_chain: "#8b93a7", sculpted: "#06d6a0" };
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
-let viewerSettings = { background: "black", chainPalette: "vivid", provenanceColors: { ...DEFAULT_PROVENANCE_COLORS } };
+let viewerSettings = {
+  background: "black",
+  chainPalette: "vivid",
+  // Per-chain-index color overrides on top of the chosen palette - set by
+  // clicking a chain's own swatch in the legend, see
+  // wireChainLegendColorInputs(). Keyed by chainIndex (the same number
+  // chainColorScheme() indexes the palette array with), not by chain
+  // letter, since letters aren't guaranteed to mean the same thing across
+  // different structures the way "first chain in the file" reliably is.
+  chainColorOverrides: {},
+  provenanceColors: { ...DEFAULT_PROVENANCE_COLORS },
+  // "selected" - no bulk sidechain representation, just whatever a direct
+  // residue click/sequence-panel selection already shows via
+  // setupResidueInteraction(). "interface" and "all" are mutually
+  // exclusive with each other (and with "selected") by construction, one
+  // <input type="radio"> group per viewer rather than two independent
+  // checkboxes - showing every sidechain and showing only the interface
+  // ones don't make sense to have on at once, so there was never a real
+  // reason to let them be.
+  sidechainMode: "selected", // "selected" | "interface" | "all"
+};
+const SIDECHAIN_MODES = ["selected", "interface", "all"];
 
 function loadViewerSettings() {
   try {
     const stored = JSON.parse(localStorage.getItem(VIEWER_SETTINGS_KEY) || "{}");
     if (BACKGROUND_PRESETS[stored.background]) viewerSettings.background = stored.background;
     if (CHAIN_PALETTES[stored.chainPalette]) viewerSettings.chainPalette = stored.chainPalette;
+    if (stored.chainColorOverrides && typeof stored.chainColorOverrides === "object") {
+      Object.entries(stored.chainColorOverrides).forEach(([idx, v]) => {
+        if (/^\d+$/.test(idx) && typeof v === "string" && HEX_COLOR_RE.test(v)) viewerSettings.chainColorOverrides[idx] = v;
+      });
+    }
     if (stored.provenanceColors && typeof stored.provenanceColors === "object") {
       Object.keys(DEFAULT_PROVENANCE_COLORS).forEach((cat) => {
         const v = stored.provenanceColors[cat];
-        if (typeof v === "string" && /^#[0-9a-fA-F]{6}$/.test(v)) viewerSettings.provenanceColors[cat] = v;
+        if (typeof v === "string" && HEX_COLOR_RE.test(v)) viewerSettings.provenanceColors[cat] = v;
       });
     }
+    if (SIDECHAIN_MODES.includes(stored.sidechainMode)) viewerSettings.sidechainMode = stored.sidechainMode;
   } catch (e) {}
 }
 function saveViewerSettings() {
   localStorage.setItem(VIEWER_SETTINGS_KEY, JSON.stringify(viewerSettings));
 }
 
-// Registered once; reads the *current* palette live via closure each time
-// it colors an atom, so switching palettes never needs re-registering -
+// Registered once; reads the *current* palette (and any per-chain
+// overrides) live via closure each time it colors an atom, so switching
+// palettes or picking a custom chain color never needs re-registering -
 // just re-coloring (see applyChainPaletteSetting()).
 let chainColorSchemeId = null;
 function chainColorScheme() {
   if (chainColorSchemeId) return chainColorSchemeId;
   chainColorSchemeId = NGL.ColormakerRegistry.addScheme(function () {
     this.atomColor = function (atom) {
+      const override = viewerSettings.chainColorOverrides[atom.chainIndex];
+      if (override) return parseInt(override.slice(1), 16);
       const palette = CHAIN_PALETTES[viewerSettings.chainPalette] || CHAIN_PALETTES.vivid;
       return parseInt(palette[atom.chainIndex % palette.length].slice(1), 16);
     };
@@ -799,13 +1048,87 @@ function computeStructureChainInfo(structure) {
   return info;
 }
 
+// Interface residues: any residue with at least one atom within
+// INTERFACE_RADIUS Å of an atom belonging to a *different* chain - one
+// chain at a time, since NGL's selection language has no "different
+// chain" concept to hand it directly. For each chain: everything within
+// the radius of "not this chain" (getAtomSetWithinSelection) necessarily
+// includes some of the other chains' own atoms too, which
+// makeIntersection() with "this chain's atoms" (getAtomSet) discards,
+// leaving just this chain's side of the interface; getAtomSetWithinGroup()
+// then expands that atom-level set to whole residues, same as the
+// residue-click highlight's neighbor search uses elsewhere in this file.
+// Returns an NGL selection string (all chains' interface residues ORed
+// together), or null for a single-chain structure, where "interface"
+// isn't a meaningful concept.
+const INTERFACE_RADIUS = 5; // Angstroms
+
+function computeInterfaceSele(structure) {
+  const chainNames = Object.keys(computeStructureChainInfo(structure));
+  if (chainNames.length < 2) return null;
+  const parts = [];
+  chainNames.forEach((chainName) => {
+    try {
+      const chainAtoms = structure.getAtomSet(new NGL.Selection(`:${chainName}`));
+      const nearOtherChains = structure.getAtomSetWithinSelection(new NGL.Selection(`not :${chainName}`), INTERFACE_RADIUS);
+      const interfaceAtoms = chainAtoms.makeIntersection(nearOtherChains);
+      if (interfaceAtoms.getSize() > 0) {
+        parts.push(structure.getAtomSetWithinGroup(interfaceAtoms).toSeleString());
+      }
+    } catch (e) {
+      // Best-effort, same reasoning as the residue-click highlight.
+    }
+  });
+  return parts.length ? parts.join(" or ") : null;
+}
+
+// Each swatch is itself an <input type="color"> (not just a static color
+// chip) so a chain's color can be overridden directly, same idea as the
+// provenance legend's per-category pickers - see wireChainLegendColorInputs().
 function renderChainLegend(structure) {
   const info = computeStructureChainInfo(structure);
   const palette = CHAIN_PALETTES[viewerSettings.chainPalette] || CHAIN_PALETTES.vivid;
   const chains = Object.entries(info).sort((a, b) => a[1].chainIndex - b[1].chainIndex);
-  return chains.map(([name, { chainIndex }]) =>
-    `<span class="legend-item"><span class="legend-swatch" style="background:${palette[chainIndex % palette.length]}"></span>Chain ${escapeHtml(name)}</span>`
-  ).join("");
+  return chains.map(([name, { chainIndex }]) => {
+    const color = viewerSettings.chainColorOverrides[chainIndex] || palette[chainIndex % palette.length];
+    return `<span class="legend-item"><input type="color" class="legend-color-input" data-chain-index="${chainIndex}" value="${color}" title="Change chain ${escapeHtml(name)}'s color">Chain ${escapeHtml(name)}</span>`;
+  }).join("");
+}
+
+function wireChainLegendColorInputs(legendEl) {
+  qsa(".legend-color-input", legendEl).forEach((input) => {
+    input.addEventListener("input", (e) => {
+      viewerSettings.chainColorOverrides[e.target.dataset.chainIndex] = e.target.value;
+      saveViewerSettings();
+      applyChainColorLive(legendEl);
+    });
+  });
+}
+
+// Recolors every chain-mode viewer after a per-chain override changes,
+// without rebuilding `skipLegendEl`'s own DOM. Rebuilding it (the old
+// behavior, via applyChainPaletteSetting()) would destroy the very
+// <input type="color"> the user is still dragging in, which abruptly
+// closes the native color picker on every pixel of movement - the
+// RFdiffusion provenance legend's picker never has this problem, since
+// its own color-change handler never rebuilds its legend's DOM either.
+// Every *other* currently-open chain-mode viewer's legend still gets
+// rebuilt, since a shared per-chain-index override can affect more than
+// one of them at once.
+function applyChainColorLive(skipLegendEl) {
+  Object.keys(viewerRegistry).forEach((selector) => {
+    const entry = viewerRegistry[selector];
+    if (!entry || !entry.component || entry.colorMode === "provenance") return;
+    setCartoonColor(selector, chainColorScheme());
+    const legendSel = VIEWER_LEGEND_IDS[selector];
+    const legendEl = legendSel && qs(legendSel);
+    if (legendEl && legendEl !== skipLegendEl) {
+      legendEl.classList.remove("hidden");
+      legendEl.innerHTML = renderChainLegend(entry.component.structure);
+      wireChainLegendColorInputs(legendEl);
+    }
+  });
+  syncColorControlSelects(); // flips the palette select(s) to "Custom"
 }
 
 // Maps each structure viewer to the color-legend element next to its
@@ -815,6 +1138,7 @@ const VIEWER_LEGEND_IDS = {
   "#backboneViewer": "#backboneColorLegend",
   "#resultViewer": "#resultsColorLegend",
   "#modelViewer": "#modelColorLegend",
+  "#allResultViewer": "#allResultsColorLegend",
 };
 
 function refreshChainLegendFor(selector) {
@@ -825,6 +1149,7 @@ function refreshChainLegendFor(selector) {
   if (!legendEl) return;
   legendEl.classList.remove("hidden");
   legendEl.innerHTML = renderChainLegend(entry.component.structure);
+  wireChainLegendColorInputs(legendEl);
 }
 
 // RFdiffusion residue provenance coloring ("color by .trb"): every
@@ -911,6 +1236,23 @@ async function renderMol(selector, structureText, format = "pdb") {
   el.innerHTML = "";
 
   const stage = new NGL.Stage(el, { backgroundColor: BACKGROUND_PRESETS[viewerSettings.background] || BACKGROUND_PRESETS.black });
+  // NGL wraps its canvas in a plain position:relative div sized with
+  // literal pixel width/height (not percentages) - as an ordinary in-flow
+  // child, that div's own size normally feeds right back into el's size
+  // whenever el doesn't have a fixed height of its own, which .mol-viewer
+  // (flex-basis:auto, so its own resize handle can work - see style.css)
+  // doesn't until the user has actually dragged it. Left alone, that's a
+  // runaway loop: el sizes to fit the wrapper, ensureResizeObserver()
+  // below sees el's new size and resizes the canvas to match, the
+  // (still in-flow) wrapper grows to fit *that*, and so on - which is
+  // exactly what made a viewer keep growing on its own after a tab
+  // became visible again, with no drag involved. Taking the wrapper out
+  // of normal flow entirely (absolute + inset:0) breaks the loop for
+  // good, regardless of whatever pixel size NGL sets it to internally.
+  if (el.firstElementChild) {
+    el.firstElementChild.style.position = "absolute";
+    el.firstElementChild.style.inset = "0";
+  }
   const blob = new Blob([structureText], { type: "text/plain" });
 
   let component;
@@ -942,10 +1284,42 @@ async function renderMol(selector, structureText, format = "pdb") {
   // replaces it.
   if (stage.tooltip && stage.tooltip.parentNode) stage.tooltip.parentNode.removeChild(stage.tooltip);
   entry.cartoonRepr = component.addRepresentation("cartoon", { color: chainColorScheme() });
+  entry.sidechainRepr = null;
+  setSidechainMode(selector, viewerSettings.sidechainMode);
   stage.autoView();
-  setupResidueInteraction(stage, component, el);
+  entry.interaction = setupResidueInteraction(stage, component, el);
   refreshChainLegendFor(selector);
+  ensureResizeObserver(selector, el);
   return stage;
+}
+
+// .mol-viewer has a native CSS "resize: vertical" handle (drag the
+// bottom-right corner) so the user can make a viewer bigger/smaller, but
+// NGL only re-fits its canvas on the browser *window* resizing, not on
+// its own container being resized some other way - without this, a
+// manually-resized viewer would keep rendering at its old size, stretched
+// or clipped to fill the new box. Attached once per selector (not once
+// per renderMol() call, which would happen every time a new structure
+// loads) since the callback always looks up the *current* stage by
+// selector rather than closing over one particular Stage instance, so it
+// keeps working across every structure that selector ever loads.
+function ensureResizeObserver(selector, el) {
+  const entry = viewerRegistry[selector];
+  if (entry.resizeObserverAttached) return;
+  entry.resizeObserverAttached = true;
+  // ResizeObserver always fires once immediately after observe() starts,
+  // reporting the element's *current* size even though nothing has
+  // actually changed yet - reacting to that first call would run
+  // handleResize() right on top of the stage.autoView() that already
+  // just fit the camera to the freshly-loaded structure, which is
+  // redundant at best. Only genuine subsequent size changes matter here.
+  let firstCall = true;
+  const ro = new ResizeObserver(() => {
+    if (firstCall) { firstCall = false; return; }
+    const current = viewerRegistry[selector];
+    if (current && current.stage) current.stage.handleResize();
+  });
+  ro.observe(el);
 }
 
 // Swaps the cartoon's color scheme on an already-loaded viewer in place -
@@ -958,6 +1332,42 @@ function setCartoonColor(selector, colorSchemeId) {
   entry.cartoonRepr = entry.component.addRepresentation("cartoon", { color: colorSchemeId });
 }
 
+// "Show sidechains: All" adds every residue's sidechain as thin,
+// element-colored (CPK) licorice sticks alongside the cartoon - a lighter
+// radiusScale than the click-highlight's sticks (see
+// setupResidueInteraction) so this stays a background detail layer rather
+// than competing with a deliberate residue highlight/selection. The
+// selection includes the alpha carbon (NGL's ".CA" atom-name syntax)
+// alongside "sidechain" itself - NGL's plain "sidechain" keyword excludes
+// CA, which would draw each sidechain as a stick floating just short of
+// the cartoon ribbon instead of actually connecting to it.
+// "Interface" restricts that same treatment to computeInterfaceSele()'s
+// residues; a single-chain structure has no interface there, so it's a
+// silent no-op rather than an error for e.g. a monomer prediction.
+// "Selected" removes the representation entirely - a direct residue
+// click/sequence-panel selection already shows its own sidechains via
+// setupResidueInteraction(), independent of this.
+function setSidechainMode(selector, mode) {
+  const entry = viewerRegistry[selector];
+  if (!entry || !entry.component) return;
+  if (entry.sidechainRepr) {
+    entry.component.removeRepresentation(entry.sidechainRepr);
+    entry.sidechainRepr = null;
+  }
+  if (mode === "all") {
+    entry.sidechainRepr = entry.component.addRepresentation("licorice", {
+      sele: "sidechain or .CA", colorScheme: "element", radiusScale: 0.7,
+    });
+  } else if (mode === "interface") {
+    const interfaceSele = computeInterfaceSele(entry.component.structure);
+    if (interfaceSele) {
+      entry.sidechainRepr = entry.component.addRepresentation("licorice", {
+        sele: `(${interfaceSele}) and (sidechain or .CA)`, colorScheme: "element", radiusScale: 0.7,
+      });
+    }
+  }
+}
+
 // Background is a cheap, genuinely live stage parameter - applies
 // instantly to every currently-open viewer, no reload needed.
 function applyBackgroundSetting() {
@@ -965,6 +1375,13 @@ function applyBackgroundSetting() {
   Object.values(viewerRegistry).forEach((entry) => {
     if (entry.stage) entry.stage.setParameters({ backgroundColor: hex });
   });
+}
+
+// Shared by every viewer's "Show sidechains" radio group (kept in sync
+// via the same class-based delegated-listener pattern as the background
+// and chain-palette selects - see initColorControls()).
+function applySidechainModeSetting() {
+  Object.keys(viewerRegistry).forEach((selector) => setSidechainMode(selector, viewerSettings.sidechainMode));
 }
 
 // chainColorScheme() reads viewerSettings.chainPalette live, so any
@@ -995,12 +1412,63 @@ function applyProvenanceColorSetting() {
   });
 }
 
+// --- Viewer color controls (background / chain palette selects) ---
+// Each structure-viewing tab (Backbones, Models, Results, All jobs
+// results) has its own copy of the background and chain-palette selects,
+// but they all drive the same global `viewerSettings` - one delegated
+// listener handles every copy via a shared class, and
+// syncColorControlSelects() keeps whichever ones aren't currently visible
+// in sync so they don't show a stale value when their tab is switched
+// back to.
+
+function syncColorControlSelects() {
+  qsa(".bg-color-select").forEach((el) => { el.value = viewerSettings.background; });
+  // Any per-chain override in play means the palette select can no longer
+  // honestly claim to be "Vivid"/"Pastel"/etc - it shows "Custom" instead
+  // until the user picks a real palette again (which clears the overrides
+  // - see the change handler below).
+  const hasOverrides = Object.keys(viewerSettings.chainColorOverrides).length > 0;
+  qsa(".chain-palette-select").forEach((el) => { el.value = hasOverrides ? "custom" : viewerSettings.chainPalette; });
+  // Each radio's own value ("selected"/"interface"/"all") is what's
+  // authoritative, so this just checks whichever one matches the current
+  // mode - one shared value across however many of these radio groups
+  // (one per viewer tab) are on the page at once.
+  qsa(".sidechain-mode-radio").forEach((el) => { el.checked = el.value === viewerSettings.sidechainMode; });
+}
+
+function initColorControls() {
+  syncColorControlSelects();
+  document.addEventListener("change", (e) => {
+    if (e.target.matches(".bg-color-select")) {
+      viewerSettings.background = e.target.value;
+      saveViewerSettings();
+      syncColorControlSelects();
+      applyBackgroundSetting();
+    } else if (e.target.matches(".chain-palette-select")) {
+      // "custom" is a disabled option (see index.html) so the user can
+      // never actually pick it - this only ever fires with a real
+      // palette name, which overwrites any per-chain overrides, same
+      // reasoning as picking a whole new palette from scratch.
+      viewerSettings.chainPalette = e.target.value;
+      viewerSettings.chainColorOverrides = {};
+      saveViewerSettings();
+      syncColorControlSelects();
+      applyChainPaletteSetting();
+    } else if (e.target.matches(".sidechain-mode-radio")) {
+      viewerSettings.sidechainMode = e.target.value;
+      saveViewerSettings();
+      syncColorControlSelects();
+      applySidechainModeSetting();
+    }
+  });
+}
+
 // Fetches a .trb file's provenance data and colors `selector`'s cartoon by
 // it, updating the legend; falls back to chain coloring (with an
 // explanatory note in the legend slot) if there's no .trb path or the
 // fetch fails. Shared by the Backbones and Results tabs' "color residues
 // by" controls.
-async function applyProvenanceColoring(selector, trbPath, legendEl) {
+async function applyProvenanceColoring(selector, trbPath, legendEl, logOverride) {
   const entry = viewerRegistry[selector];
   if (!entry) return;
   if (!trbPath) {
@@ -1011,7 +1479,7 @@ async function applyProvenanceColoring(selector, trbPath, legendEl) {
     return;
   }
   try {
-    const data = await apiGet("/api/trb", { path: trbPath });
+    const data = await apiGet("/api/trb", { path: trbPath, log: logOverride });
     if (data.error) throw new Error(data.error);
     const chainInfo = computeStructureChainInfo(entry.component.structure);
     const chainOffsets = {};
@@ -1032,6 +1500,26 @@ async function applyProvenanceColoring(selector, trbPath, legendEl) {
   }
 }
 
+// Color scheme for a click/selection highlight's own residue(s), as
+// opposed to its neighbors: every element keeps its normal CPK color
+// (reused from NGL's own built-in "element" scheme via getScheme(),
+// rather than reimplementing that lookup table) except carbon, which
+// becomes a vivid yellow - a clearly visible marker of "this is the
+// selected residue" without needing a bigger radiusScale the way the
+// neighbors-vs-selected distinction used to work.
+let highlightColorSchemeId = null;
+function highlightColorScheme() {
+  if (highlightColorSchemeId) return highlightColorSchemeId;
+  const elementScheme = NGL.ColormakerRegistry.getScheme({ scheme: "element" });
+  highlightColorSchemeId = NGL.ColormakerRegistry.addScheme(function () {
+    this.atomColor = function (atom) {
+      if (atom.element === "C") return 0xffee00;
+      return elementScheme.atomColor(atom);
+    };
+  });
+  return highlightColorSchemeId;
+}
+
 // Click a residue to highlight it plus everything within
 // RESIDUE_HIGHLIGHT_RADIUS Å of it, with a small overlay naming both.
 // Hovering shows a lightweight floating tooltip for quick scanning
@@ -1040,6 +1528,14 @@ async function applyProvenanceColoring(selector, trbPath, legendEl) {
 // (structure.getAtomSetWithinSelection + getAtomSetWithinGroup for the
 // "everything within N Å, expanded to whole residues" query) - no
 // separate distance/highlight logic needed.
+//
+// The actual highlight-building logic (highlightResidue/highlightMultiple/
+// clearHighlight) is exposed on the returned object rather than kept
+// private, so something outside this function - the Results tab's
+// sequence panel - can trigger the exact same highlight a 3D click would,
+// instead of reimplementing it. setOnChange() lets that same panel keep
+// its own residue selection in sync when a highlight is triggered the
+// other way (a direct click in the 3D view).
 function setupResidueInteraction(stage, component, container) {
   const structure = component.structure;
 
@@ -1052,19 +1548,74 @@ function setupResidueInteraction(stage, component, container) {
   stage.viewer.container.appendChild(tooltip);
 
   let highlightReprs = [];
+  let onChange = null;
 
   function clearHighlight() {
     highlightReprs.forEach((r) => component.removeRepresentation(r));
     highlightReprs = [];
     info.classList.add("hidden");
+    if (onChange) onChange([]);
   }
 
-  stage.signals.clicked.add((pickingProxy) => {
-    if (!pickingProxy || !pickingProxy.atom) return;
-    const atom = pickingProxy.atom;
-    clearHighlight();
+  // Single-residue highlight: the given residue plus everything within
+  // RESIDUE_HIGHLIGHT_RADIUS Å of it, both as element-colored licorice
+  // sticks (the residue itself drawn thicker than its neighbors instead
+  // of in a different flat color, so element coloring stays meaningful
+  // on both). Resname is looked up from the structure itself rather than
+  // requiring the caller to know it, since a sequence-panel click only
+  // has chain+resno to give us.
+  function highlightResidue(chainname, resno) {
+    highlightReprs.forEach((r) => component.removeRepresentation(r));
+    highlightReprs = [];
 
-    const residueSele = `${atom.resno} and :${atom.chainname}`;
+    const residueSele = `${resno} and :${chainname}`;
+    let resname = "?";
+    let neighborCount = 0;
+    try {
+      structure.eachAtom((ap) => { resname = ap.resname; }, new NGL.Selection(residueSele));
+      const nearAtoms = structure.getAtomSetWithinSelection(new NGL.Selection(residueSele), RESIDUE_HIGHLIGHT_RADIUS);
+      const nearResidues = structure.getAtomSetWithinGroup(nearAtoms); // whole residues, not just the atoms caught by the radius
+
+      const seen = new Set();
+      structure.eachAtom((ap) => seen.add(`${ap.chainname}:${ap.resno}`), new NGL.Selection(nearResidues.toSeleString()));
+      seen.delete(`${chainname}:${resno}`);
+      neighborCount = seen.size;
+
+      const neighborSele = `( ${nearResidues.toSeleString()} ) and not ( ${residueSele} )`;
+      highlightReprs.push(component.addRepresentation("licorice", { sele: neighborSele, colorScheme: "element", radiusScale: 1.2 }));
+    } catch (e) {
+      // Highlight is best-effort - the info line below still works even
+      // if the neighbor query fails for some edge-case selection.
+    }
+    // Same radiusScale as the neighbors - highlightColorScheme()'s vivid
+    // yellow carbons are what marks this one out now, not extra size.
+    highlightReprs.push(component.addRepresentation("licorice", { sele: residueSele, colorScheme: highlightColorScheme(), radiusScale: 1.2 }));
+
+    info.innerHTML = `<b>${escapeHtml(resname || "?")} ${escapeHtml(String(resno))}</b> · chain ${escapeHtml(chainname || "?")}
+      <span class="muted">— ${neighborCount} nearby residue${neighborCount === 1 ? "" : "s"} within ${RESIDUE_HIGHLIGHT_RADIUS} Å</span>
+      <a class="clear-link">clear</a>`;
+    info.classList.remove("hidden");
+    info.querySelector(".clear-link").addEventListener("click", clearHighlight);
+
+    if (onChange) onChange([{ chain: chainname, resno }]);
+  }
+
+  // Multi-residue highlight: the same idea as highlightResidue() above,
+  // just seeded from every selected residue at once instead of one - the
+  // whole selection's neighborhood (within RESIDUE_HIGHLIGHT_RADIUS Å) is
+  // shown as normal-CPK licorice, and the selected residues themselves
+  // use highlightColorScheme()'s vivid-yellow-carbon treatment so they
+  // still read as "the selection" among their own neighbors.
+  function highlightMultiple(residues) {
+    highlightReprs.forEach((r) => component.removeRepresentation(r));
+    highlightReprs = [];
+    if (!residues.length) {
+      info.classList.add("hidden");
+      if (onChange) onChange([]);
+      return;
+    }
+
+    const residueSele = residues.map((r) => `(${r.resno} and :${r.chain})`).join(" or ");
     let neighborCount = 0;
     try {
       const nearAtoms = structure.getAtomSetWithinSelection(new NGL.Selection(residueSele), RESIDUE_HIGHLIGHT_RADIUS);
@@ -1072,26 +1623,28 @@ function setupResidueInteraction(stage, component, container) {
 
       const seen = new Set();
       structure.eachAtom((ap) => seen.add(`${ap.chainname}:${ap.resno}`), new NGL.Selection(nearResidues.toSeleString()));
-      seen.delete(`${atom.chainname}:${atom.resno}`);
+      residues.forEach((r) => seen.delete(`${r.chain}:${r.resno}`));
       neighborCount = seen.size;
 
       const neighborSele = `( ${nearResidues.toSeleString()} ) and not ( ${residueSele} )`;
-      // Element (CPK) coloring for both - N blue, O red, S yellow, etc.
-      // The clicked residue is distinguished from its neighbors by
-      // thicker sticks (radiusScale) rather than a flat highlight color,
-      // so the element coloring stays correct on both.
       highlightReprs.push(component.addRepresentation("licorice", { sele: neighborSele, colorScheme: "element", radiusScale: 1.2 }));
     } catch (e) {
-      // Highlight is best-effort - the info line below still works even
-      // if the neighbor query fails for some edge-case selection.
+      // Best-effort, same reasoning as highlightResidue().
     }
-    highlightReprs.push(component.addRepresentation("licorice", { sele: residueSele, colorScheme: "element", radiusScale: 2.2 }));
+    highlightReprs.push(component.addRepresentation("licorice", { sele: residueSele, colorScheme: highlightColorScheme(), radiusScale: 1.2 }));
 
-    info.innerHTML = `<b>${escapeHtml(atom.resname || "?")} ${escapeHtml(String(atom.resno))}</b> · chain ${escapeHtml(atom.chainname || "?")}
+    info.innerHTML = `<b>${residues.length} residues selected</b>
       <span class="muted">— ${neighborCount} nearby residue${neighborCount === 1 ? "" : "s"} within ${RESIDUE_HIGHLIGHT_RADIUS} Å</span>
       <a class="clear-link">clear</a>`;
     info.classList.remove("hidden");
     info.querySelector(".clear-link").addEventListener("click", clearHighlight);
+
+    if (onChange) onChange(residues);
+  }
+
+  stage.signals.clicked.add((pickingProxy) => {
+    if (!pickingProxy || !pickingProxy.atom) return;
+    highlightResidue(pickingProxy.atom.chainname, pickingProxy.atom.resno);
   });
 
   stage.signals.hovered.add((pickingProxy) => {
@@ -1106,6 +1659,13 @@ function setupResidueInteraction(stage, component, container) {
       tooltip.classList.add("hidden");
     }
   });
+
+  return {
+    highlightResidue,
+    highlightMultiple,
+    clearHighlight,
+    setOnChange(cb) { onChange = cb; },
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -1326,13 +1886,19 @@ async function selectModel(m) {
         const text = await res.text();
         await renderMol("#modelViewer", text, m.structure_format || "pdb");
         label.textContent = m.structure_format === "cif" ? "Preview from .cif — final .pdb not written yet" : "";
+        if (state.modelsColorMode === "provenance") {
+          await applyProvenanceColoring("#modelViewer", m.trb_path, qs("#modelColorLegend"));
+        }
+        renderModelsSequencePanel();
       } catch (e) {
         qs("#modelViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure.</p>`;
         label.textContent = "";
+        renderModelsSequencePanel();
       }
     } else {
       qs("#modelViewer").innerHTML = `<p class="muted" style="padding:20px">No structure file found yet for this model.</p>`;
       label.textContent = "";
+      renderModelsSequencePanel();
     }
   }
 
@@ -1351,172 +1917,25 @@ async function selectModel(m) {
   }
 }
 
+// Interactive sequence panel for the Models tab - same read-straight-off-
+// the-loaded-structure approach and click/drag/ctrl-click interaction as
+// the Results tab's sequence panel (buildStructureSequence/
+// renderSequenceResidues/setupSequencePanelInteraction are shared code).
+function renderModelsSequencePanel() {
+  const el = qs("#modelsSequenceContent");
+  const entry = viewerRegistry["#modelViewer"];
+  if (!entry || !entry.component) {
+    el.innerHTML = "";
+    return;
+  }
+  const chains = buildStructureSequence(entry.component.structure);
+  el.innerHTML = renderSequenceResidues(chains);
+  setupSequencePanelInteraction(el, "#modelViewer");
+}
+
 // ---------------------------------------------------------------------
 // Results tab
 // ---------------------------------------------------------------------
-
-function ingestCsv(csv) {
-  const { columns, rows } = csv;
-  const objRows = rows.map((r, i) => {
-    const obj = { __rowId: i };
-    columns.forEach((c, ci) => { obj[c] = r[ci]; });
-    return obj;
-  });
-
-  const numericColumns = columns.filter((c) => {
-    const vals = objRows.map((r) => r[c]).filter((v) => v !== "" && v !== undefined && v !== null);
-    if (!vals.length) return false;
-    return vals.every((v) => !isNaN(parseFloat(v)) && isFinite(v));
-  });
-
-  const idCol = columns.includes("id") ? "id" : null;
-  const pathCols = columns.filter((c) => PATH_COLUMNS.includes(c));
-  const rest = columns.filter((c) => c !== idCol && !pathCols.includes(c));
-  const displayColumns = [...(idCol ? [idCol] : []), ...rest, ...pathCols];
-
-  const prev = state.results;
-  state.results = {
-    columns,
-    rows: objRows,
-    numericColumns,
-    displayColumns,
-    idCol,
-    filters: prev.filters || {},
-    colorField: prev.colorField || "",
-    colorDirection: prev.colorDirection || "higher",
-    selectedRowId: prev.selectedRowId,
-  };
-  // drop filters/colorField that no longer refer to a real numeric column
-  Object.keys(state.results.filters).forEach((c) => {
-    if (!numericColumns.includes(c)) delete state.results.filters[c];
-  });
-  if (state.results.colorField && !numericColumns.includes(state.results.colorField)) {
-    state.results.colorField = "";
-  }
-}
-
-function getFilteredRows() {
-  const { rows, filters } = state.results;
-  const cols = Object.keys(filters);
-  if (!cols.length) return rows;
-  return rows.filter((r) => {
-    for (const col of cols) {
-      const f = filters[col];
-      if (f.min == null && f.max == null) continue;
-      const val = parseFloat(r[col]);
-      if (isNaN(val)) return false;
-      if (f.min != null && val < f.min) return false;
-      if (f.max != null && val > f.max) return false;
-    }
-    return true;
-  });
-}
-
-function computeColorScale(rows) {
-  const { colorField, colorDirection } = state.results;
-  if (!colorField) return null;
-  const vals = rows.map((r) => parseFloat(r[colorField])).filter((v) => !isNaN(v));
-  if (!vals.length) return null;
-  return { min: Math.min(...vals), max: Math.max(...vals), field: colorField, direction: colorDirection };
-}
-
-function colorForRow(row, scale) {
-  if (!scale) return null;
-  const val = parseFloat(row[scale.field]);
-  if (isNaN(val)) return null;
-  let t = scale.max === scale.min ? 1 : (val - scale.min) / (scale.max - scale.min);
-  if (scale.direction === "lower") t = 1 - t;
-  t = Math.max(0, Math.min(1, t));
-  const hue = t * 145; // 0 = red (worst) .. 145 = green (best)
-  // This background is deliberately dark regardless of theme (so the hue
-  // stays legible), so it needs a fixed light text color paired with it -
-  // the ambient theme text turns dark in light mode, which would be
-  // unreadable against it.
-  return { bg: `hsl(${hue}, 42%, 21%)`, accent: `hsl(${hue}, 70%, 52%)`, text: "#eef1f8" };
-}
-
-async function loadResults() {
-  const listEl = qs("#finalPdbsList");
-  try {
-    const res = await apiGet("/api/results");
-    if (!res.csv_exists) {
-      state.results.rows = [];
-      if (!res.final_pdbs.length) {
-        listEl.innerHTML = `<p class="muted">No final models yet — this appears once final_operations completes.</p>`;
-      } else {
-        // Fallback (no csv yet, e.g. mid-scoring): plain filename list.
-        listEl.innerHTML = "";
-        res.final_pdbs.forEach((name) => {
-          const div = document.createElement("div");
-          div.className = "list-item";
-          div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(name)}</span>`;
-          div.addEventListener("click", async () => {
-            qsa("#finalPdbsList .list-item").forEach((i) => i.classList.remove("selected"));
-            div.classList.add("selected");
-            const url = `/api/final_pdb?log=${encodeURIComponent(state.logPath)}&name=${encodeURIComponent(name)}`;
-            const pdbText = await fetch(url).then((r) => r.text());
-            await renderMol("#resultViewer", pdbText);
-          });
-          listEl.appendChild(div);
-        });
-      }
-      qs("#resultsAlignContent").innerHTML = `<p class="muted">Not available yet.</p>`;
-      qs("#csvTableWrap").innerHTML = `<p class="muted">Not available yet — created once final_operations finishes.</p>`;
-      qs("#resultsCount").textContent = "";
-      populateColorBySelect();
-      renderFiltersList();
-      return;
-    }
-
-    const csv = await apiGet("/api/final_csv");
-    ingestCsv(csv);
-    populateColorBySelect();
-    renderFiltersList();
-    updateFiltersBadge();
-    renderResultsAll();
-  } catch (err) {
-    listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
-  }
-}
-
-function renderResultsAll() {
-  const total = state.results.rows.length;
-  const shown = getFilteredRows().length;
-  qs("#resultsCount").textContent = total ? `Showing ${shown} / ${total} model${total === 1 ? "" : "s"}` : "";
-  renderResultsList();
-  renderResultsAlignment();
-  renderCsvTable();
-}
-
-function renderResultsList() {
-  const listEl = qs("#finalPdbsList");
-  if (!state.results.rows.length) return; // handled by loadResults fallback path
-  const rows = getFilteredRows();
-  if (!rows.length) {
-    listEl.innerHTML = `<p class="muted">No models match the current filters.</p>`;
-    return;
-  }
-  rerenderPreservingScroll(listEl, () => {
-    const scale = computeColorScale(rows);
-    listEl.innerHTML = "";
-    rows.forEach((row) => {
-      const label = row[state.results.idCol] || basename(row.model_path) || `row ${row.__rowId}`;
-      const div = document.createElement("div");
-      div.className = "list-item" + (state.results.selectedRowId === row.__rowId ? " selected" : "");
-      const color = colorForRow(row, scale);
-      if (color) {
-        div.style.background = color.bg;
-        div.style.borderLeftColor = color.accent;
-        div.style.color = color.text;
-      }
-      div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(label))}</span>`;
-      div.addEventListener("click", () => selectResultRow(row));
-      listEl.appendChild(div);
-    });
-    const current = rows.find((r) => r.__rowId === state.results.selectedRowId) || rows[0];
-    if (current) selectResultRow(current);
-  });
-}
 
 // The .trb sits next to the RFdiffusion pdb that final_output.csv's
 // path_rfdiff column already points to - same basename, .trb extension,
@@ -1525,294 +1944,733 @@ function trbPathForResultRow(row) {
   return row.path_rfdiff ? row.path_rfdiff.replace(/\.pdb$/i, ".trb") : null;
 }
 
-async function selectResultRow(row) {
-  state.results.selectedRowId = row.__rowId;
-  renderResultsListSelectionOnly();
-  const pdbName = basename(row.model_path);
-  // Same structure already showing - skip refetching so the viewer's
-  // camera (zoom/rotation) isn't reset on every poll tick.
-  if (state.loadedResultPdbName === pdbName) return;
-  state.loadedResultPdbName = pdbName;
-  if (!pdbName) return;
-  const url = `/api/final_pdb?log=${encodeURIComponent(state.logPath)}&name=${encodeURIComponent(pdbName)}`;
-  try {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error("pdb not found");
-    const pdbText = await res.text();
-    await renderMol("#resultViewer", pdbText);
-    if (state.resultsColorMode === "provenance") {
-      await applyProvenanceColoring("#resultViewer", trbPathForResultRow(row), qs("#resultsColorLegend"));
-    }
-  } catch (e) {
-    qs("#resultViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure for this row.</p>`;
-  }
-}
+// Interactive sequence panel (Results tab only): shows the currently
+// selected row's sequence read straight off the already-loaded NGL
+// structure, not a separately-fetched FASTA string - so a residue's
+// position in this panel can never drift out of sync with the same
+// residue in the 3D view next to it. Clicking a residue here calls the
+// exact same highlightResidue() a direct 3D click would; selecting a
+// range (drag) or several residues (ctrl/cmd+click) calls
+// highlightMultiple() instead, which outlines the whole set.
 
-function renderResultsListSelectionOnly() {
-  // Cheap re-render (list is not large) so the highlighted row + viewer stay in sync.
-  const rows = getFilteredRows();
-  const listEl = qs("#finalPdbsList");
-  qsa(".list-item", listEl).forEach((el, i) => {
-    const row = rows[i];
-    if (!row) return;
-    el.classList.toggle("selected", row.__rowId === state.results.selectedRowId);
+function buildStructureSequence(structure) {
+  const byChain = new Map();
+  structure.eachResidue((rp) => {
+    if (!rp.isProtein()) return; // skip waters/ligands/other hetero groups
+    if (!byChain.has(rp.chainname)) byChain.set(rp.chainname, []);
+    byChain.get(rp.chainname).push({ resno: rp.resno, code: rp.getResname1(), resname: rp.resname });
   });
+  return Array.from(byChain, ([chain, residues]) => ({ chain, residues }));
 }
 
-function renderResultsAlignment() {
-  const el = qs("#resultsAlignContent");
-  if (!state.results.rows.length) {
-    el.innerHTML = `<p class="muted">Not available yet.</p>`;
-    return;
-  }
-  const rows = getFilteredRows();
-  if (!rows.length) {
-    el.innerHTML = `<p class="muted">No models match the current filters.</p>`;
-    return;
-  }
-  if (!state.results.columns.includes("sequence")) {
-    el.innerHTML = `<p class="muted">final_output.csv has no "sequence" column.</p>`;
-    return;
-  }
-  const scale = computeColorScale(rows);
-
-  // Group by sequence length: unrelated designs won't be the same length,
-  // but this keeps each group's residues lined up in one shared scrollbar.
-  const groups = new Map();
-  rows.forEach((row) => {
-    const seq = row.sequence || "";
-    const key = seq.length;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
-  });
-
-  const html = [...groups.keys()].sort((a, b) => b - a).map((len) => {
-    const groupRows = groups.get(len);
-    const alignRows = groupRows.map((row) => {
-      const color = colorForRow(row, scale);
-      const label = String(row[state.results.idCol] || basename(row.model_path) || `row ${row.__rowId}`);
-      return { label, chains: String(row.sequence || "").split(":"), swatch: color ? color.accent : null };
-    });
-    return `<div class="backbone-block"><h4>${len} residues <span class="muted" style="font-size:12px;font-weight:400">(${groupRows.length} model${groupRows.length === 1 ? "" : "s"})</span></h4>${renderAlignmentBlock(alignRows)}</div>`;
-  }).join("");
-  el.innerHTML = html;
-}
-
-function renderCsvTable() {
-  const wrap = qs("#csvTableWrap");
-  if (!state.results.rows.length) {
-    wrap.innerHTML = `<p class="muted">Not available yet.</p>`;
-    return;
-  }
-  const rows = getFilteredRows();
-  if (!rows.length) {
-    wrap.innerHTML = `<p class="muted">No rows match the current filters.</p>`;
-    return;
-  }
-  const { displayColumns, idCol } = state.results;
-  const scale = computeColorScale(rows);
-
-  let sortedRows = rows;
-  const { col, dir } = state.csvSort;
-  if (col) {
-    sortedRows = [...rows].sort((a, b) => {
-      const av = a[col], bv = b[col];
-      const an = parseFloat(av), bn = parseFloat(bv);
-      let cmp;
-      if (!isNaN(an) && !isNaN(bn)) cmp = an - bn;
-      else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
-      return cmp * dir;
-    });
-  }
-
-  const thead = displayColumns.map((c) => {
-    const cls = c === idCol ? ' class="id-col"' : (PATH_COLUMNS.includes(c) ? ' class="path-col"' : "");
-    const arrow = col === c ? (dir === 1 ? " ▲" : " ▼") : "";
-    return `<th data-col="${escapeHtml(c)}"${cls}>${escapeHtml(c)}${arrow}</th>`;
-  }).join("");
-
-  const tbody = sortedRows.map((r, idx) => {
-    const color = colorForRow(r, scale);
-    const rowBg = color ? color.bg : (idx % 2 === 1 ? "var(--panel-2)" : "transparent");
-    const idCellBg = color ? color.bg : (idx % 2 === 1 ? "var(--panel-2)" : "var(--panel)");
-    // The row's own `color` (inherited by every <td>) is enough to fix
-    // text against the tint everywhere *except* .path-col, which sets its
-    // own `color: var(--muted)` in CSS - an inline style is needed there
-    // to actually win over that class rule.
-    const rowStyle = color ? `background:${rowBg};color:${color.text}` : `background:${rowBg}`;
-    const tds = displayColumns.map((c) => {
-      const isId = c === idCol;
-      const isPath = PATH_COLUMNS.includes(c);
-      const cls = isId ? ' class="id-col"' : (isPath ? ' class="path-col"' : "");
-      const style = isId ? ` style="background:${idCellBg}"` : (isPath && color ? ` style="color:${color.text}"` : "");
-      const val = r[c] ?? "";
-      return `<td${cls}${style} title="${escapeHtml(String(val))}">${escapeHtml(String(val))}</td>`;
+function renderSequenceResidues(chains) {
+  return chains.map(({ chain, residues }) => {
+    const spans = residues.map((r) => {
+      const color = AA_COLORS[r.code] || "#3a4560";
+      return `<span class="seq-residue" data-chain="${escapeHtml(chain)}" data-resno="${r.resno}" title="${escapeHtml(r.resname)} ${r.resno}" style="background:${color}1a;color:${color}">${escapeHtml(r.code)}</span>`;
     }).join("");
-    return `<tr style="${rowStyle}" data-row-id="${r.__rowId}">${tds}</tr>`;
+    return `<div class="seq-chain"><span class="seq-chain-label">Chain ${escapeHtml(chain)} · ${residues.length} residues</span><div class="seq-residues">${spans}</div></div>`;
   }).join("");
-
-  const wrapTop = wrap.scrollTop;
-  wrap.innerHTML = `<table class="data-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
-  wrap.scrollTop = wrapTop;
-
-  qsa("th", wrap).forEach((th) => {
-    th.addEventListener("click", () => {
-      const c = th.dataset.col;
-      state.csvSort = { col: c, dir: state.csvSort.col === c ? -state.csvSort.dir : 1 };
-      renderCsvTable();
-    });
-  });
-  qsa("tbody tr", wrap).forEach((tr) => {
-    tr.addEventListener("click", () => {
-      const rid = parseInt(tr.dataset.rowId, 10);
-      const row = state.results.rows.find((r) => r.__rowId === rid);
-      if (row) selectResultRow(row);
-    });
-  });
 }
 
-// --- Color-by controls (D4) ---
+// Plain click = select just this residue (mirrors a direct 3D click).
+// Ctrl/Cmd+click = toggle this residue in the current multi-selection.
+// Click-and-drag = select the dragged range. The 3D outline is only
+// rebuilt on mouseup rather than on every mousemove - rebuilding an NGL
+// surface representation per pixel of drag would be needlessly heavy -
+// but the sequence panel's own selection still repaints live during the
+// drag so the drag itself still feels immediate.
+function setupSequencePanelInteraction(container, selector) {
+  const residueEls = qsa(".seq-residue", container);
+  let selected = new Set();
+  let dragAnchor = null;
+  let isDragging = false;
 
-function populateColorBySelect() {
-  const sel = qs("#colorByField");
-  const dirSel = qs("#colorByDirection");
-  const prev = state.results.colorField;
-  sel.innerHTML = `<option value="">None</option>` + state.results.numericColumns
-    .map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
-  sel.value = state.results.numericColumns.includes(prev) ? prev : "";
-  state.results.colorField = sel.value;
-  dirSel.value = state.results.colorDirection;
-}
-
-// --- Filters panel (D3) ---
-
-function initFiltersPanel() {
-  const panel = qs("#filtersPanel");
-  qs("#filtersBtn").addEventListener("click", (e) => {
-    e.stopPropagation();
-    panel.classList.toggle("hidden");
-  });
-  panel.addEventListener("click", (e) => e.stopPropagation());
-  document.addEventListener("click", () => panel.classList.add("hidden"));
-  qs("#clearFiltersBtn").addEventListener("click", () => {
-    state.results.filters = {};
-    renderFiltersList();
-    updateFiltersBadge();
-    renderResultsAll();
-  });
-}
-
-function renderFiltersList() {
-  const el = qs("#filtersList");
-  const cols = state.results.numericColumns || [];
-  if (!cols.length) {
-    el.innerHTML = `<p class="muted" style="margin:0">No numeric columns found yet.</p>`;
-    return;
+  function keyOf(el) { return `${el.dataset.chain}:${el.dataset.resno}`; }
+  function paintSelection() {
+    residueEls.forEach((el) => el.classList.toggle("selected", selected.has(keyOf(el))));
   }
-  el.innerHTML = cols.map((c) => {
-    const f = state.results.filters[c] || {};
-    const active = f.min != null || f.max != null;
-    return `
-      <div class="filter-row${active ? " filter-active" : ""}">
-        <span class="filter-col-name" title="${escapeHtml(c)}">${escapeHtml(c)}</span>
-        <input type="number" class="filter-min" data-col="${escapeHtml(c)}" placeholder="min" value="${f.min ?? ""}">
-        <span class="filter-dash">–</span>
-        <input type="number" class="filter-max" data-col="${escapeHtml(c)}" placeholder="max" value="${f.max ?? ""}">
-      </div>`;
-  }).join("");
-  qsa(".filter-min, .filter-max", el).forEach((inp) => {
-    inp.addEventListener("input", () => {
-      const col = inp.dataset.col;
-      const isMin = inp.classList.contains("filter-min");
-      const val = inp.value === "" ? null : parseFloat(inp.value);
-      const f = state.results.filters[col] || {};
-      if (isMin) f.min = val; else f.max = val;
-      if (f.min == null && f.max == null) delete state.results.filters[col];
-      else state.results.filters[col] = f;
-      inp.closest(".filter-row").classList.toggle("filter-active", f.min != null || f.max != null);
+  function applyHighlight() {
+    const entry = viewerRegistry[selector];
+    if (!entry || !entry.interaction) return;
+    const list = residueEls
+      .filter((el) => selected.has(keyOf(el)))
+      .map((el) => ({ chain: el.dataset.chain, resno: parseInt(el.dataset.resno, 10) }));
+    if (list.length === 0) entry.interaction.clearHighlight();
+    else if (list.length === 1) entry.interaction.highlightResidue(list[0].chain, list[0].resno);
+    else entry.interaction.highlightMultiple(list);
+  }
+
+  residueEls.forEach((el, idx) => {
+    el.addEventListener("mousedown", (e) => {
+      if (e.ctrlKey || e.metaKey) {
+        const k = keyOf(el);
+        if (selected.has(k)) selected.delete(k); else selected.add(k);
+        paintSelection();
+        applyHighlight();
+        return; // a ctrl/cmd-click toggles one residue; it doesn't start a drag
+      }
+      selected = new Set([keyOf(el)]);
+      dragAnchor = idx;
+      isDragging = true;
+      paintSelection();
+    });
+    el.addEventListener("mouseenter", () => {
+      if (!isDragging || dragAnchor === null) return;
+      const lo = Math.min(dragAnchor, idx);
+      const hi = Math.max(dragAnchor, idx);
+      selected = new Set(residueEls.slice(lo, hi + 1).map(keyOf));
+      paintSelection();
+    });
+  });
+
+  // A drag can end with the mouse anywhere on the page, not just over a
+  // residue span, so this listener lives on the document rather than the
+  // panel itself - and gets replaced (not stacked) on every re-render, by
+  // stashing the handler reference on the container, which persists
+  // across re-renders even though its contents get replaced each time.
+  if (container._seqMouseupHandler) document.removeEventListener("mouseup", container._seqMouseupHandler);
+  const mouseupHandler = () => {
+    if (!isDragging) return;
+    isDragging = false;
+    dragAnchor = null;
+    applyHighlight();
+  };
+  container._seqMouseupHandler = mouseupHandler;
+  document.addEventListener("mouseup", mouseupHandler);
+
+  // Keeps the panel in sync when a highlight is triggered the other way -
+  // clicking directly in the 3D view - so that doesn't leave the sequence
+  // panel still showing an earlier, now-stale selection.
+  const entry = viewerRegistry[selector];
+  if (entry && entry.interaction) {
+    entry.interaction.setOnChange((residues) => {
+      selected = new Set(residues.map((r) => `${r.chain}:${r.resno}`));
+      paintSelection();
+    });
+  }
+}
+
+// ---------------------------------------------------------------------
+// Results view - a factory rather than one hardwired set of functions,
+// so the per-job Results tab and the All jobs results tab share the
+// exact same filtering/coloring/CSV/alignment/export logic instead of
+// two copies that could quietly drift apart. `cfg` supplies which DOM
+// ids and viewer selector a given instance draws into, how to fetch its
+// data (one job vs every tracked job merged), and how to resolve which
+// job's API a given row belongs to.
+// ---------------------------------------------------------------------
+
+function createResultsView(cfg) {
+  let results = {
+    columns: [], rows: [], numericColumns: [], displayColumns: [], idCol: null,
+    filters: {}, colorField: "", colorDirection: "higher", selectedRowId: null,
+  };
+  let csvSort = { col: null, dir: 1 };
+  let loadedPdbKey = null;
+  let colorMode = "chain"; // "chain" | "provenance"
+
+  function ingestCsv(csv) {
+    const { columns, rows, rowMeta } = csv;
+    const objRows = rows.map((r, i) => {
+      const obj = { __rowId: i };
+      columns.forEach((c, ci) => { obj[c] = r[ci]; });
+      if (rowMeta && rowMeta[i]) { obj.__jobLogPath = rowMeta[i].log; obj.__origRowId = rowMeta[i].origRowId; }
+      return obj;
+    });
+
+    const numericColumns = columns.filter((c) => {
+      const vals = objRows.map((r) => r[c]).filter((v) => v !== "" && v !== undefined && v !== null);
+      if (!vals.length) return false;
+      return vals.every((v) => !isNaN(parseFloat(v)) && isFinite(v));
+    });
+
+    const idCol = columns.includes("id") ? "id" : null;
+    const jobCol = columns.includes("job") ? "job" : null;
+    const pathCols = columns.filter((c) => PATH_COLUMNS.includes(c));
+    const rest = columns.filter((c) => c !== idCol && c !== jobCol && !pathCols.includes(c));
+    const displayColumns = [...(idCol ? [idCol] : []), ...(jobCol ? [jobCol] : []), ...rest, ...pathCols];
+
+    const prev = results;
+    results = {
+      columns, rows: objRows, numericColumns, displayColumns, idCol,
+      filters: prev.filters || {}, colorField: prev.colorField || "",
+      colorDirection: prev.colorDirection || "higher", selectedRowId: prev.selectedRowId,
+    };
+    // drop filters/colorField that no longer refer to a real numeric column
+    Object.keys(results.filters).forEach((c) => { if (!numericColumns.includes(c)) delete results.filters[c]; });
+    if (results.colorField && !numericColumns.includes(results.colorField)) results.colorField = "";
+  }
+
+  function getFilteredRows() {
+    const { rows, filters } = results;
+    const cols = Object.keys(filters);
+    if (!cols.length) return rows;
+    return rows.filter((r) => {
+      for (const col of cols) {
+        const f = filters[col];
+        if (f.min == null && f.max == null) continue;
+        const val = parseFloat(r[col]);
+        if (isNaN(val)) return false;
+        if (f.min != null && val < f.min) return false;
+        if (f.max != null && val > f.max) return false;
+      }
+      return true;
+    });
+  }
+
+  function computeColorScale(rows) {
+    const { colorField, colorDirection } = results;
+    if (!colorField) return null;
+    const vals = rows.map((r) => parseFloat(r[colorField])).filter((v) => !isNaN(v));
+    if (!vals.length) return null;
+    return { min: Math.min(...vals), max: Math.max(...vals), field: colorField, direction: colorDirection };
+  }
+
+  function colorForRow(row, scale) {
+    if (!scale) return null;
+    const val = parseFloat(row[scale.field]);
+    if (isNaN(val)) return null;
+    let t = scale.max === scale.min ? 1 : (val - scale.min) / (scale.max - scale.min);
+    if (scale.direction === "lower") t = 1 - t;
+    t = Math.max(0, Math.min(1, t));
+    const hue = t * 145; // 0 = red (worst) .. 145 = green (best)
+    // This background is deliberately dark regardless of theme (so the hue
+    // stays legible), so it needs a fixed light text color paired with it -
+    // the ambient theme text turns dark in light mode, which would be
+    // unreadable against it.
+    return { bg: `hsl(${hue}, 42%, 21%)`, accent: `hsl(${hue}, 70%, 52%)`, text: "#eef1f8" };
+  }
+
+  async function load() {
+    const listEl = qs(cfg.ids.list);
+    try {
+      const data = await cfg.fetchData();
+      if (!data.csv_exists) {
+        results.rows = [];
+        if (!data.final_pdbs.length) {
+          listEl.innerHTML = `<p class="muted">${cfg.emptyMessage}</p>`;
+        } else {
+          // Fallback (no csv yet, e.g. mid-scoring): plain filename list.
+          listEl.innerHTML = "";
+          data.final_pdbs.forEach((entry) => {
+            const label = entry.jobLabel ? `${entry.jobLabel} / ${entry.name}` : entry.name;
+            const div = document.createElement("div");
+            div.className = "list-item";
+            div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span>`;
+            div.addEventListener("click", async () => {
+              qsa(".list-item", listEl).forEach((i) => i.classList.remove("selected"));
+              div.classList.add("selected");
+              const url = `/api/final_pdb?log=${encodeURIComponent(entry.log)}&name=${encodeURIComponent(entry.name)}`;
+              const pdbText = await fetch(url).then((r) => r.text());
+              await renderMol(cfg.viewerSelector, pdbText);
+            });
+            listEl.appendChild(div);
+          });
+        }
+        qs(cfg.ids.alignContent).innerHTML = `<p class="muted">Not available yet.</p>`;
+        qs(cfg.ids.csvWrap).innerHTML = `<p class="muted">${cfg.emptyCsvMessage}</p>`;
+        qs(cfg.ids.count).textContent = "";
+        populateColorBySelect();
+        renderFiltersList();
+        return;
+      }
+      ingestCsv(data);
+      populateColorBySelect();
+      renderFiltersList();
       updateFiltersBadge();
-      renderResultsAll();
+      renderAll();
+    } catch (err) {
+      listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+    }
+  }
+
+  function renderAll() {
+    const total = results.rows.length;
+    const shown = getFilteredRows().length;
+    qs(cfg.ids.count).textContent = total ? `Showing ${shown} / ${total} model${total === 1 ? "" : "s"}` : "";
+    renderList();
+    renderAlignment();
+    renderCsvTableFn();
+  }
+
+  function renderList() {
+    const listEl = qs(cfg.ids.list);
+    if (!results.rows.length) return; // handled by load()'s fallback path
+    const rows = getFilteredRows();
+    if (!rows.length) {
+      listEl.innerHTML = `<p class="muted">No models match the current filters.</p>`;
+      return;
+    }
+    rerenderPreservingScroll(listEl, () => {
+      const scale = computeColorScale(rows);
+      listEl.innerHTML = "";
+      rows.forEach((row) => {
+        const label = row[results.idCol] || basename(row.model_path) || `row ${row.__rowId}`;
+        const div = document.createElement("div");
+        div.className = "list-item" + (results.selectedRowId === row.__rowId ? " selected" : "");
+        const color = colorForRow(row, scale);
+        if (color) {
+          div.style.background = color.bg;
+          div.style.borderLeftColor = color.accent;
+          div.style.color = color.text;
+        }
+        const jobTag = cfg.isMulti && row.job ? ` <span class="badge pending">${escapeHtml(row.job)}</span>` : "";
+        div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(String(label))}${jobTag}</span>`;
+        div.addEventListener("click", () => selectRow(row));
+        listEl.appendChild(div);
+      });
+      const current = rows.find((r) => r.__rowId === results.selectedRowId) || rows[0];
+      if (current) selectRow(current);
+    });
+  }
+
+  function renderSequencePanel() {
+    const el = qs(cfg.ids.seqContent);
+    const entry = viewerRegistry[cfg.viewerSelector];
+    if (!entry || !entry.component) {
+      el.innerHTML = "";
+      return;
+    }
+    const chains = buildStructureSequence(entry.component.structure);
+    el.innerHTML = renderSequenceResidues(chains);
+    setupSequencePanelInteraction(el, cfg.viewerSelector);
+  }
+
+  async function selectRow(row) {
+    results.selectedRowId = row.__rowId;
+    renderListSelectionOnly();
+    const pdbName = basename(row.model_path);
+    const rowLog = cfg.getLog(row);
+    // Same structure already showing - skip refetching so the viewer's
+    // camera (zoom/rotation) isn't reset on every poll tick. Keyed by job
+    // too, not just the pdb name - two different jobs can both have a
+    // model literally named "model_0.pdb".
+    const pdbKey = `${rowLog}|${pdbName}`;
+    if (loadedPdbKey === pdbKey) return;
+    loadedPdbKey = pdbKey;
+    if (!pdbName) return;
+    const url = `/api/final_pdb?log=${encodeURIComponent(rowLog)}&name=${encodeURIComponent(pdbName)}`;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error("pdb not found");
+      const pdbText = await res.text();
+      const stage = await renderMol(cfg.viewerSelector, pdbText);
+      if (colorMode === "provenance") {
+        await applyProvenanceColoring(cfg.viewerSelector, trbPathForResultRow(row), qs(cfg.ids.viewerLegend), rowLog);
+      }
+      // renderMol() returns null (without throwing) both on a genuine load
+      // failure and when a newer selection raced past this one, so only
+      // rebuild the sequence panel on an actual successful load -
+      // otherwise it could rebuild from a *previous* row's stale
+      // structure still sitting in the registry.
+      if (stage) renderSequencePanel(); else qs(cfg.ids.seqContent).innerHTML = "";
+    } catch (e) {
+      qs(cfg.viewerSelector).innerHTML = `<p class="muted" style="padding:20px">Could not load structure for this row.</p>`;
+      qs(cfg.ids.seqContent).innerHTML = "";
+    }
+  }
+
+  function renderListSelectionOnly() {
+    // Cheap re-render (list is not large) so the highlighted row + viewer stay in sync.
+    const rows = getFilteredRows();
+    const listEl = qs(cfg.ids.list);
+    qsa(".list-item", listEl).forEach((el, i) => {
+      const row = rows[i];
+      if (!row) return;
+      el.classList.toggle("selected", row.__rowId === results.selectedRowId);
+    });
+  }
+
+  function renderAlignment() {
+    const el = qs(cfg.ids.alignContent);
+    if (!results.rows.length) {
+      el.innerHTML = `<p class="muted">Not available yet.</p>`;
+      return;
+    }
+    const rows = getFilteredRows();
+    if (!rows.length) {
+      el.innerHTML = `<p class="muted">No models match the current filters.</p>`;
+      return;
+    }
+    if (!results.columns.includes("sequence")) {
+      el.innerHTML = `<p class="muted">final_output.csv has no "sequence" column.</p>`;
+      return;
+    }
+    const scale = computeColorScale(rows);
+
+    // Group by sequence length: unrelated designs won't be the same length,
+    // but this keeps each group's residues lined up in one shared scrollbar.
+    const groups = new Map();
+    rows.forEach((row) => {
+      const seq = row.sequence || "";
+      const key = seq.length;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(row);
+    });
+
+    const html = [...groups.keys()].sort((a, b) => b - a).map((len) => {
+      const groupRows = groups.get(len);
+      const alignRows = groupRows.map((row) => {
+        const color = colorForRow(row, scale);
+        let label = String(row[results.idCol] || basename(row.model_path) || `row ${row.__rowId}`);
+        if (cfg.isMulti && row.job) label = `${row.job} / ${label}`;
+        return { label, chains: String(row.sequence || "").split(":"), swatch: color ? color.accent : null };
+      });
+      return `<div class="backbone-block"><h4>${len} residues <span class="muted" style="font-size:12px;font-weight:400">(${groupRows.length} model${groupRows.length === 1 ? "" : "s"})</span></h4>${renderAlignmentBlock(alignRows)}</div>`;
+    }).join("");
+    el.innerHTML = html;
+  }
+
+  function renderCsvTableFn() {
+    const wrap = qs(cfg.ids.csvWrap);
+    if (!results.rows.length) {
+      wrap.innerHTML = `<p class="muted">Not available yet.</p>`;
+      return;
+    }
+    const rows = getFilteredRows();
+    if (!rows.length) {
+      wrap.innerHTML = `<p class="muted">No rows match the current filters.</p>`;
+      return;
+    }
+    const { displayColumns, idCol } = results;
+    const scale = computeColorScale(rows);
+
+    let sortedRows = rows;
+    const { col, dir } = csvSort;
+    if (col) {
+      sortedRows = [...rows].sort((a, b) => {
+        const av = a[col], bv = b[col];
+        const an = parseFloat(av), bn = parseFloat(bv);
+        let cmp;
+        if (!isNaN(an) && !isNaN(bn)) cmp = an - bn;
+        else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
+        return cmp * dir;
+      });
+    }
+
+    const thead = displayColumns.map((c) => {
+      const cls = c === idCol ? ' class="id-col"' : (PATH_COLUMNS.includes(c) ? ' class="path-col"' : "");
+      const arrow = col === c ? (dir === 1 ? " ▲" : " ▼") : "";
+      return `<th data-col="${escapeHtml(c)}"${cls}>${escapeHtml(c)}${arrow}</th>`;
+    }).join("");
+
+    const tbody = sortedRows.map((r, idx) => {
+      const color = colorForRow(r, scale);
+      const rowBg = color ? color.bg : (idx % 2 === 1 ? "var(--panel-2)" : "transparent");
+      const idCellBg = color ? color.bg : (idx % 2 === 1 ? "var(--panel-2)" : "var(--panel)");
+      // The row's own `color` (inherited by every <td>) is enough to fix
+      // text against the tint everywhere *except* .path-col, which sets its
+      // own `color: var(--muted)` in CSS - an inline style is needed there
+      // to actually win over that class rule.
+      const rowStyle = color ? `background:${rowBg};color:${color.text}` : `background:${rowBg}`;
+      const tds = displayColumns.map((c) => {
+        const isId = c === idCol;
+        const isPath = PATH_COLUMNS.includes(c);
+        const cls = isId ? ' class="id-col"' : (isPath ? ' class="path-col"' : "");
+        const style = isId ? ` style="background:${idCellBg}"` : (isPath && color ? ` style="color:${color.text}"` : "");
+        const val = r[c] ?? "";
+        return `<td${cls}${style} title="${escapeHtml(String(val))}">${escapeHtml(String(val))}</td>`;
+      }).join("");
+      return `<tr style="${rowStyle}" data-row-id="${r.__rowId}">${tds}</tr>`;
+    }).join("");
+
+    const wrapTop = wrap.scrollTop;
+    wrap.innerHTML = `<table class="data-table"><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table>`;
+    wrap.scrollTop = wrapTop;
+
+    qsa("th", wrap).forEach((th) => {
+      th.addEventListener("click", () => {
+        const c = th.dataset.col;
+        csvSort = { col: c, dir: csvSort.col === c ? -csvSort.dir : 1 };
+        renderCsvTableFn();
+      });
+    });
+    qsa("tbody tr", wrap).forEach((tr) => {
+      tr.addEventListener("click", () => {
+        const rid = parseInt(tr.dataset.rowId, 10);
+        const row = results.rows.find((r) => r.__rowId === rid);
+        if (row) selectRow(row);
+      });
+    });
+  }
+
+  // --- Color-by controls (D4) ---
+
+  function populateColorBySelect() {
+    const sel = qs(cfg.ids.colorByField);
+    const dirSel = qs(cfg.ids.colorByDirection);
+    const prev = results.colorField;
+    sel.innerHTML = `<option value="">None</option>` + results.numericColumns
+      .map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+    sel.value = results.numericColumns.includes(prev) ? prev : "";
+    results.colorField = sel.value;
+    dirSel.value = results.colorDirection;
+  }
+
+  // --- Filters panel (D3) ---
+
+  function initFiltersPanel() {
+    const panel = qs(cfg.ids.filtersPanel);
+    qs(cfg.ids.filtersBtn).addEventListener("click", (e) => {
+      e.stopPropagation();
+      panel.classList.toggle("hidden");
+    });
+    panel.addEventListener("click", (e) => e.stopPropagation());
+    document.addEventListener("click", () => panel.classList.add("hidden"));
+    qs(cfg.ids.clearFiltersBtn).addEventListener("click", () => {
+      results.filters = {};
+      renderFiltersList();
+      updateFiltersBadge();
+      renderAll();
+    });
+  }
+
+  function renderFiltersList() {
+    const el = qs(cfg.ids.filtersList);
+    const cols = results.numericColumns || [];
+    if (!cols.length) {
+      el.innerHTML = `<p class="muted" style="margin:0">No numeric columns found yet.</p>`;
+      return;
+    }
+    el.innerHTML = cols.map((c) => {
+      const f = results.filters[c] || {};
+      const active = f.min != null || f.max != null;
+      return `
+        <div class="filter-row${active ? " filter-active" : ""}">
+          <span class="filter-col-name" title="${escapeHtml(c)}">${escapeHtml(c)}</span>
+          <input type="number" class="filter-min" data-col="${escapeHtml(c)}" placeholder="min" value="${f.min ?? ""}">
+          <span class="filter-dash">–</span>
+          <input type="number" class="filter-max" data-col="${escapeHtml(c)}" placeholder="max" value="${f.max ?? ""}">
+        </div>`;
+    }).join("");
+    qsa(".filter-min, .filter-max", el).forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const col = inp.dataset.col;
+        const isMin = inp.classList.contains("filter-min");
+        const val = inp.value === "" ? null : parseFloat(inp.value);
+        const f = results.filters[col] || {};
+        if (isMin) f.min = val; else f.max = val;
+        if (f.min == null && f.max == null) delete results.filters[col];
+        else results.filters[col] = f;
+        inp.closest(".filter-row").classList.toggle("filter-active", f.min != null || f.max != null);
+        updateFiltersBadge();
+        renderAll();
+      });
+    });
+  }
+
+  function updateFiltersBadge() {
+    const n = Object.keys(results.filters).length;
+    const badge = qs(cfg.ids.filtersBadge);
+    badge.textContent = String(n);
+    badge.classList.toggle("hidden", n === 0);
+  }
+
+  // --- "Color structure by" (chain / RFdiffusion provenance) ---
+
+  function initModeDropdown() {
+    qs(cfg.ids.structColorMode).addEventListener("change", async (e) => {
+      colorMode = e.target.value;
+      const legendEl = qs(cfg.ids.viewerLegend);
+      const paletteWrap = qs(cfg.ids.chainPaletteWrap);
+      if (colorMode === "provenance") {
+        paletteWrap.classList.add("hidden");
+        const row = results.rows.find((r) => r.__rowId === results.selectedRowId);
+        await applyProvenanceColoring(cfg.viewerSelector, row ? trbPathForResultRow(row) : null, legendEl, row ? cfg.getLog(row) : undefined);
+      } else {
+        paletteWrap.classList.remove("hidden");
+        setCartoonColor(cfg.viewerSelector, chainColorScheme());
+        const entry = viewerRegistry[cfg.viewerSelector];
+        if (entry) { entry.colorMode = "chain"; entry.provenanceSchemeId = null; }
+        refreshChainLegendFor(cfg.viewerSelector);
+      }
+    });
+  }
+
+  // --- Export filtered (F) ---
+
+  // Rows are tagged with which job they came from (getLog) - for a
+  // multi-job export that means grouping by job and sending each job its
+  // own row indices, since a merged row's __rowId is an index into the
+  // *combined* list, not that job's own final_output.csv.
+  function groupRowsByJob(rows) {
+    const byJob = new Map();
+    rows.forEach((r) => {
+      const log = cfg.getLog(r);
+      if (!byJob.has(log)) byJob.set(log, []);
+      byJob.get(log).push(r.__origRowId);
+    });
+    return Array.from(byJob, ([log, row_ids]) => ({ log, row_ids }));
+  }
+
+  async function doExport() {
+    if (!results.rows.length) return;
+    const rows = getFilteredRows();
+    if (!rows.length) {
+      alert("No rows match the current filters — nothing to export.");
+      return;
+    }
+    const btn = qs(cfg.ids.exportBtn);
+    const originalText = btn.textContent;
+    btn.textContent = "Exporting…";
+    btn.disabled = true;
+    try {
+      const body = cfg.isMulti
+        ? { jobs: groupRowsByJob(rows) }
+        : { log: state.logPath, row_ids: rows.map((r) => r.__rowId) };
+      const res = await fetch(cfg.exportUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        let msg = res.statusText;
+        try { const j = await res.json(); msg = j.error || j.message || msg; } catch (e) {}
+        throw new Error(msg);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = cfg.exportFilename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert("Export failed: " + err.message);
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  }
+
+  function initExportButton() {
+    qs(cfg.ids.exportBtn).addEventListener("click", doExport);
+  }
+
+  function initColorByControls() {
+    qs(cfg.ids.colorByField).addEventListener("change", (e) => { results.colorField = e.target.value; renderAll(); });
+    qs(cfg.ids.colorByDirection).addEventListener("change", (e) => { results.colorDirection = e.target.value; renderAll(); });
+  }
+
+  function initAll() {
+    initFiltersPanel();
+    initModeDropdown();
+    initColorByControls();
+    initExportButton();
+  }
+
+  function reset() {
+    results = {
+      columns: [], rows: [], numericColumns: [], displayColumns: [], idCol: null,
+      filters: {}, colorField: "", colorDirection: "higher", selectedRowId: null,
+    };
+    csvSort = { col: null, dir: 1 };
+    loadedPdbKey = null;
+    colorMode = "chain";
+  }
+
+  return { load, renderAll, selectRow, initAll, reset };
+}
+
+// Single-job fetch: what the per-job Results tab's createResultsView()
+// instance uses to load its data (its own job's /api/results +
+// /api/final_csv, no merging needed).
+async function fetchSingleJobResults() {
+  const res = await apiGet("/api/results");
+  if (!res.csv_exists) {
+    return { csv_exists: false, final_pdbs: (res.final_pdbs || []).map((name) => ({ name, log: state.logPath })) };
+  }
+  const csv = await apiGet("/api/final_csv");
+  return { csv_exists: true, columns: csv.columns, rows: csv.rows };
+}
+
+// Multi-job fetch: fetches every tracked job's results in parallel and
+// merges them into one table - a synthetic leading "job" column (each
+// job's short label, see jobLabel()) plus the union of every job's own
+// columns, so jobs with different metric sets (e.g. different task
+// types) still combine into one sensible table rather than erroring or
+// silently dropping columns. rowMeta keeps each merged row's original
+// job + row index around (read by ingestCsv() above) since that's needed
+// to resolve a row back to the right job's own API/export calls.
+async function fetchAllJobsResults() {
+  const jobs = state.jobs.slice();
+  const perJob = await Promise.all(jobs.map(async (log) => {
+    try {
+      const res = await apiGet("/api/results", { log });
+      if (!res.csv_exists) return { log, csv_exists: false, final_pdbs: res.final_pdbs || [] };
+      const csv = await apiGet("/api/final_csv", { log });
+      return { log, csv_exists: true, columns: csv.columns, rows: csv.rows };
+    } catch (e) {
+      return { log, csv_exists: false, final_pdbs: [] };
+    }
+  }));
+
+  const withCsv = perJob.filter((j) => j.csv_exists);
+  if (!withCsv.length) {
+    return {
+      csv_exists: false,
+      final_pdbs: perJob.flatMap((j) => (j.final_pdbs || []).map((name) => ({ name, log: j.log, jobLabel: jobLabel(j.log) }))),
+    };
+  }
+
+  const unionColumns = [];
+  withCsv.forEach((j) => j.columns.forEach((c) => { if (!unionColumns.includes(c)) unionColumns.push(c); }));
+  const columns = ["job", ...unionColumns];
+  const rows = [];
+  const rowMeta = [];
+  withCsv.forEach((j) => {
+    const colIndex = {};
+    j.columns.forEach((c, i) => { colIndex[c] = i; });
+    j.rows.forEach((r, origIdx) => {
+      const row = [jobLabel(j.log)];
+      unionColumns.forEach((c) => { row.push(c in colIndex ? (r[colIndex[c]] ?? "") : ""); });
+      rows.push(row);
+      rowMeta.push({ log: j.log, origRowId: origIdx });
     });
   });
+  return { csv_exists: true, columns, rows, rowMeta };
 }
 
-function updateFiltersBadge() {
-  const n = Object.keys(state.results.filters).length;
-  const badge = qs("#filtersBadge");
-  badge.textContent = String(n);
-  badge.classList.toggle("hidden", n === 0);
-}
+const resultsView = createResultsView({
+  ids: {
+    list: "#finalPdbsList", viewer: "#resultViewer", viewerLegend: "#resultsColorLegend",
+    seqContent: "#resultsSequenceContent", csvWrap: "#csvTableWrap", alignContent: "#resultsAlignContent",
+    count: "#resultsCount", colorByField: "#colorByField", colorByDirection: "#colorByDirection",
+    filtersBtn: "#filtersBtn", filtersPanel: "#filtersPanel", filtersList: "#filtersList",
+    filtersBadge: "#filtersBadge", clearFiltersBtn: "#clearFiltersBtn", exportBtn: "#exportFilteredBtn",
+    structColorMode: "#resultsStructColorMode", chainPaletteWrap: "#resultsChainPaletteWrap",
+  },
+  viewerSelector: "#resultViewer",
+  isMulti: false,
+  getLog: () => state.logPath,
+  fetchData: fetchSingleJobResults,
+  exportUrl: "/api/export_filtered",
+  exportFilename: "prosculpt_filtered_export.zip",
+  emptyMessage: "No final models yet — this appears once final_operations completes.",
+  emptyCsvMessage: "Not available yet — created once final_operations finishes.",
+});
 
-// --- Viewer color controls (background / chain palette selects) ---
-// Each structure-viewing tab (Backbones, Models, Results) has its own copy
-// of the background and chain-palette selects, but they all drive the
-// same global `viewerSettings` - one delegated listener handles every
-// copy via a shared class, and syncColorControlSelects() keeps whichever
-// ones aren't currently visible in sync so they don't show a stale value
-// when their tab is switched back to.
-
-function syncColorControlSelects() {
-  qsa(".bg-color-select").forEach((el) => { el.value = viewerSettings.background; });
-  qsa(".chain-palette-select").forEach((el) => { el.value = viewerSettings.chainPalette; });
-}
-
-function initColorControls() {
-  syncColorControlSelects();
-  document.addEventListener("change", (e) => {
-    if (e.target.matches(".bg-color-select")) {
-      viewerSettings.background = e.target.value;
-      saveViewerSettings();
-      syncColorControlSelects();
-      applyBackgroundSetting();
-    } else if (e.target.matches(".chain-palette-select")) {
-      viewerSettings.chainPalette = e.target.value;
-      saveViewerSettings();
-      syncColorControlSelects();
-      applyChainPaletteSetting();
-    }
-  });
-}
-
-// --- Export filtered (F) ---
-
-async function exportFiltered() {
-  if (!state.results.rows.length) return;
-  const rows = getFilteredRows();
-  if (!rows.length) {
-    alert("No rows match the current filters — nothing to export.");
-    return;
-  }
-  const btn = qs("#exportFilteredBtn");
-  const originalText = btn.textContent;
-  btn.textContent = "Exporting…";
-  btn.disabled = true;
-  try {
-    const res = await fetch("/api/export_filtered", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ log: state.logPath, row_ids: rows.map((r) => r.__rowId) }),
-    });
-    if (!res.ok) {
-      let msg = res.statusText;
-      try { const j = await res.json(); msg = j.error || j.message || msg; } catch (e) {}
-      throw new Error(msg);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "prosculpt_filtered_export.zip";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-  } catch (err) {
-    alert("Export failed: " + err.message);
-  } finally {
-    btn.textContent = originalText;
-    btn.disabled = false;
-  }
-}
+const allResultsView = createResultsView({
+  ids: {
+    list: "#allFinalPdbsList", viewer: "#allResultViewer", viewerLegend: "#allResultsColorLegend",
+    seqContent: "#allResultsSequenceContent", csvWrap: "#allCsvTableWrap", alignContent: "#allResultsAlignContent",
+    count: "#allResultsCount", colorByField: "#allColorByField", colorByDirection: "#allColorByDirection",
+    filtersBtn: "#allFiltersBtn", filtersPanel: "#allFiltersPanel", filtersList: "#allFiltersList",
+    filtersBadge: "#allFiltersBadge", clearFiltersBtn: "#allClearFiltersBtn", exportBtn: "#allExportFilteredBtn",
+    structColorMode: "#allResultsStructColorMode", chainPaletteWrap: "#allResultsChainPaletteWrap",
+  },
+  viewerSelector: "#allResultViewer",
+  isMulti: true,
+  getLog: (row) => row.__jobLogPath,
+  fetchData: fetchAllJobsResults,
+  exportUrl: "/api/export_filtered_multi",
+  exportFilename: "prosculpt_all_jobs_filtered_export.zip",
+  emptyMessage: "No final models yet across any tracked job.",
+  emptyCsvMessage: "Not available yet.",
+});
 
 // ---------------------------------------------------------------------
 // Init
@@ -1821,10 +2679,13 @@ async function exportFiltered() {
 document.addEventListener("DOMContentLoaded", () => {
   initTheme();
   loadViewerSettings();
+  loadJobsFromStorage();
   initColorControls();
   initTopbar();
+  initJobTabsBar();
   initTabs();
-  initFiltersPanel();
+  resultsView.initAll();
+  allResultsView.initAll();
   qs("#modelsFilter").addEventListener("input", renderModelsList);
   qs("#showFilteredToggle").addEventListener("change", (e) => {
     state.showFilteredBackbones = e.target.checked;
@@ -1846,35 +2707,35 @@ document.addEventListener("DOMContentLoaded", () => {
       refreshChainLegendFor("#backboneViewer");
     }
   });
-  qs("#resultsStructColorMode").addEventListener("change", async (e) => {
-    state.resultsColorMode = e.target.value;
-    const legendEl = qs("#resultsColorLegend");
-    const paletteWrap = qs("#resultsChainPaletteWrap");
-    if (state.resultsColorMode === "provenance") {
+  qs("#modelColorMode").addEventListener("change", async (e) => {
+    state.modelsColorMode = e.target.value;
+    const legendEl = qs("#modelColorLegend");
+    const paletteWrap = qs("#modelChainPaletteWrap");
+    if (state.modelsColorMode === "provenance") {
       paletteWrap.classList.add("hidden");
-      const row = (state.results.rows || []).find((r) => r.__rowId === state.results.selectedRowId);
-      await applyProvenanceColoring("#resultViewer", row ? trbPathForResultRow(row) : null, legendEl);
+      const m = (state.modelsCache || []).find((x) => modelKey(x) === state.selectedModelKey);
+      await applyProvenanceColoring("#modelViewer", m ? m.trb_path : null, legendEl);
     } else {
       paletteWrap.classList.remove("hidden");
-      setCartoonColor("#resultViewer", chainColorScheme());
-      const entry = viewerRegistry["#resultViewer"];
+      setCartoonColor("#modelViewer", chainColorScheme());
+      const entry = viewerRegistry["#modelViewer"];
       if (entry) { entry.colorMode = "chain"; entry.provenanceSchemeId = null; }
-      refreshChainLegendFor("#resultViewer");
+      refreshChainLegendFor("#modelViewer");
     }
   });
   qs("#conservationToggle").addEventListener("change", renderSequencesContent);
   qs("#conservationThreshold").addEventListener("input", () => {
     if (qs("#conservationToggle").checked) renderSequencesContent();
   });
-  qs("#colorByField").addEventListener("change", (e) => {
-    state.results.colorField = e.target.value;
-    renderResultsAll();
-  });
-  qs("#colorByDirection").addEventListener("change", (e) => {
-    state.results.colorDirection = e.target.value;
-    renderResultsAll();
-  });
-  qs("#exportFilteredBtn").addEventListener("click", exportFiltered);
-  if (state.logPath) refreshAll(true);
-  startPolling();
+
+  startJobStatusPolling();
+  if (state.logPath && state.jobs.includes(state.logPath)) {
+    showTopView("job");
+    refreshAll(true);
+    startPolling();
+  } else if (state.jobs.length) {
+    showTopView("all-overview");
+  } else {
+    renderJobTabsBar();
+  }
 });

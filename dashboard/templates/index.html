@@ -12,8 +12,8 @@
 <header class="topbar">
   <div class="brand">🧬 Prosculpt Dashboard</div>
   <div class="log-picker">
-    <input id="logPathInput" type="text" placeholder="/path/to/your/run.out or run.log" />
-    <button id="loadBtn">Load</button>
+    <textarea id="logPathInput" rows="1" placeholder="/path/to/run.out (paste several, one per line, to add them all at once)"></textarea>
+    <button id="loadBtn">Add job</button>
     <button id="browseBtn" title="Browse filesystem">Browse…</button>
     <span id="autoRefreshLabel">
       <label><input type="checkbox" id="autoRefreshToggle" checked> auto-refresh</label>
@@ -23,6 +23,113 @@
   </div>
 </header>
 
+<!-- Top-level selector: the two "all jobs" tabs plus one chip per tracked
+     job. Picking a chip shows that job's own tab bar (below); picking
+     either "all jobs" tab shows an aggregate view instead - see
+     switchTopView() in app.js. -->
+<nav class="job-tabs" id="jobTabsBar">
+  <button class="job-tab-btn special" data-top="all-overview">All jobs overview</button>
+  <button class="job-tab-btn special" data-top="all-results">All jobs results</button>
+  <div id="jobChips" class="job-chips"></div>
+</nav>
+
+<main>
+<section id="tab-all-overview" class="hidden">
+  <div id="allOverviewList"><p class="muted">Add a job above to get started.</p></div>
+</section>
+
+<section id="tab-all-results" class="hidden">
+  <div class="card" id="allResultsToolbar">
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <button id="allFiltersBtn" class="secondary">🔧 Filters <span id="allFiltersBadge" class="filters-badge hidden">0</span></button>
+        <div id="allFiltersPanel" class="filters-panel hidden">
+          <div class="filters-panel-header">
+            <b>Filter by column value</b>
+            <button id="allClearFiltersBtn" class="secondary small">Clear all</button>
+          </div>
+          <div id="allFiltersList" class="filters-list"></div>
+        </div>
+      </div>
+      <div class="toolbar-group">
+        <label class="toolbar-label" for="allColorByField">Color list by</label>
+        <select id="allColorByField"><option value="">None</option></select>
+        <select id="allColorByDirection">
+          <option value="higher">Higher = better</option>
+          <option value="lower">Lower = better</option>
+        </select>
+      </div>
+      <div class="toolbar-group">
+        <button id="allExportFilteredBtn" class="secondary">⬇ Export filtered (.zip)</button>
+      </div>
+      <div class="toolbar-group" id="allResultsCountWrap">
+        <span class="muted" id="allResultsCount"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="split-view">
+    <div class="list-pane">
+      <div id="allFinalPdbsList"><p class="muted">Add a job above to get started.</p></div>
+    </div>
+    <div class="viewer-pane">
+      <div class="viewer-color-toolbar">
+        <div class="viewer-color-row">
+          <label class="toolbar-label" for="allResultsStructColorMode">Color structure by</label>
+          <select id="allResultsStructColorMode">
+            <option value="chain">Chain</option>
+            <option value="provenance">RFdiffusion provenance</option>
+          </select>
+          <span id="allResultsChainPaletteWrap" class="chain-palette-wrap">
+            <label class="toolbar-label" for="allResultsChainPaletteSelect">Palette</label>
+            <select id="allResultsChainPaletteSelect" class="chain-palette-select">
+              <option value="vivid">Vivid</option>
+              <option value="pastel">Pastel</option>
+              <option value="cvd">Colorblind-safe</option>
+              <option value="bright">Bright</option>
+              <option value="sunset">Sunset</option>
+              <option value="ocean">Ocean</option>
+              <option value="custom" disabled>Custom</option>
+            </select>
+          </span>
+          <span class="bg-color-wrap">
+            <label class="toolbar-label" for="allResultsBgColorSelect">Background</label>
+            <select id="allResultsBgColorSelect" class="bg-color-select">
+              <option value="black">Black</option>
+              <option value="navy">Dark navy</option>
+              <option value="white">White</option>
+              <option value="light">Light gray</option>
+            </select>
+          </span>
+        </div>
+        <div class="viewer-color-row">
+          <div id="allResultsColorLegend" class="color-legend hidden"></div>
+          <div class="sidechain-mode-group">
+            <span class="toolbar-label">Show sidechains:</span>
+            <label class="sidechain-mode-option"><input type="radio" name="allResultsSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+            <label class="sidechain-mode-option"><input type="radio" name="allResultsSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+            <label class="sidechain-mode-option"><input type="radio" name="allResultsSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+          </div>
+        </div>
+      </div>
+      <div id="allResultViewer" class="mol-viewer"></div>
+      <div id="allResultsSequenceContent" class="seq-panel"></div>
+    </div>
+  </div>
+
+  <div class="card" id="allCsvCard">
+    <h3>Metrics</h3>
+    <div id="allCsvTableWrap"><p class="muted">Add a job above to get started.</p></div>
+  </div>
+
+  <div class="card" id="allResultsAlignCard">
+    <h3>Sequence alignment</h3>
+    <div id="allResultsAlignContent"><p class="muted">Not available yet.</p></div>
+  </div>
+</section>
+
+<div id="jobView">
+<div id="activeJobBanner" class="active-job-banner hidden"></div>
 <nav class="tabs">
   <button class="tab-btn active" data-tab="overview">Overview</button>
   <button class="tab-btn" data-tab="backbones">Backbones</button>
@@ -33,7 +140,6 @@
   <button class="tab-btn" data-tab="outputlog">Output log</button>
 </nav>
 
-<main>
   <section id="tab-overview" class="tab-panel active">
     <div id="errorBanner" class="error-banner hidden"></div>
     <div id="crashBanner" class="alert-banner hidden"></div>
@@ -42,7 +148,7 @@
     <div class="card stage-card" id="stageCard"></div>
 
     <div class="card" id="overviewCard">
-      <p class="muted">Enter the path to a Prosculpt log file above and click <b>Load</b> to get started.</p>
+      <p class="muted">Enter the path to a Prosculpt log file above and click <b>Add job</b> to get started.</p>
     </div>
 
     <div class="card hidden" id="timingCard">
@@ -70,6 +176,18 @@
               <option value="chain">Chain</option>
               <option value="provenance">RFdiffusion provenance</option>
             </select>
+            <span id="backboneChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="backboneChainPaletteSelect">Palette</label>
+              <select id="backboneChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+                <option value="bright">Bright</option>
+                <option value="sunset">Sunset</option>
+                <option value="ocean">Ocean</option>
+                <option value="custom" disabled>Custom</option>
+              </select>
+            </span>
             <span class="bg-color-wrap">
               <label class="toolbar-label" for="backboneBgColorSelect">Background</label>
               <select id="backboneBgColorSelect" class="bg-color-select">
@@ -81,15 +199,13 @@
             </span>
           </div>
           <div class="viewer-color-row">
-            <span id="backboneChainPaletteWrap" class="chain-palette-wrap">
-              <label class="toolbar-label" for="backboneChainPaletteSelect">Chain colors</label>
-              <select id="backboneChainPaletteSelect" class="chain-palette-select">
-                <option value="vivid">Vivid</option>
-                <option value="pastel">Pastel</option>
-                <option value="cvd">Colorblind-safe</option>
-              </select>
-            </span>
             <div id="backboneColorLegend" class="color-legend hidden"></div>
+            <div class="sidechain-mode-group">
+              <span class="toolbar-label">Show sidechains:</span>
+              <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+              <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+              <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+            </div>
           </div>
         </div>
         <div id="backboneViewer" class="mol-viewer"></div>
@@ -116,15 +232,23 @@
       <div class="viewer-pane">
         <div class="viewer-color-toolbar">
           <div class="viewer-color-row">
-            <span class="chain-palette-wrap">
-              <label class="toolbar-label" for="modelChainPaletteSelect">Chain colors</label>
+            <label class="toolbar-label" for="modelColorMode">Color residues by</label>
+            <select id="modelColorMode">
+              <option value="chain">Chain</option>
+              <option value="provenance">RFdiffusion provenance</option>
+            </select>
+            <span id="modelChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="modelChainPaletteSelect">Palette</label>
               <select id="modelChainPaletteSelect" class="chain-palette-select">
                 <option value="vivid">Vivid</option>
                 <option value="pastel">Pastel</option>
                 <option value="cvd">Colorblind-safe</option>
+                <option value="bright">Bright</option>
+                <option value="sunset">Sunset</option>
+                <option value="ocean">Ocean</option>
+                <option value="custom" disabled>Custom</option>
               </select>
             </span>
-            <div id="modelColorLegend" class="color-legend hidden"></div>
             <span class="bg-color-wrap">
               <label class="toolbar-label" for="modelBgColorSelect">Background</label>
               <select id="modelBgColorSelect" class="bg-color-select">
@@ -135,8 +259,18 @@
               </select>
             </span>
           </div>
+          <div class="viewer-color-row">
+            <div id="modelColorLegend" class="color-legend hidden"></div>
+            <div class="sidechain-mode-group">
+              <span class="toolbar-label">Show sidechains:</span>
+              <label class="sidechain-mode-option"><input type="radio" name="modelSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+              <label class="sidechain-mode-option"><input type="radio" name="modelSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+              <label class="sidechain-mode-option"><input type="radio" name="modelSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+            </div>
+          </div>
         </div>
         <div id="modelViewer" class="mol-viewer"></div>
+        <div id="modelsSequenceContent" class="seq-panel"></div>
         <div id="modelViewerLabel" class="viewer-label"></div>
         <div id="modelMetrics" class="metrics-table"></div>
       </div>
@@ -185,6 +319,18 @@
               <option value="chain">Chain</option>
               <option value="provenance">RFdiffusion provenance</option>
             </select>
+            <span id="resultsChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="resultsChainPaletteSelect">Palette</label>
+              <select id="resultsChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+                <option value="bright">Bright</option>
+                <option value="sunset">Sunset</option>
+                <option value="ocean">Ocean</option>
+                <option value="custom" disabled>Custom</option>
+              </select>
+            </span>
             <span class="bg-color-wrap">
               <label class="toolbar-label" for="resultsBgColorSelect">Background</label>
               <select id="resultsBgColorSelect" class="bg-color-select">
@@ -196,35 +342,35 @@
             </span>
           </div>
           <div class="viewer-color-row">
-            <span id="resultsChainPaletteWrap" class="chain-palette-wrap">
-              <label class="toolbar-label" for="resultsChainPaletteSelect">Chain colors</label>
-              <select id="resultsChainPaletteSelect" class="chain-palette-select">
-                <option value="vivid">Vivid</option>
-                <option value="pastel">Pastel</option>
-                <option value="cvd">Colorblind-safe</option>
-              </select>
-            </span>
             <div id="resultsColorLegend" class="color-legend hidden"></div>
+            <div class="sidechain-mode-group">
+              <span class="toolbar-label">Show sidechains:</span>
+              <label class="sidechain-mode-option"><input type="radio" name="resultsSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+              <label class="sidechain-mode-option"><input type="radio" name="resultsSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+              <label class="sidechain-mode-option"><input type="radio" name="resultsSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+            </div>
           </div>
         </div>
         <div id="resultViewer" class="mol-viewer"></div>
+        <div id="resultsSequenceContent" class="seq-panel"></div>
       </div>
+    </div>
+
+    <div class="card" id="csvCard">
+      <h3>Metrics</h3>
+      <div id="csvTableWrap"><p class="muted">Not available yet.</p></div>
     </div>
 
     <div class="card" id="resultsAlignCard">
       <h3>Sequence alignment</h3>
       <div id="resultsAlignContent"><p class="muted">Not available yet.</p></div>
     </div>
-
-    <div class="card" id="csvCard">
-      <h3>final_output.csv</h3>
-      <div id="csvTableWrap"><p class="muted">Not available yet.</p></div>
-    </div>
   </section>
 
   <section id="tab-outputlog" class="tab-panel">
     <div id="outputLogContent"><p class="muted">Load a job first.</p></div>
   </section>
+</div>
 </main>
 
 <div id="browseModal" class="modal hidden">
@@ -234,6 +380,10 @@
       <button id="browseCloseBtn">✕</button>
     </div>
     <div id="browseEntries" class="browse-entries"></div>
+    <div class="modal-footer">
+      <span id="browseSelectedCount" class="muted"></span>
+      <button id="browseAddSelectedBtn" class="secondary" disabled>Add selected jobs</button>
+    </div>
   </div>
 </div>
 

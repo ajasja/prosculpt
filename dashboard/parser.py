@@ -876,10 +876,23 @@ def list_models(output_dir: str, model_monomer: bool = False) -> list[dict]:
     if not os.path.isdir(models_dir):
         return out
 
+    # "model_N" (the 3_models/ subdirectory a row comes from) always
+    # traces back to RFdiffusion's "_N.pdb"/"_N.trb" in 1_rfdiff/ - same
+    # index, regardless of which sequence/sample/monomer-vs-complex
+    # variant the row itself is, so the Models tab's viewer can offer the
+    # same RFdiffusion-provenance coloring the Backbones/Results tabs do.
+    def _trb_path_for_model(model_x: str) -> Optional[str]:
+        m = re.match(r"model_(\d+)$", model_x)
+        if not m:
+            return None
+        candidate = os.path.join(output_dir, "1_rfdiff", f"_{m.group(1)}.trb")
+        return candidate if os.path.isfile(candidate) else None
+
     for model_x in sorted(os.listdir(models_dir), key=_natural_key):
         model_x_path = os.path.join(models_dir, model_x)
         if not os.path.isdir(model_x_path):
             continue
+        trb_path = _trb_path_for_model(model_x)
 
         for root, dirs, files in os.walk(model_x_path):
             dirs[:] = [d for d in dirs if d not in _SKIP_DIR_NAMES and not _SEED_SAMPLE_DIR_RE.match(d)]
@@ -909,6 +922,7 @@ def list_models(output_dir: str, model_monomer: bool = False) -> list[dict]:
                         "structure_path": structure_path,
                         "structure_format": structure_format,
                         "confidence_path": conf_path,
+                        "trb_path": trb_path,
                     }
                 )
 

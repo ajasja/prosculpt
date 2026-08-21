@@ -101,9 +101,16 @@ body {
   min-width: 320px;
 }
 
-.log-picker input[type="text"] {
+/* A <textarea> rather than <input type="text"> - a single-line text
+   input cannot hold an actual newline character even via paste, and
+   pasting several log paths at once (one per line) needs that. Styled
+   to look and behave like a single-line input regardless (fixed height,
+   no resize handle, no wrapping - a long/multi-line value just scrolls
+   horizontally like the old input did). */
+#logPathInput {
   flex: 1;
   min-width: 200px;
+  height: 34px;
   padding: 8px 10px;
   background: var(--panel-2);
   border: 1px solid var(--border);
@@ -111,6 +118,10 @@ body {
   border-radius: var(--radius);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12.5px;
+  resize: none;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 button {
@@ -143,6 +154,13 @@ button.small { padding: 4px 9px; font-size: 11.5px; }
   padding: 10px 20px 0;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
+  /* This nav now sits inside <main> (needed so the two "All jobs ..."
+     sections can share main's padding too - see #jobView in
+     index.html), so main's own top padding lands above the nav instead
+     of between the nav and whichever tab's content follows it. Without
+     this, every tab's content sits flush against the nav's bottom
+     border. */
+  margin-bottom: 20px;
 }
 
 .tab-btn {
@@ -168,6 +186,75 @@ button.small { padding: 4px 9px; font-size: 11.5px; }
 .tab-btn#errorTabBtn.alert { color: var(--danger); }
 .tab-btn#errorTabBtn.alert.active { border-bottom-color: var(--danger); }
 .tab-btn#errorTabBtn.alert::before { content: "⚠ "; }
+
+/* Top-level selector (multi-job tracking): the two "All jobs ..." tabs
+   plus one chip per tracked job, one level above the per-job .tabs bar
+   underneath it. Styled as pill buttons rather than underlined tabs so
+   the two navigation levels read as distinct rather than a continuation
+   of one flat tab strip. */
+.job-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.job-tab-btn, .job-chip {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.job-tab-btn.active, .job-chip.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.job-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+/* Small status dot on each job chip - color mirrors the job's current
+   stage/terminal state, same palette as elsewhere (accent-2 for a good
+   terminal state, danger for crashed/cancelled, accent for still running). */
+.job-chip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--muted); }
+.job-chip-dot.running { background: var(--accent); }
+.job-chip-dot.finished { background: var(--accent-2); }
+.job-chip-dot.crashed, .job-chip-dot.cancelled { background: var(--danger); }
+.job-chip-remove {
+  opacity: 0.6;
+  padding: 0 3px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.job-chip-remove:hover { opacity: 1; background: rgba(0, 0, 0, 0.15); }
+.job-chip.active .job-chip-remove:hover { background: rgba(255, 255, 255, 0.25); }
+
+/* Shown just above the per-job tab bar whenever a specific job (as
+   opposed to one of the "All jobs ..." tabs) is the active view - so
+   it's never ambiguous which job's Backbones/Models/Results/etc a
+   screen belongs to once more than one job is being tracked. */
+.active-job-banner {
+  padding: 8px 20px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.active-job-banner b { color: var(--text); }
 
 main { padding: 20px; }
 
@@ -371,31 +458,70 @@ main { padding: 20px; }
   padding: 12px;
   display: flex;
   flex-direction: column;
+  /* Grid items default to min-width: auto, which lets a child's real
+     intrinsic content size force the grid track wider than intended -
+     .split-view's second column is "1fr", but NGL's <canvas> inside here
+     has genuine pixel width/height (not just CSS sizing), so without
+     this it can push the column wider. That's only latent until the
+     .mol-viewer resize handle below is in the picture: dragging it
+     resizes the canvas via ensureResizeObserver() in app.js, which
+     re-measures the container - and without min-width: 0 breaking the
+     loop, "canvas pushes column wider" -> "wider column measured as the
+     container's new size" -> "canvas set even wider" runs away call
+     after call. */
+  min-width: 0;
 }
 .mol-viewer {
-  flex: 1;
+  /* Not "flex: 1" (= flex-grow:1 flex-shrink:1 flex-basis:0%) - a
+     flex-basis of 0% makes the flex algorithm own the item's height
+     outright and ignore any explicit height entirely, which is exactly
+     what the resize handle below needs to set on drag. flex-basis:auto
+     defers to height instead (falling back to min-height/natural size
+     when none is set), so a drag actually sticks. */
+  flex: 0 1 auto;
   min-height: 460px;
   background: var(--surface-deep);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   position: relative;
+  /* Native drag-to-resize handle in the bottom-right corner. Vertical
+     only - letting the viewer grow wider than its flex column would push
+     against the list-pane next to it, which is a much easier way to end
+     up with an awkward layout than a taller viewer ever is. `overflow`
+     has to be something other than the default `visible` for `resize` to
+     take effect at all; NGL's canvas already fills the container via its
+     own CSS regardless, so nothing is actually being clipped here - see
+     ensureResizeObserver() in app.js for the other half of this (telling
+     NGL to actually re-fit its canvas after a drag, which it doesn't do
+     on its own unless the browser *window* itself resizes). */
+  resize: vertical;
+  overflow: hidden;
 }
 .viewer-label { margin-top: 8px; color: var(--muted); font-size: 12.5px; }
 
-/* Color controls above a structure viewer (Backbones, Models, Results):
-   a "color by" mode select where that tab has one, the background select
-   (always shown, pushed to the far right via .bg-color-wrap's
-   margin-left: auto), and a second row with the chain-palette select
-   (chain mode only) and a legend - either the current chain-to-color
-   mapping, or, in RFdiffusion provenance mode, editable swatches for each
-   residue category. */
+/* Color controls above a structure viewer (Backbones, Models, Results,
+   All jobs results): row 1 has a "color by" mode select where that tab
+   has one, the chain-palette select (chain mode only), and the
+   background select (always shown, pushed to the far right via
+   .bg-color-wrap's margin-left: auto); row 2 has the legend - either the
+   current chain-to-color mapping or, in RFdiffusion provenance mode,
+   editable swatches for each residue category, both using
+   .legend-color-input so every swatch (chain or provenance) is itself a
+   color picker - and the "Show sidechains" radio group, pushed right the
+   same way as the background select above it via .sidechain-mode-group's
+   own margin-left: auto (one flex item, not two - two separate
+   auto-margin siblings sharing one flex line can behave unpredictably
+   once the row is narrow enough to wrap, which is what briefly made one
+   of them seem to vanish before this became a single group). */
 .viewer-color-toolbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 .viewer-color-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .bg-color-wrap, .chain-palette-wrap { display: flex; align-items: center; gap: 8px; }
-.bg-color-wrap { margin-left: auto; }
+.bg-color-wrap, .sidechain-mode-group { margin-left: auto; }
+.sidechain-mode-group { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+.sidechain-mode-option { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+.sidechain-mode-radio { cursor: pointer; }
 .color-legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
 .legend-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
-.legend-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
 .legend-color-input {
   width: 16px;
   height: 16px;
@@ -491,6 +617,39 @@ main { padding: 20px; }
 .metrics-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
 .metrics-table td:first-child { color: var(--muted); }
 
+/* Results tab's interactive sequence panel - built from the currently
+   loaded structure itself (see buildStructureSequence() in app.js), not
+   a separate fetch, so residue numbers always match what's on screen.
+   :empty hides the wrapper before any row is selected. */
+.seq-panel { margin-top: 10px; }
+.seq-panel:empty { display: none; }
+.seq-chain { margin-bottom: 8px; }
+.seq-chain:last-child { margin-bottom: 0; }
+.seq-chain-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.seq-residues {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.seq-residue {
+  display: inline-block;
+  width: 1.6ch;
+  text-align: center;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none; /* dragging selects residues, not the browser's own text selection */
+}
+.seq-residue:hover { outline: 1px solid var(--text-on-deep); }
+/* The "outline" the user asked for on multi-selected residues - kept
+   visually distinct from the single-residue highlight's licorice/element
+   coloring in the 3D view, so the two selection modes don't look like
+   the same thing. */
+.seq-residue.selected { outline: 2px solid #ffd60a; outline-offset: -1px; }
+
 /* Sequences / alignment viewer (shared between Sequences tab and Results tab) */
 .backbone-block {
   background: var(--panel);
@@ -507,8 +666,15 @@ main { padding: 20px; }
 }
 .backbone-block h4 { margin: 0 0 10px; display: flex; gap: 10px; align-items: center; }
 
+/* Each row (ruler included) gets a fixed height so ALIGN_VISIBLE_ROWS in
+   app.js and this max-height agree exactly on "5 rows visible" - if row
+   height were left to font metrics, rounding could show a sliver of a
+   6th row before the scrollbar kicks in. Beyond that, overflow-y scrolls
+   vertically (the ruler stays pinned via its own position:sticky). */
 .align-scroll {
   overflow-x: auto;
+  overflow-y: auto;
+  max-height: 156px; /* 1 ruler row + 5 sequence rows at 26px each */
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface-deep);
@@ -520,8 +686,12 @@ main { padding: 20px; }
   color: var(--muted-on-deep);
   border-bottom: 1px solid var(--border);
   padding: 3px 0;
+  height: 26px;
+  box-sizing: border-box;
   position: sticky;
   top: 0;
+  background: var(--surface-deep);
+  z-index: 3;
 }
 .align-ruler .align-label { flex-shrink: 0; }
 .align-ruler .tick { display: inline-block; width: 1ch; white-space: nowrap; }
@@ -531,6 +701,8 @@ main { padding: 20px; }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
   white-space: nowrap;
+  height: 26px;
+  box-sizing: border-box;
 }
 .align-row:not(:last-child) { border-bottom: 1px solid #1a2338; }
 .align-label {
@@ -679,6 +851,14 @@ select {
   display: flex; align-items: center; gap: 8px;
 }
 .browse-entry:hover { background: var(--panel-2); }
+/* File rows (not directories) get a checkbox so several jobs can be
+   picked in one visit to the browser before committing with "Add
+   selected jobs" - see openBrowse()/toggleBrowseSelection() in app.js. */
+.browse-entry input[type="checkbox"] { flex-shrink: 0; }
+.modal-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; border-top: 1px solid var(--border);
+}
 
 /* Spinner */
 .spinner {

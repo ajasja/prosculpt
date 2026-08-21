@@ -44,7 +44,7 @@ To use a different port: `PORT=8080 python app.py`.
 
 In the top bar, paste the full path to the job's log file (the `.out`/`.log`
 file Slurm or your scheduler wrote), or click **Browse…** to navigate the
-filesystem from the dashboard itself. Click **Load**.
+filesystem from the dashboard itself. Click **Add job**.
 
 The dashboard reconstructs the job's output directory the same way you
 described: it reads the `PWD:` line (working directory at launch) and the
@@ -71,15 +71,18 @@ otherwise-light editor.
 
 Every 3D structure viewer (Backbones, Models, Results) is clickable:
 clicking a residue highlights it and everything within 5 Å of it as
-licorice sticks (both colored by element - CPK convention, N blue/O
-red/S yellow/etc - with the clicked residue drawn thicker than its
-neighbors rather than in a different flat color, so the element coloring
-stays meaningful on both), on top of the usual cartoon, and shows a small
-overlay in the corner of the viewer naming the residue plus how many
-neighbors it found - click "clear" on that overlay, or click another
-residue, to change it. Hovering (without clicking) shows a lightweight
-floating tooltip naming whatever residue is under the cursor, without
-touching the highlight. Both are built on
+licorice sticks (colored by element - CPK convention, N blue/O red/S
+yellow/etc - except the clicked residue's own carbons, which turn a
+vivid yellow so it's unmistakable which one is actually selected among
+its neighbors), on top of the usual cartoon, and shows a small overlay in
+the corner of the viewer naming the residue plus how many neighbors it
+found - click "clear" on that overlay, or click another residue, to
+change it. Click-dragging over a range, or Ctrl/Cmd+clicking several
+residues one at a time, selects multiple residues at once - all of them
+get the vivid-yellow-carbon treatment, plus their combined surroundings
+within 5 Å, exactly like a single click. Hovering (without clicking)
+shows a lightweight floating tooltip naming whatever residue is under
+the cursor, without touching the highlight. All of this is built on
 [NGL Viewer](https://nglviewer.org/)'s own picking API
 (`stage.signals.clicked`/`hovered`) and its `getAtomSetWithinSelection` /
 `getAtomSetWithinGroup` distance query for the neighbor search - see
@@ -90,55 +93,141 @@ interaction.) NGL's own default hover tooltip is detached from the DOM
 right after each structure loads, since the dashboard supplies its own
 app-styled one instead.
 
+The Backbones, Models and Results tabs each also show the currently
+selected structure's sequence in an interactive panel below the viewer,
+read straight off the already-loaded NGL structure (not a separately
+fetched FASTA string, so a residue's position here can never drift out
+of sync with the same residue in the 3D view next to it). Clicking a
+residue in the sequence panel selects it exactly as a direct 3D click
+would; dragging across a range or Ctrl/Cmd+clicking several residues
+selects all of them, the same as doing it in the 3D view - the sequence
+panel and the 3D viewer's own click/drag selection are two ways of
+driving the same underlying highlight state (`buildStructureSequence()`,
+`renderSequenceResidues()`, `setupSequencePanelInteraction()` in
+`app.js`).
+
 Every structure viewer (Backbones, Models, Results) has its own small
 color toolbar above it, all driving the same settings (remembered in
 local storage) so they stay in sync with each other no matter which tab
 you're on: a **Background** select (a few preset colors, top-right of the
 toolbar, always available) applies instantly via a live stage parameter;
-a **Chain colors** select, shown whenever a viewer is coloring by chain,
-picks between a few curated palettes (Vivid, Pastel, a colorblind-safe
-Okabe-Ito set) - chosen deliberately over NGL's built-in `chainid`
-scheme, which hashes the chain letter into a color that can land on tones
-too dark to read against the (also dark) default background - paired
-with a small legend naming which color is which chain. Changing either
-setting recolors every currently-loaded viewer in place (swap the
-cartoon representation for one using a new NGL color scheme via
-`setCartoonColor()`) rather than reloading the structure, so it doesn't
-reset your camera zoom/rotation.
+a **Palette** select, shown whenever a viewer is coloring by chain, picks
+between several curated palettes (Vivid, Pastel, a colorblind-safe
+Okabe-Ito set, Bright, Sunset, Ocean) - chosen deliberately over NGL's
+built-in `chainid` scheme, which hashes the chain letter into a color
+that can land on tones too dark to read against the (also dark) default
+background - paired with a small legend naming which color is which
+chain, where each chain's swatch is itself a color `<input>` for manually
+overriding just that chain. Manually recoloring a chain flips the
+Palette select to a disabled "Custom" option (so it's clear a palette no
+longer describes what's on screen); picking an actual palette afterward
+clears every manual override and goes back to driving the colors
+directly. Changing background or palette recolors every currently-loaded
+viewer in place (swap the cartoon representation for one using a new NGL
+color scheme via `setCartoonColor()`) rather than reloading the
+structure, so it doesn't reset your camera zoom/rotation.
 
-The Backbones and Results tabs additionally have a **Color residues by**
-/ **Color structure by** dropdown, offering **RFdiffusion provenance** as
-an alternative to chain coloring. RFdiffusion writes a `.trb` sidecar
-file (a Python pickle, despite the `.trb` extension -
+A **Show sidechains** control (three mutually-exclusive options: "Only
+selected", "Interface", "All") governs which residues' sidechains are
+drawn as licorice sticks on top of the cartoon, independent of whichever
+residue is currently click-highlighted. "Only selected" (the default)
+shows nothing extra beyond whatever the click/sequence-panel highlight
+already draws. "Interface" shows the sidechains of every residue that has
+any atom within 5 Å of an atom belonging to a *different* chain -
+computed per chain via `structure.getAtomSet()` intersected with
+`getAtomSetWithinSelection("not :chain", 5)`, then expanded to whole
+residues and OR'd across chains (`computeInterfaceSele()` in `app.js`) -
+useful for eyeballing a binder's interface at a glance without having to
+click through it residue by residue. "All" shows every sidechain in the
+structure. This setting, like the background and palette ones, is shared
+across every viewer and remembered in local storage.
+
+The Backbones, Models and Results tabs additionally have a **Color
+residues by** / **Color structure by** dropdown, offering **RFdiffusion
+provenance** as an alternative to chain coloring. RFdiffusion writes a
+`.trb` sidecar file (a Python pickle, despite the `.trb` extension -
 `load_trb_provenance()` in `parser.py` unpickles it, which needs `numpy`
 since the pickle contains `numpy` array/scalar objects) next to each
 backbone `.pdb`, recording which residues were copied in from the
 reference structure versus generated de novo. The dashboard buckets every
-residue into one of three categories, colored consistently across both
-tabs and shown in a small legend next to the dropdown, each with its own
-color picker so the palette can be retuned: **Motif** (`con_hal_pdb_idx`
-- reference residues present in a *redesigned* chain), **Fixed chains**
-(`receptor_con_hal_pdb_idx` - reference residues in a *non-designed*
-chain), and **Sculpted** (everything else - generated de novo). Residue
-identity for this is chain letter + residue number, but the two files
-this needs to apply to don't agree on numbering convention: RFdiffusion's
-own raw backbone `.pdb` (Backbones tab) keeps counting residue numbers up
-across chain boundaries instead of resetting per chain, while
-AlphaFold3/Boltz's output (Results tab, via that row's `path_rfdiff`
-column) resets every chain back to 1 like a normally-numbered PDB file
-does. `load_trb_provenance()` returns `fixed_chain` residue numbers
-already shifted onto the chain-local convention (each chain's lowest
-resnum becomes 1, then 2, ...) - `con_hal_pdb_idx`/`motif` doesn't need
-the same treatment since the designed chain(s) it refers to always come
-first and so are never offset either way - and the frontend
-(`computeStructureChainInfo()` in `app.js`) works out each *loaded*
-structure's own per-chain offset the same way and normalizes onto it, so
-the same provenance data colors correctly regardless of which
-convention the structure in front of it happens to use. If a backbone
-has no `.trb` file, or it can't be read (e.g. `numpy` isn't installed in
-the dashboard's own environment), the dropdown falls back to chain
-coloring with a short explanation in place of the legend rather than
-failing silently.
+residue into one of three categories, colored consistently across all
+three tabs and shown in a small legend next to the dropdown, each with
+its own color picker so the palette can be retuned: **Motif**
+(`con_hal_pdb_idx` - reference residues present in a *redesigned* chain),
+**Fixed chains** (`receptor_con_hal_pdb_idx` - reference residues in a
+*non-designed* chain), and **Sculpted** (everything else - generated de
+novo). Residue identity for this is chain letter + residue number, but
+the files this needs to apply to don't agree on numbering convention:
+RFdiffusion's own raw backbone `.pdb` (Backbones tab) keeps counting
+residue numbers up across chain boundaries instead of resetting per
+chain, while AlphaFold3/Boltz's output (Models and Results tabs) resets
+every chain back to 1 like a normally-numbered PDB file does. Every
+`3_models/model_N` directory traces back to the same-indexed
+`1_rfdiff/_N.trb` regardless of which sequence/sample/monomer-vs-complex
+variant a given row is (`list_models()` in `parser.py` resolves this and
+stamps each row with its `trb_path`), and a Results row finds its `.trb`
+the same way the Backbones tab does - same basename as that row's
+`path_rfdiff`, `.trb` extension. `load_trb_provenance()` returns
+`fixed_chain` residue numbers already shifted onto the chain-local
+convention (each chain's lowest resnum becomes 1, then 2, ...) -
+`con_hal_pdb_idx`/`motif` doesn't need the same treatment since the
+designed chain(s) it refers to always come first and so are never offset
+either way - and the frontend (`computeStructureChainInfo()` in
+`app.js`) works out each *loaded* structure's own per-chain offset the
+same way and normalizes onto it, so the same provenance data colors
+correctly regardless of which convention the structure in front of it
+happens to use. If a backbone/model has no `.trb` file, or it can't be
+read (e.g. `numpy` isn't installed in the dashboard's own environment),
+the dropdown falls back to chain coloring with a short explanation in
+place of the legend rather than failing silently.
+
+## 4. Track multiple jobs at once
+
+The **Add job** field (and the **Browse…** button, which now lets you tick
+several files before committing with "Add selected jobs") aren't limited
+to one job - paste several log paths at once (one per line - it's a
+`<textarea>` styled to look like a single-line field, since a real
+`<input type="text">` can't actually hold a pasted newline) to track them
+all. A pill bar appears above the usual tab strip once you do: **All jobs
+overview** and **All jobs results** on the left, then one chip per
+tracked job - its short label (the log's filename, extension stripped),
+a colored status dot (blue = running, green = finished, red = crashed or
+cancelled), and a **✕** to stop tracking it. Clicking a chip shows that
+job's familiar Overview/Backbones/Sequences/Models/Results/Error
+log/Output log tabs - exactly the single-job experience described above,
+now with a banner above the tab strip naming which job you're looking at
+(so it's never ambiguous once more than one is being tracked). Every
+tracked job's status is polled independently of whichever one is
+currently active (and stops once a job reaches a terminal state, same
+reasoning as auto-refresh) so the chips and the overview list stay
+current in the background.
+
+**All jobs overview** is a flat list of every tracked job and its current
+stage or terminal state - click a row to switch to that job's own tabs.
+
+**All jobs results** is the Results tab, unioned across every tracked
+job: one combined list/table/alignment view/structure viewer, with a
+synthetic **job** column identifying which job each row came from (jobs
+with different metric columns - e.g. an AF3 run next to a Boltz run -
+still combine cleanly, since the table columns are the union of every
+job's own columns, blank where a given job doesn't have one). Filters,
+"Color list by", and "Color structure by" all work the same way they do
+on a single job's Results tab, just across the merged set. **Export
+filtered (.zip)** downloads one archive covering every tracked job's
+filtered rows - `filtered_output.csv` gains a `source_job` column, and
+each job's model pdbs sit in their own `models/<job>/` subfolder so two
+jobs' identically-named models (`model_0.pdb` is a very common name)
+can't collide.
+
+Under the hood, the per-job Results tab and All jobs results aren't two
+separate implementations - `createResultsView()` in `app.js` is a
+factory that both are instances of, parameterized by which DOM ids they
+draw into and how to resolve a row back to its owning job's API calls
+(`state.logPath` for the single-job instance, that row's own stamped-on
+`__jobLogPath` for the multi-job one). Duplicating ~600 lines of
+filtering/coloring/CSV/alignment/export logic across two nearly-identical
+copies felt like exactly the kind of thing that quietly drifts out of
+sync over time, so both tabs share one implementation instead.
 
 ## What each tab shows
 
@@ -222,6 +311,16 @@ failing silently.
   left untagged rather than mislabeled. On a multi-cycle run this tab shows
   only the current cycle's models, since `3_models/` is wiped by Prosculpt
   at the start of each new cycle — a note above the list says which cycle.
+  The viewer here has the same "Color residues by" RFdiffusion provenance
+  option and interactive sequence panel as the Backbones and Results tabs
+  (see above) — every `3_models/model_N` directory traces back to the
+  same-indexed backbone's `.trb` file regardless of which sequence/
+  sample/monomer-vs-complex variant a given row is, so provenance coloring
+  is available here too. What the Models tab still doesn't have is a
+  metrics-driven list — no filtering or "Color list by" a numeric column,
+  since (unlike the Results tab) there's no single per-row CSV backing
+  every model row here to filter or sort by; its own metrics table just
+  shows that one selected model's own confidence values.
 - **Results** — once `final_pdbs/` and `final_output.csv` exist: a
   structure viewer, a sequence alignment view (grouped by sequence length),
   and a table of `final_output.csv`. The table pins the `id` column on the
