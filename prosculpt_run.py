@@ -286,7 +286,20 @@ def load_plugins(filter_configs: List[dict]):
     plugins = []
 
     for config in filter_configs:
-        script_path = (Path(__file__).parent / config["filter_script"]).resolve()
+        raw_path = Path(config["filter_script"])
+        if raw_path.is_absolute():
+            script_path = raw_path.resolve()
+        else:
+            # A relative filter_script is checked against the current
+            # working directory first (e.g. a filter script that travels
+            # alongside a job's own config/output, rather than one of the
+            # filters shipped with prosculpt itself), falling back to
+            # prosculpt's own installation directory - the original
+            # behavior, kept so every existing config's "plugins/..."-style
+            # path (relative to prosculpt, not to wherever the job happens
+            # to run from) keeps resolving exactly as it already does.
+            cwd_candidate = (Path.cwd() / raw_path).resolve()
+            script_path = cwd_candidate if cwd_candidate.exists() else (Path(__file__).parent / raw_path).resolve()
         log.debug(f"Resolved plugin path: {script_path}")
         if not script_path.exists():
             raise FileNotFoundError(f"Plugin script not found: {script_path}")

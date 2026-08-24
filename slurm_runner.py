@@ -3,6 +3,7 @@ import shlex
 import time
 import os
 import argparse
+import subprocess
 import yaml
 
 parser=argparse.ArgumentParser(epilog=('#### Any other arguments passed will be passed as they are to prosculpt. If including output_dir, please include it first ####\n**** Important: hydra config overrides should be put before -cd and -cn ****\nExample: python slurm_runner.py 1 multipassinpaintseq_throw  output_dir="Examples/Examples_out/multipass_inpaintseq_throw" +throw=1 +cycle=0 -cd Examples -cn multipass_inpaintseq'))
@@ -69,7 +70,16 @@ with open(out_command_file, 'w') as f:
         #print("+output_dir="+output_dir)
 
         cmdline = " ".join(arguments) #join all arguments passed that aren't number of tasks or task name
-        line = f"""python {slurm_runner_path}/prosculpt_run.py {cmdline}"""
+        # sys.executable, not a bare "python": this script is already
+        # running under whatever interpreter actually has prosculpt's own
+        # deps available (its own conda env, whether that's because a
+        # human activated it before running this manually, or because
+        # something invoked this script with that env's interpreter
+        # directly) - reusing that exact interpreter for the compute-node
+        # side of the job means it doesn't matter what $PATH/conda-activation
+        # state exists on the compute node once the job actually starts,
+        # which is not guaranteed to be anything in particular.
+        line = f"""{sys.executable} {slurm_runner_path}/prosculpt_run.py {cmdline}"""
         print(line, file=f)
 
 print(f"Slurm command can be found in {out_command_file}")
@@ -99,11 +109,24 @@ for key, value in installation_slurm_yaml_data.items():
         
 
 if not args[0].dry_run:
-    full_command= f"export GROUP_SIZE=1; sbatch -J {task_name} -a 1-{n} -e logs/slurm-%A_%a.err -o logs/slurm-%A_%a.out  {options_string} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}"
+    # --parsable makes sbatch print just the numeric job id (plus ";cluster"
+    # on a federated setup) to stdout instead of its normal "Submitted batch
+    # job N" banner - captured here (rather than the os.system() this used
+    # to be, which discards output entirely) so callers that need the real
+    # job id (e.g. the dashboard's job-submission API, to know which log
+    # file to watch for) can read it reliably instead of scraping free-form
+    # text.
+    full_command= f"export GROUP_SIZE=1; sbatch --parsable -J {task_name} -a 1-{n} -e logs/slurm-%A_%a.err -o logs/slurm-%A_%a.out  {options_string} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}"
     print(f"Full command is: {full_command}")
-    exit_code = os.system(full_command)
+    result = subprocess.run(full_command, shell=True, capture_output=True, text=True)
+    exit_code = result.returncode
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", file=sys.stderr)
     if exit_code == 0:
-        print(f"Job {task_name} has been submitted to slurm with code {exit_code}")
+        job_id = result.stdout.strip().split(";")[0]
+        print(f"Job {task_name} has been submitted to slurm with id {job_id} and code {exit_code}")
     else:
         print(f"Job submission failed with code {exit_code}")
 else:
