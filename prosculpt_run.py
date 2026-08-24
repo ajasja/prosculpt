@@ -888,12 +888,16 @@ def do_cycling(cfg):
                                     cfg.rfdiff_out_dir, "_" + str(rf_model_num) + ".trb"
                                 )  #
                                 print(a3m_filename)
-
+                                if "monomer" in os.path.basename(fasta_file):
+                                    monomer_models=True
+                                else:
+                                    monomer_models=False
                                 prosculpt.make_alignment_file_boltz(
                                     sequence_id,
                                     mpnn_seq,
                                     cfg.a3m_dir,
                                     alignment_inputs_dir,
+
                                 )
                                 custom_yaml_path = prosculpt.make_boltz_input_yaml(
                                     cfg,
@@ -901,6 +905,7 @@ def do_cycling(cfg):
                                     mpnn_seq,
                                     yaml_dir,
                                     alignment_inputs_dir,
+                                    monomer_models=monomer_models
                                 )
                                 input_yaml_files.append(custom_yaml_path)
 
