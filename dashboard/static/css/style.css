@@ -93,12 +93,18 @@ body {
   white-space: nowrap;
 }
 
+/* Now a standalone block inside #trackJobRoot (no longer a .topbar flex
+   child - the app-mode split moved into the header instead), so it needs
+   its own row padding. #logPathInput's own flex/min-width still come from
+   its dedicated rule below. */
 .log-picker {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex: 1;
-  min-width: 320px;
+  padding: 10px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
 }
 
 /* A <textarea> rather than <input type="text"> - a single-line text
@@ -449,6 +455,45 @@ main { padding: 20px; }
   gap: 16px;
   min-height: 520px;
 }
+/* Run Job's "Build a new job" pane is a data-entry form, not a pick-a-file
+   list like every other .split-view user (Backbone/Results/Models/All
+   results) - it needs real room for its own fields, contig textarea, and
+   module bodies, so its left column gets its own (much wider, and
+   user-resizable - see .split-resizer) track rather than widening
+   .list-pane for everyone. The 3rd track is the drag handle itself
+   (#runJobSplitResizer, a real grid item between .list-pane and
+   .viewer-pane in the markup, not an overlay) - its width here is only
+   ever the *default*; initRunJobSplitResizer() in run_job.js overwrites
+   this rule with an inline style once a stored/dragged width exists. */
+.rj-build-split { grid-template-columns: 680px 6px 1fr; }
+.split-resizer {
+  cursor: col-resize;
+  position: relative;
+  border-radius: 3px;
+  background: transparent;
+}
+.split-resizer::after {
+  /* A thin visible line inset within the wider draggable hit-area above -
+     the hit-area itself stays full width so the handle isn't fiddly to
+     grab, without needing a visibly thick divider at rest. */
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border);
+}
+.split-resizer:hover::after,
+.split-resizer.dragging::after {
+  background: var(--accent);
+}
+/* Set on <body> for the duration of a drag (see initRunJobSplitResizer())
+   so the cursor stays col-resize and nothing else on the page starts
+   text-selecting while the mouse crosses over it mid-drag. */
+body.rj-resizing { cursor: col-resize; user-select: none; }
+body.rj-resizing * { cursor: col-resize !important; user-select: none !important; }
 .list-pane {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -665,6 +710,14 @@ main { padding: 20px; }
    the same thing. */
 .seq-residue.selected { outline: 2px solid #ffd60a; outline-offset: -1px; }
 
+/* Each chunk of SEQ_CHUNK_SIZE residues (see renderSequenceResidues() in
+   app.js) is its own inline-flex column, number on top - lets the browser
+   still wrap between chunks like plain inline content, while keeping each
+   chunk's own number pinned directly above its residues. */
+.seq-chunk { display: inline-flex; flex-direction: column; align-items: flex-start; vertical-align: top; margin-right: 6px; }
+.seq-chunk-num { font-size: 9px; color: var(--muted); line-height: 1.3; user-select: none; }
+.seq-chunk-residues { display: block; white-space: nowrap; }
+
 /* Sequences / alignment viewer (shared between Sequences tab and Results tab) */
 .backbone-block {
   background: var(--panel);
@@ -796,6 +849,19 @@ table.data-table th.id-col, table.data-table td.id-col {
 }
 table.data-table th.id-col { z-index: 4; background: var(--panel); }
 table.data-table td.path-col { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+/* Highlights the row matching the model currently shown in the viewer
+   (results.selectedRowId) - via per-cell borders, not background/outline:
+   background is already spoken for by the color-by tint (an inline style
+   that would just win over a CSS background here), and outline on a
+   <tr> renders inconsistently across browsers once border-collapse is in
+   play. Every cell in the row gets a top/bottom border (collapsing into
+   one continuous line the same way any adjacent-cell border does), and
+   the first/last cell close off the left/right sides, so the whole row
+   reads as one outlined rectangle regardless of what background color
+   (if any) sits underneath it. */
+table.data-table tbody tr.selected td { border-top: 2px solid var(--accent); border-bottom: 2px solid var(--accent); }
+table.data-table tbody tr.selected td:first-child { border-left: 2px solid var(--accent); }
+table.data-table tbody tr.selected td:last-child { border-right: 2px solid var(--accent); }
 
 /* Results toolbar / filters / color-by */
 .toolbar-row {
@@ -885,6 +951,21 @@ select {
   font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--muted);
 }
 .modal-header button { background: transparent; color: var(--muted); padding: 2px 8px; }
+.browse-filter-input {
+  /* display:block (an <input> defaults to inline-block) so width:auto
+     fills the available space minus its own margin, the normal block-box
+     behavior - matches .browse-entries' own 8px inset without needing a
+     calc() tied to that margin. */
+  display: block;
+  box-sizing: border-box;
+  margin: 8px 8px 0;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
 .browse-entries { overflow-y: auto; padding: 8px; }
 .browse-entry {
   padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px;
@@ -919,4 +1000,241 @@ select {
   .stat-box { padding: 10px 12px; }
   .stat-box .value { font-size: 17px; }
   .stage-message { flex-direction: column; align-items: flex-start; gap: 8px; }
+}
+
+/* ---------------------------------------------------------------------
+   Run job
+   --------------------------------------------------------------------- */
+
+.app-mode-tabs { display: flex; gap: 6px; }
+.app-mode-btn {
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.app-mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+#runJobRoot { padding: 16px 20px; }
+
+.rj-mode-switch { display: flex; gap: 8px; }
+.rj-mode-btn { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.rj-mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.rj-field { margin-bottom: 12px; }
+.rj-field label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.rj-field input[type="text"],
+.rj-field input[type="number"],
+.rj-field select,
+.rj-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-family: inherit;
+}
+.rj-field textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.rj-field .toggle-label { margin-bottom: 0; }
+.rj-field-help { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+
+.rj-module {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--panel-2);
+}
+.rj-module-enabled { border-color: var(--accent); }
+.rj-module-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.rj-module-body { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.rj-module-body.hidden { display: none; }
+
+.rj-repeat-item {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin: 8px 0;
+  background: var(--panel);
+}
+.rj-repeat-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.rj-remove-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+}
+.rj-small-filename { display: block; margin-top: 4px; font-size: 11.5px; }
+
+.rj-a3m-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 4px 0; }
+.rj-warn { color: var(--warn); font-size: 11.5px; }
+.rj-rename-warning {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: rgba(245, 166, 35, 0.12);
+  border: 1px solid rgba(245, 166, 35, 0.4);
+  border-radius: 6px;
+}
+
+/* Field-level "?" hover/focus tooltip - see infoTip() in run_job.js.
+   .info-tip-section is only used inside the contig field's tooltip, which
+   bundles several titled examples (one per CONTIG_HELP entry) into one
+   bubble rather than needing several separate icons. */
+.info-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: inherit;
+  line-height: 1;
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+  user-select: none;
+}
+.info-tip-bubble {
+  display: none;
+  /* position: fixed (not absolute) + top/left set in px by
+     positionInfoTipBubble() in run_job.js, not by this rule - a static
+     CSS anchor (e.g. "bottom: 130%") is computed relative to .info-tip's
+     own box, which .list-pane (overflow-y: auto) then clips against
+     *its* scrolled viewport, not the browser's - that's what silently cut
+     the top off the contig tooltip (the tallest one, closest to the top
+     of that scrolling pane) before. Fixed positioning is computed against
+     the browser viewport instead, immune to any ancestor's scroll/overflow
+     state; visibility is driven by the .visible class (see
+     showInfoTip()/hideInfoTip()), not :hover/:focus, so JS can position it
+     before it's ever actually shown. */
+  position: fixed;
+  width: max-content;
+  max-width: 420px;
+  max-height: 70vh;
+  overflow-y: auto; /* last-resort safety net if content is ever taller than that */
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 200;
+}
+.info-tip-bubble.visible {
+  display: block;
+}
+.info-tip-bubble code {
+  display: inline-block;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.info-tip-section { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.info-tip-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.info-tip-section b { font-size: 12.5px; }
+.info-tip-section p { margin: 4px 0; }
+
+.rj-yaml-editor {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+.rj-yaml-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(239, 90, 111, 0.12);
+  border: 1px solid rgba(239, 90, 111, 0.4);
+  color: var(--danger);
+  border-radius: var(--radius);
+  font-size: 12.5px;
+}
+
+.rj-submit-row { display: flex; gap: 10px; margin-top: 10px; }
+#runJobResult { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--border); }
+#runJobResult.rj-result-ok { border-color: var(--accent-2); background: rgba(53, 208, 168, 0.08); }
+#runJobResult.rj-result-error { border-color: var(--danger); background: rgba(239, 90, 111, 0.08); }
+#runJobResult h4 { margin: 0 0 8px; }
+#runJobResult pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  background: var(--panel-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.rj-pending-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.rj-pending-row:last-child { border-bottom: none; }
+
+.rj-squeue-output {
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  min-height: 60px;
+  max-height: 320px;
+  overflow: auto;
+  margin: 10px 0 0;
+}
+
+#runJobToast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--accent);
+  color: #fff;
+  padding: 12px 18px;
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  z-index: 60;
 }

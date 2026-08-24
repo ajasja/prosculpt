@@ -11,17 +11,28 @@
 
 <header class="topbar">
   <div class="brand">🧬 Prosculpt Dashboard</div>
-  <div class="log-picker">
-    <textarea id="logPathInput" rows="1" placeholder="/path/to/run.out (paste several, one per line, to add them all at once)"></textarea>
-    <button id="loadBtn">Add job</button>
-    <button id="browseBtn" title="Browse filesystem">Browse…</button>
-    <span id="autoRefreshLabel">
-      <label><input type="checkbox" id="autoRefreshToggle" checked> auto-refresh</label>
-      <span id="autoRefreshNote" class="muted hidden"></span>
-    </span>
-    <button id="themeToggleBtn" class="secondary" title="Switch theme">☀️</button>
-  </div>
+  <!-- Run job / Track job - a split above everything else on the page.
+       Track job is the entire pre-existing tracking UI (job-picker, pill
+       bar, per-job tabs), wrapped unchanged in #trackJobRoot below; Run
+       job is a wholly separate sibling, #runJobRoot. See
+       showAppMode()/initAppModeTabs() in app.js. -->
+  <nav class="app-mode-tabs">
+    <button class="app-mode-btn" data-mode="run">Run job</button>
+    <button class="app-mode-btn" data-mode="track">Track job</button>
+  </nav>
+  <button id="themeToggleBtn" class="secondary" title="Switch theme">☀️</button>
 </header>
+
+<div id="trackJobRoot">
+<div class="log-picker">
+  <textarea id="logPathInput" rows="1" placeholder="/path/to/run.out (paste several, one per line, to add them all at once)"></textarea>
+  <button id="loadBtn">Add job</button>
+  <button id="browseBtn" title="Browse filesystem">Browse…</button>
+  <span id="autoRefreshLabel">
+    <label><input type="checkbox" id="autoRefreshToggle" checked> auto-refresh</label>
+    <span id="autoRefreshNote" class="muted hidden"></span>
+  </span>
+</div>
 
 <!-- Top-level selector: the two "all jobs" tabs plus one chip per tracked
      job. Picking a chip shows that job's own tab bar (below); picking
@@ -50,6 +61,14 @@
           </div>
           <div id="allFiltersList" class="filters-list"></div>
         </div>
+      </div>
+      <div class="toolbar-group">
+        <label class="toolbar-label" for="allSortByField">Sort list by</label>
+        <select id="allSortByField"><option value="">None</option></select>
+        <select id="allSortByDirection">
+          <option value="1">Ascending</option>
+          <option value="-1">Descending</option>
+        </select>
       </div>
       <div class="toolbar-group">
         <label class="toolbar-label" for="allColorByField">Color list by</label>
@@ -293,6 +312,14 @@
           </div>
         </div>
         <div class="toolbar-group">
+          <label class="toolbar-label" for="sortByField">Sort list by</label>
+          <select id="sortByField"><option value="">None</option></select>
+          <select id="sortByDirection">
+            <option value="1">Ascending</option>
+            <option value="-1">Descending</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
           <label class="toolbar-label" for="colorByField">Color list by</label>
           <select id="colorByField"><option value="">None</option></select>
           <select id="colorByDirection">
@@ -383,6 +410,7 @@
       <span id="browsePath"></span>
       <button id="browseCloseBtn">✕</button>
     </div>
+    <input type="text" id="browseFilterInput" class="browse-filter-input" placeholder="Filter this folder by name…">
     <div id="browseEntries" class="browse-entries"></div>
     <div class="modal-footer">
       <span id="browseSelectedCount" class="muted"></span>
@@ -390,7 +418,13 @@
     </div>
   </div>
 </div>
+</div> <!-- /trackJobRoot -->
 
+{% include "run_job.html" %}
+
+<script src="https://unpkg.com/js-yaml@4/dist/js-yaml.min.js"></script>
+<script src="{{ url_for('static', filename='js/run_job_schema.js') }}"></script>
+<script src="{{ url_for('static', filename='js/run_job.js') }}"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>
 </html>

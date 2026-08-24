@@ -1,14 +1,27 @@
 # Prosculpt Dashboard
 
-A small local web dashboard for monitoring a running (or finished) Prosculpt
-job: which stage it's at, progress/ETA for RFdiffusion and modeling, plus
-browsable views of the backbones, designed sequences, individual models,
-and final results.
+A small local web dashboard for both **submitting** and **monitoring**
+Prosculpt jobs. Two top-level tabs:
 
-It works by reading the job's log file and its output directory directly
-off disk, so **it needs to run somewhere that has filesystem access to
-both** — typically the same machine (e.g. a cluster login node) where you
-launched the Prosculpt job.
+- **Run job** — build a config (guided form or hand-written YAML, or both
+  kept in sync), optionally upload an input PDB / alignment files, and
+  submit it - either as a local `slurm_runner.py` call (if the dashboard is
+  running on the cluster itself) or over SSH to a cluster on the same
+  network. See [§3](#3-run-a-new-job).
+- **Track job** — everything this dashboard originally did: which stage a
+  job is at, progress/ETA for RFdiffusion and modeling, plus browsable
+  views of the backbones, designed sequences, individual models, and final
+  results. A job submitted from the Run job tab is added here
+  automatically once its log file appears on disk.
+
+Tracking works by reading a job's log file and output directory directly
+off disk, so **the dashboard needs filesystem access to both** — typically
+because it's running on the same machine (e.g. a cluster login node) the
+job runs on, or that filesystem is otherwise mounted where the dashboard
+runs. Submitting a job additionally needs either local shell access to
+`slurm_runner.py` (same-machine case) or a working `ssh`/`scp` client with
+already-trusted key/agent access to the target cluster (remote case) - see
+[dashboard_config.yaml.example](dashboard_config.yaml.example).
 
 ## 1. Install
 
@@ -40,7 +53,110 @@ then open http://localhost:5000 on your laptop as usual.
 
 To use a different port: `PORT=8080 python app.py`.
 
-## 3. Point it at a job
+## 3. Run a new job
+
+The **Run job** tab needs at least one *run target* configured before it
+can submit anything - copy `dashboard/dashboard_config.yaml.example` to
+`dashboard/dashboard_config.yaml` (git-ignored, host-specific - not
+committed) and fill in at least one:
+
+- **`kind: local`** - the dashboard itself runs `slurm_runner.py` as a
+  local subprocess. Use this if the dashboard is running on the cluster
+  (or a node with a working prosculpt installation) directly.
+- **`kind: ssh`** - the dashboard shells out to your system's `ssh`/`scp`
+  binaries to stage files and submit on a cluster it's on the same network
+  as. Needs a working `ssh <ssh_host>` connection already trusted (key or
+  agent - **no password is ever asked for, stored, or sent**; set up host
+  key trust and key/agent auth once, outside the dashboard, the normal
+  way). Optionally set `local_mount_path` if that cluster's output is
+  *also* reachable as a mounted filesystem path from wherever the
+  dashboard runs (the way the tracking side of this dashboard already
+  assumes for any tracked job) - without it, submission still works, but a
+  submitted job won't auto-appear on the Track job tab (see below).
+
+Each target also needs `slurm_runner_path` (where the prosculpt
+installation's `slurm_runner.py` lives - it needs its own working
+`config/installation.yaml`, singularity images, etc. already set up there)
+and `projects_path` (where new job directories get created). Also set
+`python_path` to that installation's own conda env interpreter (the same
+value as its `config/installation.yaml`'s `prosculpt_python_path`) -
+without it, submission falls back to a bare `python`, which depends on
+whatever's first on `$PATH` for the dashboard's own process (local) or a
+non-interactive SSH session (remote) - usually **not** prosculpt's env,
+and for SSH in particular `conda activate` often isn't even available in
+that kind of session at all. Pointing straight at the env's own
+interpreter avoids relying on shell activation entirely.
+
+The same file also has an optional top-level `defaults:` section for
+dashboard-wide settings unrelated to any one target - currently just
+`prediction_model` (which model the Run Job GUI's "Prediction model" field
+preselects; falls back to Colabfold if unset). A home for anything else
+dashboard-level that comes up later, without needing a second config file.
+
+Two ways to submit:
+
+- **Build a new job** - fill in the core settings and any of the
+  independent, addable **modules** (Symmetry, RFdiffusion backbone
+  filters, Inpaint sequence, Redesign-only, Partial diffusion, Boltz2
+  templates - the last one only shown when the prediction model is
+  Boltz2), optionally upload an input PDB (viewable, with a chain color
+  legend, plus an interactive sequence panel - grouped into chunks with
+  the chunk's starting residue number printed above it, for reading off
+  residue numbers without hovering each one - contig/hotspot fields are
+  always typed in by hand, the viewer doesn't feed them automatically) and,
+  if "Use custom MSA" is checked, one or more `.a3m`
+  alignment files (each filename must contain `Chain_<letter>`, matching
+  the same convention `a3m_dir` already expects elsewhere in Prosculpt).
+  The raw YAML underneath is kept in sync with the form both ways - edit
+  either one; a manual YAML edit is validated (parseable, has a `contig`)
+  before it's allowed to overwrite the form's values, and the form's own
+  values always win back once you touch a form field again. On submit,
+  the dashboard creates a directory named after the job (with the PDB, an
+  `alignments/` subdirectory if any were uploaded, and the config yaml),
+  and - for an `ssh` target - copies that whole directory over before
+  submitting remotely.
+- **Submit an existing project directory** - point at a directory you've
+  already prepared by hand (your own config yaml plus anything it
+  references, e.g. a custom filter script) - it's copied/submitted
+  exactly as-is; nothing inside it is rewritten. Useful for a config more
+  complex than the guided form covers, or one you're reusing from outside
+  the dashboard entirely.
+
+If a directory with the job's name already exists at the destination (the
+`projects_path` directory locally, or that same path on the remote
+cluster for an `ssh` target), it's never overwritten or merged into -
+`_2`, `_3`, ... is appended until an unused name is found, and the result
+banner says so plainly ("A directory named ... already existed there -
+used ... instead"), including in a **Preview**. The config filename
+tracks whatever name actually got used, so the directory and its own
+config file never disagree about what the job is called.
+
+Either way, **Preview (dry run)** runs `slurm_runner.py --dry-run` first
+(prints the command it *would* run without touching `sbatch`) - worth
+using before **Submit**, which asks for confirmation and actually
+launches the job.
+
+**squeue --me** (with a manual Refresh button, not auto-polled, so it
+doesn't add load to the scheduler on every tab's auto-refresh timer) shows
+your queued/running jobs for whichever target is selected.
+
+Several fields (contig, "Also predict monomer", the redesign module's
+designable-residues field, and the inpaint-sequence/partial-diffusion
+range fields) have a small **?** next to their label - hover or focus it
+for syntax examples and other guidance too long to leave always-visible
+under the field itself.
+
+**Pending submissions**: after a real (non-dry-run) submit, the dashboard
+watches for that job's log file to appear (`logs/slurm-<job id>_*.out`
+under the job's directory) and, once it does, adds it to the Track job tab
+automatically - the exact same `addJobs()` a manually-pasted log path
+would go through, so there's nothing job-submission-specific about how a
+promoted job is tracked afterward. This only works for a `local` target,
+or an `ssh` target with `local_mount_path` configured (see above); without
+that, a pending entry says so and you add it to Track job by hand once you
+know its log path.
+
+## 4. Point it at a job
 
 In the top bar, paste the full path to the job's log file (the `.out`/`.log`
 file Slurm or your scheduler wrote), or click **Browse…** to navigate the
@@ -181,7 +297,7 @@ read (e.g. `numpy` isn't installed in the dashboard's own environment),
 the dropdown falls back to chain coloring with a short explanation in
 place of the legend rather than failing silently.
 
-## 4. Track multiple jobs at once
+## 5. Track multiple jobs at once
 
 The **Add job** field (and the **Browse…** button, which now lets you tick
 several files before committing with "Add selected jobs") aren't limited
@@ -424,13 +540,29 @@ sync over time, so both tabs share one implementation instead.
 ## Project layout
 
 ```
-app.py            Flask routes / API
-parser.py          All log-parsing + filesystem-scanning logic (no Flask
+app.py              Flask routes / API for the Track job side
+run_api.py          Flask routes / API for the Run job side (submit/squeue/
+                    check_pending) - registered as a blueprint from app.py
+run_targets.py       Run-target config + dashboard-wide defaults (both read
+                    from dashboard_config.yaml) + the shared local/ssh
+                    execution primitive
+job_staging.py       Assembles a new job's directory on disk (pdb,
+                    alignments/, logs/, config yaml) for the "build a new
+                    job" flow
+dashboard_config.yaml.example   Copy to dashboard_config.yaml and fill in -
+                    git-ignored
+parser.py            All log-parsing + filesystem-scanning logic (no Flask
                     dependency, easy to test standalone)
-templates/index.html
+templates/index.html      Track job markup (Run job's own markup lives in
+                    run_job.html, included from here)
+templates/run_job.html
 static/css/style.css
-static/js/app.js   Frontend (vanilla JS, no build step; uses NGL Viewer
-                    from a CDN for structure viewing)
+static/js/app.js          Track job frontend (vanilla JS, no build step;
+                    uses NGL Viewer from a CDN for structure viewing)
+static/js/run_job_schema.js  Run job's field/module schema (CORE_FIELDS,
+                    MODULES, CONTIG_HELP) - no logic, just data
+static/js/run_job.js         Run job's form rendering, YAML two-way sync,
+                    upload handling, submit/squeue/pending-runs logic
 requirements.txt
 ```
 

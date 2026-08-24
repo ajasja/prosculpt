@@ -3,6 +3,7 @@
 
 const STORAGE_KEY = "prosculpt_dashboard_log_path";
 const THEME_KEY = "prosculpt_dashboard_theme";
+const APP_MODE_KEY = "prosculpt_dashboard_app_mode";
 const POLL_MS = 5000;
 
 const STAGE_ORDER = ["rfdiffusion", "filtering", "mpnn", "modeling", "scoring", "finished"];
@@ -41,6 +42,11 @@ const PATH_COLUMNS = ["model_path", "af3_json", "af3_pdb", "path_rfdiff"];
 // own closure instead, once per view instance, so the per-job Results tab
 // and the All jobs results tab don't share (or fight over) one copy of it.
 let state = {
+  // "run" vs "track" is a higher-level split than everything else below -
+  // Track job is the entire existing tracking UI (topView/pill bar/per-job
+  // tabs), unchanged; Run job is a wholly separate sibling. See
+  // showAppMode()/initAppModeTabs().
+  appMode: localStorage.getItem(APP_MODE_KEY) || "track",
   logPath: localStorage.getItem(STORAGE_KEY) || "",
   activeTab: "overview",
   lastStatus: null,
@@ -84,7 +90,14 @@ async function apiGet(path, params = {}) {
   if (!res.ok) {
     let msg = res.statusText;
     try { const j = await res.json(); msg = j.error || j.message || msg; } catch (e) {}
-    throw new Error(msg);
+    const err = new Error(msg);
+    // Lets a caller tell "this exact request is malformed/invalid and will
+    // never succeed no matter how many times it's retried" (4xx) apart
+    // from "probably transient, worth trying again" (network failure, a
+    // 5xx) - see pollPendingRuns() in run_job.js for the caller that
+    // actually needs this distinction.
+    err.status = res.status;
+    throw err;
   }
   return res.json();
 }
@@ -166,14 +179,20 @@ function initTopbar() {
     if (e.target.checked) startPolling(); else stopPolling();
   });
 
-  qs("#browseBtn").addEventListener("click", () => openBrowse(state.browsePath || "."));
+  // No fallback path on the very first open (state.browsePath is still
+  // null then) - openBrowse() omits ?path= entirely in that case, letting
+  // the server pick a starting directory (the configured projects root,
+  // if any - see get_default_browse_root() in run_targets.py) instead of
+  // this always defaulting to "." (the dashboard process's own cwd,
+  // rarely where anyone's actual jobs are).
+  qs("#browseBtn").addEventListener("click", () => openBrowse(state.browsePath));
   qs("#browseCloseBtn").addEventListener("click", () => qs("#browseModal").classList.add("hidden"));
   qs("#browseAddSelectedBtn").addEventListener("click", () => {
-    const selected = qsa(".browse-entry input[type=checkbox]:checked").map((cb) => cb.dataset.path);
-    if (!selected.length) return;
-    addJobs(selected.join("\n"));
+    if (!browseSelectedPaths.size) return;
+    addJobs(Array.from(browseSelectedPaths).join("\n"));
     qs("#browseModal").classList.add("hidden");
   });
+  qs("#browseFilterInput").addEventListener("input", (e) => renderBrowseEntries(e.target.value));
 }
 
 // Loading a (possibly new, possibly still-running) job should always start
@@ -218,46 +237,90 @@ function resetPerJobViewState() {
   const resultsSeq = qs("#resultsSequenceContent"); if (resultsSeq) resultsSeq.innerHTML = "";
 }
 
+// The current directory's raw listing (from the last successful
+// /api/browse call) - kept around so the filter box (renderBrowseEntries)
+// can re-render from it instantly on every keystroke without refetching.
+let browseListing = { parent: null, entries: [] };
+// Which file paths are checked, tracked independently of the DOM (not
+// read back from ".browse-entry input:checked") - the filter box hides
+// non-matching entries by not rendering them at all, which would silently
+// forget a checked box's state the moment its row scrolled out of the
+// (filtered) DOM otherwise. Reset per directory, same as before the
+// filter box existed - navigating to a different directory already
+// replaced the whole listing (and so, implicitly, any selection) even
+// before this.
+let browseSelectedPaths = new Set();
+
 // File rows get a checkbox instead of loading immediately on click, so
 // several jobs can be picked in one visit before committing with "Add
 // selected jobs" (directories still navigate on click, same as before).
 async function openBrowse(path) {
   qs("#browseModal").classList.remove("hidden");
+  qs("#browseFilterInput").value = "";
+  browseSelectedPaths = new Set();
   updateBrowseSelectedCount();
   try {
-    const data = await fetch(`/api/browse?path=${encodeURIComponent(path)}`).then((r) => r.json());
+    // No `path` at all (the very first open, before state.browsePath is
+    // ever set) omits ?path= entirely instead of sending an empty string -
+    // the server then picks its own starting directory (see
+    // get_default_browse_root() in run_targets.py) rather than this
+    // needing to know or guess one itself.
+    const url = path ? `/api/browse?path=${encodeURIComponent(path)}` : "/api/browse";
+    const data = await fetch(url).then((r) => r.json());
     state.browsePath = data.path;
     qs("#browsePath").textContent = data.path;
-    const wrap = qs("#browseEntries");
-    wrap.innerHTML = "";
-    if (data.parent) {
-      const up = document.createElement("div");
-      up.className = "browse-entry";
-      up.innerHTML = "⬆️ ..";
-      up.addEventListener("click", () => openBrowse(data.parent));
-      wrap.appendChild(up);
-    }
-    data.entries.forEach((e) => {
-      const div = document.createElement("div");
-      div.className = "browse-entry";
-      if (e.is_dir) {
-        div.innerHTML = `📁 ${escapeHtml(e.name)}`;
-        div.addEventListener("click", () => openBrowse(e.path));
-      } else {
-        div.innerHTML = `<input type="checkbox" data-path="${escapeHtml(e.path)}"> 📄 ${escapeHtml(e.name)}`;
-        const cb = div.querySelector("input");
-        cb.addEventListener("change", updateBrowseSelectedCount);
-        div.addEventListener("click", (ev) => { if (ev.target.tagName !== "INPUT") cb.click(); });
-      }
-      wrap.appendChild(div);
-    });
+    browseListing = { parent: data.parent, entries: data.entries };
+    renderBrowseEntries("");
   } catch (err) {
+    browseListing = { parent: null, entries: [] };
     qs("#browseEntries").innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
 }
 
+// Purely a client-side re-render of the already-fetched browseListing -
+// case-insensitive substring match on the entry's own name. The parent
+// ("..") row is never filtered out (it's navigation, not a search result)
+// - only actual entries. Checkbox state comes from browseSelectedPaths,
+// not a fresh `false` default, so re-filtering (which rebuilds these rows
+// from scratch) never drops an existing selection.
+function renderBrowseEntries(filterText) {
+  const wrap = qs("#browseEntries");
+  wrap.innerHTML = "";
+  const { parent, entries } = browseListing;
+  if (parent) {
+    const up = document.createElement("div");
+    up.className = "browse-entry";
+    up.innerHTML = "⬆️ ..";
+    up.addEventListener("click", () => openBrowse(parent));
+    wrap.appendChild(up);
+  }
+  const needle = filterText.trim().toLowerCase();
+  const filtered = needle ? entries.filter((e) => e.name.toLowerCase().includes(needle)) : entries;
+  if (needle && !filtered.length) {
+    wrap.insertAdjacentHTML("beforeend", `<p class="muted">No entries match "${escapeHtml(filterText)}".</p>`);
+  }
+  filtered.forEach((e) => {
+    const div = document.createElement("div");
+    div.className = "browse-entry";
+    if (e.is_dir) {
+      div.innerHTML = `📁 ${escapeHtml(e.name)}`;
+      div.addEventListener("click", () => openBrowse(e.path));
+    } else {
+      const checked = browseSelectedPaths.has(e.path) ? "checked" : "";
+      div.innerHTML = `<input type="checkbox" data-path="${escapeHtml(e.path)}" ${checked}> 📄 ${escapeHtml(e.name)}`;
+      const cb = div.querySelector("input");
+      cb.addEventListener("change", () => {
+        if (cb.checked) browseSelectedPaths.add(e.path); else browseSelectedPaths.delete(e.path);
+        updateBrowseSelectedCount();
+      });
+      div.addEventListener("click", (ev) => { if (ev.target.tagName !== "INPUT") cb.click(); });
+    }
+    wrap.appendChild(div);
+  });
+}
+
 function updateBrowseSelectedCount() {
-  const n = qsa(".browse-entry input[type=checkbox]:checked").length;
+  const n = browseSelectedPaths.size;
   qs("#browseSelectedCount").textContent = n ? `${n} selected` : "";
   qs("#browseAddSelectedBtn").disabled = n === 0;
 }
@@ -489,6 +552,29 @@ function initJobTabsBar() {
   qsa(".job-tab-btn.special").forEach((btn) => {
     btn.addEventListener("click", () => showTopView(btn.dataset.top));
   });
+}
+
+// "Run job" vs "Track job" - a split above everything else in this file.
+// Track job is the entire existing UI (state.topView/showTopView() and
+// everything under it), left completely untouched; this only toggles
+// which of the two top-level roots is visible.
+function showAppMode(mode) {
+  state.appMode = mode;
+  localStorage.setItem(APP_MODE_KEY, mode);
+  qs("#trackJobRoot").classList.toggle("hidden", mode !== "track");
+  qs("#runJobRoot").classList.toggle("hidden", mode !== "run");
+  qsa(".app-mode-btn").forEach((btn) => btn.classList.toggle("active", btn.dataset.mode === mode));
+  if (mode === "run" && !state.runJobInitialized) {
+    state.runJobInitialized = true;
+    initRunJobTab();
+  }
+}
+
+function initAppModeTabs() {
+  qsa(".app-mode-btn").forEach((btn) => {
+    btn.addEventListener("click", () => showAppMode(btn.dataset.mode));
+  });
+  showAppMode(state.appMode);
 }
 
 // A lightweight, always-on sweep (independent of the active job's own
@@ -1203,6 +1289,7 @@ const VIEWER_LEGEND_IDS = {
   "#resultViewer": "#resultsColorLegend",
   "#modelViewer": "#modelColorLegend",
   "#allResultViewer": "#allResultsColorLegend",
+  "#runJobPdbViewer": "#runJobPdbColorLegend",
 };
 
 function refreshChainLegendFor(selector) {
@@ -2027,13 +2114,31 @@ function buildStructureSequence(structure) {
   return Array.from(byChain, ([chain, residues]) => ({ chain, residues }));
 }
 
+// Residues are grouped into fixed-size chunks, each with its own starting
+// residue number printed above it - a plain ruler-free run of letters
+// left the residue number only reachable one-at-a-time by hovering, which
+// is exactly the friction this panel exists to remove (its callers point
+// users here specifically to "read off residue numbers" for contigs/
+// hotspots). Chunking (rather than one number per residue) keeps it
+// legible; chunks are inline-flex columns (number over residues) so the
+// browser still wraps between them like plain inline content - no chunk
+// itself splits across a line. qsa(".seq-residue", ...) still finds every
+// residue span in document order regardless of this extra nesting, so
+// setupSequencePanelInteraction()'s drag-select is unaffected.
+const SEQ_CHUNK_SIZE = 10;
+
 function renderSequenceResidues(chains) {
   return chains.map(({ chain, residues }) => {
-    const spans = residues.map((r) => {
-      const color = AA_COLORS[r.code] || "#3a4560";
-      return `<span class="seq-residue" data-chain="${escapeHtml(chain)}" data-resno="${r.resno}" title="${escapeHtml(r.resname)} ${r.resno}" style="background:${color}1a;color:${color}">${escapeHtml(r.code)}</span>`;
+    const chunks = [];
+    for (let i = 0; i < residues.length; i += SEQ_CHUNK_SIZE) chunks.push(residues.slice(i, i + SEQ_CHUNK_SIZE));
+    const chunkHtml = chunks.map((chunk) => {
+      const spans = chunk.map((r) => {
+        const color = AA_COLORS[r.code] || "#3a4560";
+        return `<span class="seq-residue" data-chain="${escapeHtml(chain)}" data-resno="${r.resno}" title="${escapeHtml(r.resname)} ${r.resno}" style="background:${color}1a;color:${color}">${escapeHtml(r.code)}</span>`;
+      }).join("");
+      return `<span class="seq-chunk"><span class="seq-chunk-num">${chunk[0].resno}</span><span class="seq-chunk-residues">${spans}</span></span>`;
     }).join("");
-    return `<div class="seq-chain"><span class="seq-chain-label">Chain ${escapeHtml(chain)} · ${residues.length} residues</span><div class="seq-residues">${spans}</div></div>`;
+    return `<div class="seq-chain"><span class="seq-chain-label">Chain ${escapeHtml(chain)} · ${residues.length} residues</span><div class="seq-residues">${chunkHtml}</div></div>`;
   }).join("");
 }
 
@@ -2158,9 +2263,15 @@ function createResultsView(cfg) {
   let results = {
     columns: [], rows: [], numericColumns: [], displayColumns: [], idCol: null,
     filters: {}, colorField: "", colorDirection: "higher", selectedRowId: null,
+    // sortField/sortDir (1 = ascending, -1 = descending) is the ONE sort
+    // state shared by the list, the metrics table, and the "Sort list by"
+    // toolbar control - set from any of the three (the dropdown, or
+    // clicking a table header) and every one of them reflects it, rather
+    // than the table having its own independent click-to-sort state the
+    // list and dropdown never knew about (which is how this used to work).
+    sortField: "", sortDir: 1,
     listPage: 0, tablePage: 0,
   };
-  let csvSort = { col: null, dir: 1 };
   let loadedPdbKey = null;
   let colorMode = "chain"; // "chain" | "provenance"
   // Per sequence-length group in the alignment view (keyed by the group's
@@ -2193,15 +2304,17 @@ function createResultsView(cfg) {
       columns, rows: objRows, numericColumns, displayColumns, idCol,
       filters: prev.filters || {}, colorField: prev.colorField || "",
       colorDirection: prev.colorDirection || "higher", selectedRowId: prev.selectedRowId,
+      sortField: prev.sortField || "", sortDir: prev.sortDir || 1,
       // Reset to page 1 on every fresh load - the row set may have changed
       // size/order entirely (new poll tick, new filters upstream), so
       // whatever page the user was on no longer means anything reliable.
       listPage: 0, tablePage: 0,
     };
     expandedAlignGroups = new Map();
-    // drop filters/colorField that no longer refer to a real numeric column
+    // drop filters/colorField/sortField that no longer refer to a real column
     Object.keys(results.filters).forEach((c) => { if (!numericColumns.includes(c)) delete results.filters[c]; });
     if (results.colorField && !numericColumns.includes(results.colorField)) results.colorField = "";
+    if (results.sortField && !displayColumns.includes(results.sortField)) results.sortField = "";
   }
 
   function getFilteredRows() {
@@ -2218,6 +2331,24 @@ function createResultsView(cfg) {
         if (f.max != null && val > f.max) return false;
       }
       return true;
+    });
+  }
+
+  // Shared by the list, the metrics table, and (indirectly, since it
+  // reads results.sortField/sortDir) the "Sort list by" toolbar control -
+  // one sort order, computed once per render rather than the table having
+  // its own separate copy of this logic the list never saw. Numeric
+  // columns compare numerically; anything else (including a numeric
+  // column with the odd blank/non-numeric cell) falls back to a plain
+  // string compare, same as the table's click-to-sort always did.
+  function getSortedRows(rows) {
+    const { sortField, sortDir } = results;
+    if (!sortField) return rows;
+    return [...rows].sort((a, b) => {
+      const av = a[sortField], bv = b[sortField];
+      const an = parseFloat(av), bn = parseFloat(bv);
+      const cmp = !isNaN(an) && !isNaN(bn) ? an - bn : String(av ?? "").localeCompare(String(bv ?? ""));
+      return cmp * sortDir;
     });
   }
 
@@ -2274,11 +2405,13 @@ function createResultsView(cfg) {
         qs(cfg.ids.csvWrap).innerHTML = `<p class="muted">${cfg.emptyCsvMessage}</p>`;
         qs(cfg.ids.count).textContent = "";
         populateColorBySelect();
+        populateSortBySelect();
         renderFiltersList();
         return;
       }
       ingestCsv(data);
       populateColorBySelect();
+      populateSortBySelect();
       renderFiltersList();
       updateFiltersBadge();
       renderAll();
@@ -2314,7 +2447,7 @@ function createResultsView(cfg) {
     const listEl = qs(cfg.ids.list);
     const pagerEl = qs(cfg.ids.listPager);
     if (!results.rows.length) return; // handled by load()'s fallback path
-    const rows = getFilteredRows();
+    const rows = getSortedRows(getFilteredRows());
     if (!rows.length) {
       listEl.innerHTML = `<p class="muted">No models match the current filters.</p>`;
       if (pagerEl) pagerEl.innerHTML = "";
@@ -2370,6 +2503,7 @@ function createResultsView(cfg) {
   async function selectRow(row) {
     results.selectedRowId = row.__rowId;
     renderListSelectionOnly();
+    renderTableSelectionOnly();
     const pdbName = basename(row.model_path);
     const rowLog = cfg.getLog(row);
     // Same structure already showing - skip refetching so the viewer's
@@ -2407,12 +2541,28 @@ function createResultsView(cfg) {
     // the page currently shown (e.g. a poll re-selected a row that's now
     // on a different page), nothing in the visible list gets highlighted -
     // simpler and safer than silently jumping the user to another page.
-    const { pageRows } = pageOf(getFilteredRows(), results.listPage, RESULTS_PAGE_SIZE);
+    const { pageRows } = pageOf(getSortedRows(getFilteredRows()), results.listPage, RESULTS_PAGE_SIZE);
     const listEl = qs(cfg.ids.list);
     qsa(".list-item", listEl).forEach((el, i) => {
       const row = pageRows[i];
       if (!row) return;
       el.classList.toggle("selected", row.__rowId === results.selectedRowId);
+    });
+  }
+
+  // Same idea as renderListSelectionOnly() - a cheap toggle over whatever
+  // rows the metrics table currently has in the DOM, rather than
+  // rebuilding the whole table (which would also reset its scroll
+  // position and re-run every color-by/id-column computation) just to
+  // move a selection highlight. Also does nothing if the selected row
+  // isn't on the table's own currently-shown page - the table has its own
+  // independent page from the list (results.tablePage vs listPage), so
+  // "selected" not being visible right now is expected, not a bug.
+  function renderTableSelectionOnly() {
+    const wrap = qs(cfg.ids.csvWrap);
+    qsa("tbody tr", wrap).forEach((tr) => {
+      const rid = parseInt(tr.dataset.rowId, 10);
+      tr.classList.toggle("selected", rid === results.selectedRowId);
     });
   }
 
@@ -2492,19 +2642,11 @@ function createResultsView(cfg) {
     }
     const { displayColumns, idCol } = results;
     const scale = computeColorScale(rows);
-
-    let sortedRows = rows;
-    const { col, dir } = csvSort;
-    if (col) {
-      sortedRows = [...rows].sort((a, b) => {
-        const av = a[col], bv = b[col];
-        const an = parseFloat(av), bn = parseFloat(bv);
-        let cmp;
-        if (!isNaN(an) && !isNaN(bn)) cmp = an - bn;
-        else cmp = String(av ?? "").localeCompare(String(bv ?? ""));
-        return cmp * dir;
-      });
-    }
+    // Same sort (results.sortField/sortDir) the list and the "Sort list
+    // by" toolbar control use - see getSortedRows(). Clicking a column
+    // header below updates that shared state too, rather than the table
+    // keeping its own separate sort no other view agreed with.
+    const sortedRows = getSortedRows(rows);
 
     const { pageRows, clamped } = pageOf(sortedRows, results.tablePage, RESULTS_PAGE_SIZE);
     results.tablePage = clamped;
@@ -2517,7 +2659,7 @@ function createResultsView(cfg) {
 
     const thead = displayColumns.map((c) => {
       const cls = c === idCol ? ' class="id-col"' : (PATH_COLUMNS.includes(c) ? ' class="path-col"' : "");
-      const arrow = col === c ? (dir === 1 ? " ▲" : " ▼") : "";
+      const arrow = results.sortField === c ? (results.sortDir === 1 ? " ▲" : " ▼") : "";
       return `<th data-col="${escapeHtml(c)}"${cls}>${escapeHtml(c)}${arrow}</th>`;
     }).join("");
 
@@ -2538,7 +2680,13 @@ function createResultsView(cfg) {
         const val = r[c] ?? "";
         return `<td${cls}${style} title="${escapeHtml(String(val))}">${escapeHtml(String(val))}</td>`;
       }).join("");
-      return `<tr style="${rowStyle}" data-row-id="${r.__rowId}">${tds}</tr>`;
+      // .selected uses borders (not background/outline - background is
+      // already spoken for by color-by, and outline on a <tr> renders
+      // inconsistently across browsers with border-collapse) so it stays
+      // visible layered on top of any color-by tint - see .data-table
+      // tbody tr.selected in style.css.
+      const selectedCls = r.__rowId === results.selectedRowId ? " selected" : "";
+      return `<tr class="${selectedCls}" style="${rowStyle}" data-row-id="${r.__rowId}">${tds}</tr>`;
     }).join("");
 
     const wrapTop = wrap.scrollTop;
@@ -2548,9 +2696,13 @@ function createResultsView(cfg) {
     qsa("th", wrap).forEach((th) => {
       th.addEventListener("click", () => {
         const c = th.dataset.col;
-        csvSort = { col: c, dir: csvSort.col === c ? -csvSort.dir : 1 };
-        results.tablePage = 0; // a new sort order means "page 3" means something different now
-        renderCsvTableFn();
+        // Clicking the column already being sorted flips direction;
+        // clicking a different one starts it fresh at ascending.
+        results.sortDir = results.sortField === c ? -results.sortDir : 1;
+        results.sortField = c;
+        results.listPage = 0; results.tablePage = 0; // a new sort order means "page 3" means something different now
+        syncSortControls();
+        renderAll(); // the list needs to re-sort too now, not just this table
       });
     });
     qsa("tbody tr", wrap).forEach((tr) => {
@@ -2573,6 +2725,35 @@ function createResultsView(cfg) {
     sel.value = results.numericColumns.includes(prev) ? prev : "";
     results.colorField = sel.value;
     dirSel.value = results.colorDirection;
+  }
+
+  // --- Sort-by controls ---
+  // Every displayColumn (not just numericColumns, unlike color-by - a
+  // plain string compare is a perfectly fine sort even if it wouldn't
+  // make sense as a color gradient) is offered here, and this one state
+  // (results.sortField/sortDir) drives the list, the metrics table, AND
+  // this dropdown - whichever of the three last changed it, the other two
+  // pick it up next render (see getSortedRows(), and the table's own
+  // header-click handler, which calls syncSortControls() too).
+
+  function populateSortBySelect() {
+    const sel = qs(cfg.ids.sortByField);
+    const dirSel = qs(cfg.ids.sortByDirection);
+    const prev = results.sortField;
+    sel.innerHTML = `<option value="">None</option>` + results.displayColumns
+      .map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join("");
+    sel.value = results.displayColumns.includes(prev) ? prev : "";
+    results.sortField = sel.value;
+    dirSel.value = String(results.sortDir);
+  }
+
+  // Cheap sync (just .value, not a full rebuild) for when sortField/sortDir
+  // changed from somewhere other than these controls themselves (a table
+  // header click) - rebuilding the <select>'s options here would be
+  // needless work and would risk fighting an in-progress click on it.
+  function syncSortControls() {
+    qs(cfg.ids.sortByField).value = results.sortField;
+    qs(cfg.ids.sortByDirection).value = String(results.sortDir);
   }
 
   // --- Filters panel (D3) ---
@@ -2724,10 +2905,24 @@ function createResultsView(cfg) {
     qs(cfg.ids.colorByDirection).addEventListener("change", (e) => { results.colorDirection = e.target.value; renderAll(); });
   }
 
+  function initSortByControls() {
+    qs(cfg.ids.sortByField).addEventListener("change", (e) => {
+      results.sortField = e.target.value;
+      results.listPage = 0; results.tablePage = 0; // a new sort order means "page 3" means something different now
+      renderAll();
+    });
+    qs(cfg.ids.sortByDirection).addEventListener("change", (e) => {
+      results.sortDir = parseInt(e.target.value, 10);
+      results.listPage = 0; results.tablePage = 0;
+      renderAll();
+    });
+  }
+
   function initAll() {
     initFiltersPanel();
     initModeDropdown();
     initColorByControls();
+    initSortByControls();
     initExportButton();
   }
 
@@ -2735,10 +2930,10 @@ function createResultsView(cfg) {
     results = {
       columns: [], rows: [], numericColumns: [], displayColumns: [], idCol: null,
       filters: {}, colorField: "", colorDirection: "higher", selectedRowId: null,
+      sortField: "", sortDir: 1,
       listPage: 0, tablePage: 0,
     };
     expandedAlignGroups = new Map();
-    csvSort = { col: null, dir: 1 };
     loadedPdbKey = null;
     colorMode = "chain";
   }
@@ -2810,6 +3005,7 @@ const resultsView = createResultsView({
     list: "#finalPdbsList", viewer: "#resultViewer", viewerLegend: "#resultsColorLegend",
     seqContent: "#resultsSequenceContent", csvWrap: "#csvTableWrap", alignContent: "#resultsAlignContent",
     count: "#resultsCount", colorByField: "#colorByField", colorByDirection: "#colorByDirection",
+    sortByField: "#sortByField", sortByDirection: "#sortByDirection",
     filtersBtn: "#filtersBtn", filtersPanel: "#filtersPanel", filtersList: "#filtersList",
     filtersBadge: "#filtersBadge", clearFiltersBtn: "#clearFiltersBtn", exportBtn: "#exportFilteredBtn",
     structColorMode: "#resultsStructColorMode", chainPaletteWrap: "#resultsChainPaletteWrap",
@@ -2830,6 +3026,7 @@ const allResultsView = createResultsView({
     list: "#allFinalPdbsList", viewer: "#allResultViewer", viewerLegend: "#allResultsColorLegend",
     seqContent: "#allResultsSequenceContent", csvWrap: "#allCsvTableWrap", alignContent: "#allResultsAlignContent",
     count: "#allResultsCount", colorByField: "#allColorByField", colorByDirection: "#allColorByDirection",
+    sortByField: "#allSortByField", sortByDirection: "#allSortByDirection",
     filtersBtn: "#allFiltersBtn", filtersPanel: "#allFiltersPanel", filtersList: "#allFiltersList",
     filtersBadge: "#allFiltersBadge", clearFiltersBtn: "#allClearFiltersBtn", exportBtn: "#allExportFilteredBtn",
     structColorMode: "#allResultsStructColorMode", chainPaletteWrap: "#allResultsChainPaletteWrap",
@@ -2855,6 +3052,7 @@ document.addEventListener("DOMContentLoaded", () => {
   loadJobsFromStorage();
   initColorControls();
   initTopbar();
+  initAppModeTabs();
   initJobTabsBar();
   initTabs();
   resultsView.initAll();

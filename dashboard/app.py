@@ -20,10 +20,30 @@ import os
 import zipfile
 
 from flask import Flask, jsonify, request, send_file, abort
+from werkzeug.exceptions import HTTPException
 
 import parser as P
+import run_targets as RT
+from run_api import run_api
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
+app.register_blueprint(run_api)
+
+
+# Every route here is an API this dashboard's own frontend calls with
+# fetch()/apiGet() and expects JSON back from - Flask's/Werkzeug's default
+# abort() page is HTML, though, so every `abort(400, description=...)`
+# elsewhere in this app (there are many, across app.py and run_api.py) was
+# silently losing its specific `description` on the way to the browser:
+# apiGet()'s `res.json()` parse just fails against an HTML body and falls
+# back to the generic statusText ("Bad Request") instead. This turns any
+# HTTPException (however it was raised) into a plain {"error": "..."} body
+# with the same status code, so callers actually see the reason.
+@app.errorhandler(HTTPException)
+def handle_http_exception(e):
+    response = jsonify({"error": e.description})
+    response.status_code = e.code
+    return response
 
 # Simple in-memory cache of the last resolved output_dir per log path, so
 # helper endpoints (pdb/json fetchers) don't need to re-parse the whole log
@@ -441,7 +461,13 @@ def api_output_log():
 
 @app.route("/api/browse")
 def api_browse():
-    path = request.args.get("path") or os.path.expanduser("~")
+    # No ?path= at all means "just opened the browser" (the frontend omits
+    # it for exactly that case, see openBrowse() in app.js) - start at the
+    # locally-mounted projects root from dashboard_config.yaml if one's
+    # configured (where a real job's logs actually are, unlike the
+    # process's own home directory), falling back to the home directory
+    # the way this always worked before that file existed.
+    path = request.args.get("path") or RT.get_default_browse_root() or os.path.expanduser("~")
     path = os.path.abspath(path)
     if not os.path.isdir(path):
         abort(400, description="Not a directory")
