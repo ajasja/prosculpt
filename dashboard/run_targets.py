@@ -233,7 +233,19 @@ def copy_to_remote(
     name = dest_name or os.path.basename(os.path.normpath(local_dir))
     try:
         proc = subprocess.run(
-            ["scp", "-r", local_dir, f"{target['ssh_host']}:{remote_parent_dir}/{name}"],
+            # -s forces the SFTP-based transfer protocol instead of scp's
+            # legacy one. The legacy protocol reads the very first bytes
+            # of the remote shell's own stdout as its binary handshake -
+            # any shell startup script that prints so much as one stray
+            # line before that (a login banner, a conda-activation
+            # message, a module-load echo, ... all common on HPC login
+            # shells) corrupts it with a cryptic "Received message too
+            # long" error that has nothing to do with the actual transfer.
+            # SFTP mode runs over a proper subsystem channel instead, so
+            # it isn't vulnerable to that whole class of failure - safe to
+            # force unconditionally, not just as a fix for one target's
+            # particular shell config.
+            ["scp", "-s", "-r", local_dir, f"{target['ssh_host']}:{remote_parent_dir}/{name}"],
             capture_output=True,
             text=True,
             timeout=_TIMEOUT_SECONDS * 5,  # a whole directory (pdb/alignments) can be slower than a bare command

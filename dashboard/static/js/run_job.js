@@ -655,6 +655,7 @@ async function submitRunJob(dryRun) {
 
   const btns = qsa(".rj-submit-btn");
   btns.forEach((b) => (b.disabled = true));
+  showRunJobWaiting(dryRun);
   try {
     const res = await fetch("/api/run/submit", { method: "POST", body: fd });
     const data = await res.json().catch(() => ({ ok: false, stderr: `HTTP ${res.status}` }));
@@ -666,7 +667,41 @@ async function submitRunJob(dryRun) {
     showRunJobResult({ ok: false, stderr: String(e) }, dryRun);
   } finally {
     btns.forEach((b) => (b.disabled = false));
+    stopRunJobWaiting();
   }
+}
+
+// The submit/preview round trip runs sbatch (or a dry-run of it) over SSH
+// on a real cluster - genuinely slow enough (multi-second, sometimes much
+// more) that leaving the button just greyed out with no other feedback
+// reads as "did this hang?" rather than "this is working". Shown in the
+// same #runJobResult slot showRunJobResult() will overwrite once the real
+// response lands - an elapsed counter (not a countdown) since there's no
+// reliable estimate of how long a given cluster's login node will take to
+// respond, only the hard upper bound (the request timeout) worth naming.
+let runJobWaitingTimer = null;
+
+function showRunJobWaiting(dryRun) {
+  const el = qs("#runJobResult");
+  el.classList.remove("hidden");
+  el.className = "rj-result rj-result-waiting";
+  const label = dryRun ? "Running preview" : "Submitting";
+  const targetLabel = qs("#runJobTarget").selectedOptions[0]?.textContent || "target";
+  let elapsed = 0;
+  const render = () => {
+    el.innerHTML = `<h4>${escapeHtml(label)}…</h4><p class="muted">Waiting for a response from ${escapeHtml(targetLabel)} - this runs over SSH and can take a while (${elapsed}s elapsed, times out at 60s).</p>`;
+  };
+  render();
+  clearInterval(runJobWaitingTimer);
+  runJobWaitingTimer = setInterval(() => {
+    elapsed += 1;
+    render();
+  }, 1000);
+}
+
+function stopRunJobWaiting() {
+  clearInterval(runJobWaitingTimer);
+  runJobWaitingTimer = null;
 }
 
 function showRunJobResult(data, dryRun) {
@@ -730,11 +765,24 @@ function registerPendingRun(data) {
   // set whenever dir_renamed kicked in) over what was typed, so the
   // pending list never shows a name that doesn't match what's really there.
   const jobName = data.final_name || (runJob.core.job_name || "").trim() || "(unnamed)";
+  // How many SLURM array tasks to expect - num_tasks > 1 submits one
+  // array job whose tasks each get their own log file
+  // (slurm-<id>_<taskid>_<name>.out), not one shared log, so
+  // pollPendingRuns() needs to know how many to wait for before it's
+  // safe to stop checking. Known precisely in "build" mode (the field
+  // the generated config came from); "existing" mode submits a
+  // hand-written config the GUI never parsed, so there's no reliable way
+  // to know it there - defaulting to 1 keeps the original single-task
+  // promote-on-first-match behavior for that case instead of guessing
+  // wrong and polling forever.
+  const numTasks = runJob.submitMode === "build" ? Math.max(1, parseInt(runJob.core.num_tasks, 10) || 1) : 1;
   list.push({
     job_name: jobName,
     target: qs("#runJobTarget").value,
     job_id: data.job_id,
     watch_glob: watchDir ? `${watchDir}/logs/slurm-${data.job_id}_*.out` : null,
+    num_tasks: numTasks,
+    found_paths: [], // log paths already added to Track job so far, across however many poll ticks it took
     submitted_at: Date.now(),
     status: "submitted",
   });
@@ -754,6 +802,7 @@ function isVisiblePendingRun(p) {
 
 function renderPendingRuns() {
   const el = qs("#runJobPendingList");
+  renderPendingCountdown();
   if (!el) return;
   const list = loadPendingRuns().filter(isVisiblePendingRun);
   if (!list.length) {
@@ -768,8 +817,13 @@ function renderPendingRuns() {
       } else if (!p.watch_glob) {
         note = ` <span class="rj-warn">— this target has no local_mount_path configured, so it can't be auto-added; add it to Track job by hand once you know its log path.</span>`;
       }
+      // num_tasks > 1 submits a SLURM array job - each task's log appears
+      // separately (sometimes across several poll ticks, see
+      // pollPendingRuns()), so this shows how many of the expected tasks
+      // have been found/added so far rather than just a flat job id.
+      const taskProgress = p.num_tasks > 1 ? ` <span class="muted">(${(p.found_paths || []).length}/${p.num_tasks} tasks started)</span>` : "";
       return `<div class="rj-pending-row">
-        <span>${escapeHtml(p.job_name)} <span class="muted">(job ${escapeHtml(String(p.job_id))}, ${escapeHtml(p.target)})</span>${note}</span>
+        <span>${escapeHtml(p.job_name)} <span class="muted">(job ${escapeHtml(String(p.job_id))}, ${escapeHtml(p.target)})</span>${taskProgress}${note}</span>
         <button type="button" class="secondary rj-pending-remove" data-i="${i}">Remove</button>
       </div>`;
     })
@@ -787,6 +841,21 @@ function renderPendingRuns() {
   });
 }
 
+// Ticks down once a second between actual poll cycles (PENDING_POLL_MS
+// apart) so "still waiting" has visible, live feedback instead of the
+// pending list just sitting there looking inert between checks - reset to
+// a full cycle inside pollPendingRuns() itself, right after each real poll
+// runs, not on a separate timer of its own (so it can never drift out of
+// sync with when the next poll actually happens).
+let pendingCountdownSecs = PENDING_POLL_MS / 1000;
+
+function renderPendingCountdown() {
+  const el = qs("#runJobPendingCountdown");
+  if (!el) return;
+  const hasPending = loadPendingRuns().some((p) => p.status === "submitted");
+  el.textContent = hasPending ? `— next check in ${pendingCountdownSecs}s` : "";
+}
+
 async function pollPendingRuns() {
   const list = loadPendingRuns();
   let changed = false;
@@ -794,11 +863,29 @@ async function pollPendingRuns() {
     if (p.status !== "submitted" || !p.watch_glob) continue;
     try {
       const res = await apiGet("/api/run/check_pending", { glob: p.watch_glob });
-      if (res.found && res.path) {
-        addJobs(res.path);
+      // watch_glob already has a wildcard where the array task id goes
+      // (slurm-<jobid>_*.out), so a num_tasks > 1 job can match more than
+      // one path here - found_paths tracks which ones this pending entry
+      // has already added, so a re-poll only acts on genuinely new ones
+      // instead of re-adding (or re-toasting) the same task repeatedly.
+      const found = p.found_paths || (p.found_paths = []);
+      const newPaths = (res.paths || []).filter((path) => !found.includes(path));
+      if (newPaths.length) {
+        newPaths.forEach((path) => {
+          addJobs(path);
+          found.push(path);
+        });
+        changed = true;
+        const label = p.num_tasks > 1 ? `${found.length}/${p.num_tasks} tasks started` : "started";
+        showRunJobToast(`"${p.job_name}" ${label} - added to Track job.`);
+      }
+      // Only stop polling once every expected task's log has actually
+      // shown up - a SLURM array's tasks don't necessarily all start at
+      // once, so finding *a* match doesn't mean the rest won't still
+      // appear on a later tick.
+      if (found.length >= p.num_tasks) {
         p.status = "promoted";
         changed = true;
-        showRunJobToast(`"${p.job_name}" started - added to Track job.`);
       }
     } catch (e) {
       // A 400 means the glob itself was rejected outright (e.g. it points
@@ -816,9 +903,15 @@ async function pollPendingRuns() {
       }
     }
   }
+  // Reset unconditionally (not just when something changed) - a poll
+  // cycle just genuinely ran either way, so "time until the next one" is
+  // the same regardless of whether it happened to find anything new.
+  pendingCountdownSecs = PENDING_POLL_MS / 1000;
   if (changed) {
     savePendingRuns(list);
-    renderPendingRuns();
+    renderPendingRuns(); // also re-renders the countdown text
+  } else {
+    renderPendingCountdown();
   }
 }
 
@@ -982,4 +1075,8 @@ function initRunJobTab() {
   loadRunTargets();
   setInterval(pollPendingRuns, PENDING_POLL_MS);
   pollPendingRuns();
+  setInterval(() => {
+    pendingCountdownSecs = Math.max(0, pendingCountdownSecs - 1);
+    renderPendingCountdown();
+  }, 1000);
 }

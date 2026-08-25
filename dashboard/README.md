@@ -53,6 +53,35 @@ then open http://localhost:5000 on your laptop as usual.
 
 To use a different port: `PORT=8080 python app.py`.
 
+### Run automatically at Windows logon
+
+`start_dashboard.ps1` (next to this README) wraps the same `python app.py`
+call for exactly this: waits for a mapped network drive to actually
+reconnect before launching (a persistent drive mapping isn't always ready
+the instant a logon session starts), and logs everything to
+`%USERPROFILE%\prosculpt_dashboard.log` since there's no console attached
+once it's started this way. Open it and adjust the variables at the top
+(`$DashboardDir`, `$Python`, `$Port`, `$DriveLetter`) for this machine
+first, then either:
+
+- **Task Scheduler** (recommended - can run hidden, restart on failure):
+  Task Scheduler → Create Task → General: name it, "Run only when user is
+  logged on" → Triggers: New → "At log on" → this user → Actions: New →
+  "Start a program" → Program: `powershell.exe`, arguments:
+  `-WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\path\to\start_dashboard.ps1"`.
+  On the **Settings** tab, uncheck (or raise) "Stop the task if it runs
+  longer than 3 days" - that limit is normally meant for one-off jobs, and
+  would otherwise silently kill the dashboard after 3 days of uptime.
+- **Startup folder** (simpler, no admin needed): `Win+R` → `shell:startup`
+  → create a shortcut with target
+  `powershell.exe -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\path\to\start_dashboard.ps1"`.
+
+Either way, since it runs with no visible window, check
+`prosculpt_dashboard.log` if `http://localhost:5000` doesn't come up after
+logging in - most often either the drive mapping timed out (raise
+`$MaxWaitSecs`) or `$DashboardDir`/`$Python` needs adjusting for this
+machine.
+
 ## 3. Run a new job
 
 The **Run job** tab needs at least one *run target* configured before it
@@ -564,6 +593,8 @@ static/js/run_job_schema.js  Run job's field/module schema (CORE_FIELDS,
 static/js/run_job.js         Run job's form rendering, YAML two-way sync,
                     upload handling, submit/squeue/pending-runs logic
 requirements.txt
+start_dashboard.ps1  Windows: launch at logon via Task Scheduler/Startup -
+                    see "Run automatically at Windows logon" above
 ```
 
 ## Troubleshooting

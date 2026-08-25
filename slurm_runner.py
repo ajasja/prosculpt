@@ -129,5 +129,14 @@ if not args[0].dry_run:
         print(f"Job {task_name} has been submitted to slurm with id {job_id} and code {exit_code}")
     else:
         print(f"Job submission failed with code {exit_code}")
+    # Propagate sbatch's own exit code as this script's exit code - without
+    # this, the block above already prints "Job submission failed..." on a
+    # real failure (e.g. sbatch couldn't reach the controller) but the
+    # script itself still finishes and exits 0 regardless, which makes a
+    # genuine submission failure look identical to success to anything
+    # checking $? - a plain shell caller, and in particular the dashboard's
+    # own submit API, which reports "Submitted" (ok: true) purely from the
+    # remote command's exit code.
+    sys.exit(exit_code)
 else:
     print("Command wasn't run because --dry-run was active.")

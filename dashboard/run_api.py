@@ -255,11 +255,17 @@ def api_run_submit():
 
 @run_api.route("/api/run/check_pending")
 def api_run_check_pending():
-    """Looks for a just-submitted job's log file, so the frontend can
-    promote a pending submission into the tracking tab once it exists.
-    `roots` (repeated query param) restricts the search to configured
-    target projects_path/local_mount_path values only - never an arbitrary
-    filesystem glob from the client."""
+    """Looks for a just-submitted job's log file(s), so the frontend can
+    promote a pending submission into the tracking tab once at least one
+    exists. Returns every currently-matching path, not just one - a job
+    with num_tasks > 1 is a SLURM array job, so each task gets its own log
+    file (slurm-<jobid>_<taskid>_<name>.out) and they don't all necessarily
+    appear at the same poll tick (the array's tasks can start at different
+    times depending on cluster scheduling) - the caller is expected to
+    keep polling and add whichever ones are new each time rather than
+    stopping at the first. `roots` (repeated query param) restricts the
+    search to configured target projects_path/local_mount_path values only
+    - never an arbitrary filesystem glob from the client."""
     pattern = request.args.get("glob", "")
     if not pattern:
         abort(400, description="glob is required")
@@ -276,4 +282,4 @@ def api_run_check_pending():
     if not any(pattern_norm.startswith(os.path.normpath(root) + os.sep) for root in allowed_roots if root):
         abort(400, description="glob must be under a configured target's projects_path")
     matches = sorted(glob.glob(pattern))
-    return jsonify({"found": bool(matches), "path": matches[0] if matches else None})
+    return jsonify({"found": bool(matches), "paths": matches})

@@ -47,8 +47,8 @@
             <span class="toolbar-label">Show sidechains:</span>
             <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
             <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
-            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
             <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
           </div>
         </div>
         <div id="runJobPdbSequencePanel" class="seq-panel"></div>
@@ -84,7 +84,7 @@
   </div>
 
   <div class="card">
-    <h3>Pending submissions</h3>
+    <h3>Pending submissions <span id="runJobPendingCountdown" class="muted rj-pending-countdown"></span></h3>
     <p class="muted" style="margin-top:0">Once a submitted job's log file appears on disk, it's added to Track job automatically.</p>
     <div id="runJobPendingList"></div>
   </div>
