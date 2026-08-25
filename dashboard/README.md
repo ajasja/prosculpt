@@ -299,9 +299,15 @@ residue into one of three categories, colored consistently across all
 three tabs and shown in a small legend next to the dropdown, each with
 its own color picker so the palette can be retuned: **Motif**
 (`con_hal_pdb_idx` - reference residues present in a *redesigned* chain),
-**Fixed chains** (`receptor_con_hal_pdb_idx` - reference residues in a
-*non-designed* chain), and **Sculpted** (everything else - generated de
-novo). Residue identity for this is chain letter + residue number, but
+**Fixed chains** (`complex_con_hal_pdb_idx` minus `con_hal_pdb_idx` -
+reference residues in a *non-designed* chain; `complex_con_hal_pdb_idx`
+covers every non-sculpted residue with correct chain/residue numbers, and
+is only present in the pickle at all when the run actually had fixed
+chains - absent means no fixed chains, so `fixed_chain` is simply empty.
+`receptor_con_hal_pdb_idx` looked like the obvious field for this but
+turns out to get both the resnums *and* the chain letters wrong, which no
+amount of renumbering could fix), and **Sculpted** (everything else -
+generated de novo). Residue identity for this is chain letter + residue number, but
 the files this needs to apply to don't agree on numbering convention:
 RFdiffusion's own raw backbone `.pdb` (Backbones tab) keeps counting
 residue numbers up across chain boundaries instead of resetting per
@@ -312,10 +318,11 @@ every chain back to 1 like a normally-numbered PDB file does. Every
 variant a given row is (`list_models()` in `parser.py` resolves this and
 stamps each row with its `trb_path`), and a Results row finds its `.trb`
 the same way the Backbones tab does - same basename as that row's
-`path_rfdiff`, `.trb` extension. `load_trb_provenance()` returns
-`fixed_chain` residue numbers already shifted onto the chain-local
-convention (each chain's lowest resnum becomes 1, then 2, ...) -
-`con_hal_pdb_idx`/`motif` doesn't need the same treatment since the
+`path_rfdiff`, `.trb` extension. `load_trb_provenance()`'s `fixed_chain`
+residue numbers come out already on the chain-local convention (each
+chain's lowest resnum effectively 1, then 2, ...) straight from
+`complex_con_hal_pdb_idx` itself, no extra renumbering needed -
+`con_hal_pdb_idx`/`motif` is on the same convention too, since the
 designed chain(s) it refers to always come first and so are never offset
 either way - and the frontend (`computeStructureChainInfo()` in
 `app.js`) works out each *loaded* structure's own per-chain offset the

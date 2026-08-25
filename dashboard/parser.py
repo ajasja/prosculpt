@@ -529,29 +529,32 @@ def _natural_key(s: str):
 
 def load_trb_provenance(trb_path: str) -> dict:
     """A .trb file is a pickled dict RFdiffusion writes alongside each
-    backbone .pdb. Two fields matter here, both lists of (chain, resnum)
+    backbone .pdb. Two fields drive this, both lists of (chain, resnum)
     pairs in the *generated* structure's own numbering:
 
-      con_hal_pdb_idx          - residues taken from the reference
-                                  structure that ended up in a redesigned
-                                  chain ("Motif").
-      receptor_con_hal_pdb_idx - residues taken from the reference in a
-                                  non-designed chain ("Fixed chains").
+      con_hal_pdb_idx         - residues taken from the reference structure
+                                 that ended up in a redesigned chain
+                                 ("Motif").
+      complex_con_hal_pdb_idx - every non-sculpted residue (motif AND fixed
+                                 chains together), correctly chained and
+                                 numbered. Only present at all when the run
+                                 actually had fixed chains.
+
+    "Fixed chains" is derived as complex_con_hal_pdb_idx minus
+    con_hal_pdb_idx (set difference on (chain, resnum) pairs) rather than
+    read from receptor_con_hal_pdb_idx directly - that field turns out to
+    get both the resnums AND the chain letters wrong (it doesn't reset
+    resnums per chain, and mislabels which chain a residue belongs to).
+    complex_con_hal_pdb_idx, by contrast, already uses correct chain
+    letters and correct (chain-local) residue numbers, so no renumbering
+    is needed on the result - unlike the old receptor_con_hal_pdb_idx-based
+    approach. If complex_con_hal_pdb_idx is absent from the pickle at all,
+    the run had no fixed chains - every non-sculpted residue is already
+    covered by con_hal_pdb_idx, so fixed_chain is simply empty.
 
     Any residue in neither list was generated de novo ("Sculpted") - that
     set isn't enumerated here since the caller already knows the full
     residue list from the structure itself.
-
-    receptor_con_hal_pdb_idx's resnums keep counting up across chain
-    boundaries rather than resetting per chain (e.g. a receptor chain B
-    coming after a 79-residue chain A is numbered 80, 81, ... instead of
-    1, 2, ...) - that matches RFdiffusion's own raw backbone .pdb (which
-    doesn't reset per-chain numbering either), but not a normally-numbered
-    PDB file like AlphaFold3/Boltz's output, where every chain restarts at
-    1. _renumber_chain_local() below fixes that up so "fixed_chain"
-    residue identities are portable across both conventions; con_hal_pdb_idx
-    doesn't need the same treatment since the designed chain(s) it refers
-    to always come first and so are never offset in either convention.
     """
     try:
         with open(trb_path, "rb") as f:
@@ -576,18 +579,19 @@ def load_trb_provenance(trb_path: str) -> dict:
                 continue  # skip anything not shaped like (chain, resnum)
         return out
 
-    def renumber_chain_local(entries):
-        """Shift each chain's resnums so its lowest one becomes 1, next
-        lowest 2, etc. - see the docstring above for why."""
-        chain_mins = {}
-        for chain, resnum in entries:
-            if chain not in chain_mins or resnum < chain_mins[chain]:
-                chain_mins[chain] = resnum
-        return [[chain, resnum - chain_mins[chain] + 1] for chain, resnum in entries]
+    motif = normalize(data.get("con_hal_pdb_idx"))
+
+    fixed_chain = []
+    if "complex_con_hal_pdb_idx" in data:
+        motif_set = {tuple(entry) for entry in motif}
+        fixed_chain = [
+            entry for entry in normalize(data.get("complex_con_hal_pdb_idx"))
+            if tuple(entry) not in motif_set
+        ]
 
     return {
-        "motif": normalize(data.get("con_hal_pdb_idx")),
-        "fixed_chain": renumber_chain_local(normalize(data.get("receptor_con_hal_pdb_idx"))),
+        "motif": motif,
+        "fixed_chain": fixed_chain,
     }
 
 

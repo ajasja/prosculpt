@@ -1336,7 +1336,7 @@ function refreshChainLegendFor(selector) {
 // (present in a redesigned chain but taken from the reference), part of
 // an entirely fixed/non-designed chain, or generated de novo. See
 // parser.load_trb_provenance() for where con_hal_pdb_idx /
-// receptor_con_hal_pdb_idx come from.
+// complex_con_hal_pdb_idx come from.
 const PROVENANCE_LABELS = { motif: "Motif", fixed_chain: "Fixed chains", sculpted: "Sculpted" };
 
 function buildProvenanceMap(trbData) {
