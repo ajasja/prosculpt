@@ -35,6 +35,14 @@ import re
 from datetime import datetime
 from typing import Any, Optional
 
+# No Flask dependency here either (see run_targets.py's own docstring) -
+# only used to translate a job's own remote-filesystem paths (see
+# resolve_output_dir() below) into wherever they're actually reachable
+# from this machine, when dashboard_config.yaml has a matching target
+# configured. Degrades to a no-op with no config file at all, so this
+# module's "test/reuse standalone" promise still holds.
+import run_targets as RT
+
 try:
     import yaml
 except ImportError:  # pragma: no cover
@@ -90,6 +98,16 @@ def resolve_output_dir(log_path: str) -> dict:
         full = output_dir_rel
     else:
         full = os.path.normpath(os.path.join(pwd, output_dir_rel))
+
+    # `full` at this point is expressed in terms of wherever the job
+    # actually ran (PWD:/output_dir: come straight from the log's own
+    # Hydra config dump) - not necessarily a path this dashboard process
+    # can read directly. See translate_remote_path()'s own docstring for
+    # why this was silently wrong (empty backbones/sequences/models tabs,
+    # no progress on the All jobs overview cards, despite the files
+    # genuinely being on disk) for any setup whose mounted drive doesn't
+    # happen to mirror the remote's entire root filesystem.
+    full = RT.translate_remote_path(full)
 
     return {"pwd": pwd, "output_dir_raw": output_dir_rel, "output_dir": full, "error": None}
 

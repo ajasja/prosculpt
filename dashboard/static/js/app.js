@@ -355,7 +355,22 @@ function loadJobsFromStorage() {
 // Splits on newlines or commas so pasting several paths at once (or the
 // Browse modal's multi-select "Add selected jobs") works the same way a
 // single "paste one path, click Add job" does.
-function addJobs(rawInput) {
+//
+// switchToLast defaults to true (a human explicitly adding job(s) clearly
+// wants to see the last one) but is passed false by Run Job's background
+// auto-promotion (see pollPendingRuns() in run_job.js) - that call site
+// can fire repeatedly in quick succession as a multi-task array job's
+// tasks are discovered one at a time, and switchToJob() is not idempotent
+// enough to call back-to-back like that: it resets per-job view state
+// (backbones/sequences/models caches, clears those viewers' DOM) and
+// kicks off a fresh refreshAll() fetch every time it's called, so several
+// calls in a row race each other - a later switch's reset can land while
+// an earlier switch's fetch is still in flight, leaving whichever job
+// ends up "active" with its backbones/sequences view corrupted (empty)
+// even though its own status/progress - a plain single-value overwrite,
+// not staged cache data - still resolves fine. A background add has no
+// business yanking the user's current view around at all, on top of that.
+function addJobs(rawInput, switchToLast = true) {
   const paths = rawInput.split(/[\n,]+/).map((p) => p.trim()).filter(Boolean);
   if (!paths.length) return;
   let last = null;
@@ -368,7 +383,8 @@ function addJobs(rawInput) {
   });
   persistJobs();
   renderJobTabsBar();
-  if (last) switchToJob(last);
+  if (last && switchToLast) switchToJob(last);
+  else if (state.topView === "all-overview") renderAllOverview(); // reflect the new card even without switching to it
 }
 
 function removeJob(logPath) {
@@ -559,6 +575,7 @@ function initJobTabsBar() {
 // everything under it), left completely untouched; this only toggles
 // which of the two top-level roots is visible.
 function showAppMode(mode) {
+  const previousMode = state.appMode;
   state.appMode = mode;
   localStorage.setItem(APP_MODE_KEY, mode);
   qs("#trackJobRoot").classList.toggle("hidden", mode !== "track");
@@ -567,6 +584,17 @@ function showAppMode(mode) {
   if (mode === "run" && !state.runJobInitialized) {
     state.runJobInitialized = true;
     initRunJobTab();
+  }
+  // Coming back to Track job from Run job, default to the overview across
+  // every tracked job rather than leaving whatever single job's tabs (or
+  // All jobs results) happened to be showing before the user left for Run
+  // job - that's rarely still what they want to see first, especially
+  // right after submitting something new. Only on that specific
+  // transition, not on every Track job visit (e.g. clicking between Track
+  // job's own tabs, or a page reload landing back on "track" via
+  // localStorage, shouldn't fight the user's own navigation).
+  if (mode === "track" && previousMode === "run") {
+    showTopView("all-overview");
   }
 }
 

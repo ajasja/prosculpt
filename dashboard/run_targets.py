@@ -79,6 +79,58 @@ def get_defaults() -> dict[str, Any]:
     return _load_raw().get("defaults") or {}
 
 
+def translate_remote_path(remote_path: Optional[str]) -> Optional[str]:
+    """Translates an absolute path *as it appears inside a job's own log
+    file* (Hydra's own startup config dump prints PWD:/output_dir: lines
+    in terms of whatever filesystem the job actually ran on - the remote
+    cluster's, not necessarily wherever this dashboard process happens to
+    be reading from) into whichever local path it's actually reachable at
+    here, via the first configured target whose projects_path is a prefix
+    of it.
+
+    This is the Track job side's equivalent of computeWatchDir() in
+    run_job.js (which does the same projects_path -> local_mount_path
+    substitution for Run Job's own pending-submission tracking) - the two
+    never shared this logic before because Track job's own path
+    resolution (resolve_output_dir() in parser.py) predates Run Job
+    entirely, and had until now only ever been exercised in setups where
+    it worked by accident: either the dashboard runs directly on the same
+    machine the job ran on (no translation needed - the job's own absolute
+    paths already ARE the right local ones), or happened to have its
+    mounted drive mirror the remote's entire root filesystem rather than
+    just its projects directory (so a leading "/" coincidentally still
+    landed in the right place, via Windows' own "no drive letter = root of
+    the *current* drive" path convention) - neither holds once the mount
+    is deliberately scoped to just the projects subtree, which is when
+    every output-directory listing (backbones/sequences/models, and the
+    progress numbers on the All jobs overview cards) started silently
+    finding nothing, despite the job's log itself still parsing fine (that
+    only ever needed the log's own already-correct local path, no
+    output_dir translation involved).
+
+    Falls back to the path unchanged if no target matches - covers both
+    "no dashboard_config.yaml at all" and "this path isn't under any
+    configured target's projects_path" (e.g. a job that predates any
+    target being configured), where the original direct-filesystem-access
+    behavior is still exactly correct."""
+    if not remote_path:
+        return remote_path
+    try:
+        data = _load_config()
+    except RunTargetError:
+        return remote_path
+    remote_norm = remote_path.replace("\\", "/").rstrip("/")
+    for t in data["targets"].values():
+        projects_path = t.get("projects_path")
+        local_mount_path = t.get("local_mount_path")
+        if not projects_path or not local_mount_path:
+            continue
+        projects_norm = projects_path.replace("\\", "/").rstrip("/")
+        if remote_norm == projects_norm or remote_norm.startswith(projects_norm + "/"):
+            return local_mount_path.rstrip("/\\") + remote_norm[len(projects_norm):]
+    return remote_path
+
+
 def get_default_browse_root() -> Optional[str]:
     """Best local starting point for the Track job tab's filesystem browser
     (see /api/browse in app.py): the default target's local_mount_path (an

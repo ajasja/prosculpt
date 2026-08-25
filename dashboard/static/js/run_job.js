@@ -872,7 +872,13 @@ async function pollPendingRuns() {
       const newPaths = (res.paths || []).filter((path) => !found.includes(path));
       if (newPaths.length) {
         newPaths.forEach((path) => {
-          addJobs(path);
+          // switchToLast: false - this is a background auto-promotion,
+          // not something the user just asked to see, and (for a
+          // multi-task job) can fire several times in quick succession as
+          // each task's log appears - see addJobs()'s own comment in
+          // app.js for why calling switchToJob() that repeatedly corrupts
+          // per-job view state instead of just being a UX annoyance.
+          addJobs(path, false);
           found.push(path);
         });
         changed = true;
