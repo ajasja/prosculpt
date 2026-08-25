@@ -1137,9 +1137,9 @@ let viewerSettings = {
   // checkboxes - showing every sidechain and showing only the interface
   // ones don't make sense to have on at once, so there was never a real
   // reason to let them be.
-  sidechainMode: "selected", // "selected" | "interface" | "all"
+  sidechainMode: "selected", // "selected" | "interface" | "all" | "hydrophobic"
 };
-const SIDECHAIN_MODES = ["selected", "interface", "all"];
+const SIDECHAIN_MODES = ["selected", "interface", "all", "hydrophobic"];
 
 function loadViewerSettings() {
   try {
@@ -1495,6 +1495,9 @@ function setCartoonColor(selector, colorSchemeId) {
 // "Interface" restricts that same treatment to computeInterfaceSele()'s
 // residues; a single-chain structure has no interface there, so it's a
 // silent no-op rather than an error for e.g. a monomer prediction.
+// "Hydrophobic" restricts it to NGL's own built-in "hydrophobic" residue
+// class (ALA/VAL/LEU/ILE/PRO/PHE/MET/TRP) - no separate residue list
+// needed here, NGL's selection language already defines this keyword.
 // "Selected" removes the representation entirely - a direct residue
 // click/sequence-panel selection already shows its own sidechains via
 // setupResidueInteraction(), independent of this.
@@ -1516,6 +1519,10 @@ function setSidechainMode(selector, mode) {
         sele: `(${interfaceSele}) and (sidechain or .CA)`, colorScheme: "element", radiusScale: 0.7,
       });
     }
+  } else if (mode === "hydrophobic") {
+    entry.sidechainRepr = entry.component.addRepresentation("licorice", {
+      sele: "hydrophobic and (sidechain or .CA)", colorScheme: "element", radiusScale: 0.7,
+    });
   }
 }
 

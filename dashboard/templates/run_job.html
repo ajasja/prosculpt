@@ -41,7 +41,16 @@
 
       <div class="viewer-pane">
         <div id="runJobPdbViewer" class="mol-viewer"></div>
-        <div id="runJobPdbColorLegend" class="color-legend hidden"></div>
+        <div class="viewer-color-row">
+          <div id="runJobPdbColorLegend" class="color-legend hidden"></div>
+          <div class="sidechain-mode-group">
+            <span class="toolbar-label">Show sidechains:</span>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+          </div>
+        </div>
         <div id="runJobPdbSequencePanel" class="seq-panel"></div>
       </div>
     </div>
