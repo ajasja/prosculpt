@@ -27,6 +27,7 @@ run with is surfaced, not just a hard-coded subset.
 
 from __future__ import annotations
 
+import csv
 import glob
 import json
 import os
@@ -550,16 +551,26 @@ def load_trb_provenance(trb_path: str) -> dict:
                       *sequence* (identity) is fixed to the reference
                       rather than being (re)designed.
 
-    Every residue falls into exactly one of four categories:
+    Every residue falls into exactly one of four categories. inpaint_seq
+    takes priority over con_hal_idx0 membership: a motif residue (its
+    *structure* is taken from the reference) can still have its *sequence*
+    freed up for redesign (e.g. via contigmap.inpaint_seq covering part of
+    the motif) - since the whole point of this coloring is to show what
+    ProteinMPNN is actually still free to change, that combination is
+    "inpainted_seq", not "motif":
 
-      motif         - index is in con_hal_idx0.
-      inpainted_seq - not motif, inpaint_str True (structure fixed) but
-                      inpaint_seq False (sequence being redesigned) - e.g.
-                      a fixed-chain residue whose structure is kept but
-                      whose identity ProteinMPNN is still free to change.
-      fixed_chain   - not motif, inpaint_str True AND inpaint_seq True
+      inpainted_seq - inpaint_str True (structure fixed) but inpaint_seq
+                      False (sequence being redesigned) - regardless of
+                      whether the residue is also in con_hal_idx0. E.g. a
+                      motif residue whose backbone is kept but whose
+                      identity ProteinMPNN is still free to change, or the
+                      same for a fixed-chain residue.
+      motif         - index is in con_hal_idx0 and not already claimed by
+                      inpainted_seq above - i.e. both structure AND
+                      sequence are taken from the reference.
+      fixed_chain   - not motif, not inpainted_seq, inpaint_str True
                       (structure and sequence both taken verbatim from the
-                      reference).
+                      reference, outside con_hal_idx0).
       sculpted      - inpaint_str False (generated de novo - neither
                       structure nor sequence comes from the reference).
 
@@ -609,12 +620,15 @@ def load_trb_provenance(trb_path: str) -> dict:
 
     categories = []
     for i, structure_is_fixed in enumerate(inpaint_str):
-        if i in motif_idx:
+        # inpaint_seq (sequence freed for redesign) beats con_hal_idx0
+        # (motif) membership - see the docstring above for why.
+        seq_is_free = i < len(inpaint_seq) and not inpaint_seq[i]
+        if structure_is_fixed and seq_is_free:
+            categories.append("inpainted_seq")
+        elif i in motif_idx:
             categories.append("motif")
         elif not structure_is_fixed:
             categories.append("sculpted")
-        elif i < len(inpaint_seq) and not inpaint_seq[i]:
-            categories.append("inpainted_seq")
         else:
             categories.append("fixed_chain")
 
@@ -1022,6 +1036,44 @@ def results_summary(output_dir: str) -> dict:
         "csv_path": csv_path if os.path.isfile(csv_path) else None,
         "finished": bool(pdbs) and os.path.isfile(csv_path),
     }
+
+
+def load_final_csv(output_dir: str) -> Optional[dict]:
+    """Reads output_dir/final_output.csv and returns it completely as-is -
+    {"columns": [...], "rows": [[...], ...]}, or None if the file doesn't
+    exist. Deliberately does NOT rewrite anything: every value here,
+    including any path columns (model_path, path_rfdiff, and whichever
+    others a given prediction backend adds), is returned exactly as
+    Prosculpt itself wrote it - a path *as recorded on the cluster the job
+    ran on*, which is not necessarily reachable as-is from wherever the
+    dashboard happens to be reading from, but that's for whoever actually
+    needs to open one of those files to handle at the point of use (see
+    RT.translate_remote_path()/RT.make_path_translator(), and their call
+    sites in api_trb()/api_export_filtered()/api_export_filtered_multi()
+    in app.py) - not something to bake into the data itself, which stays
+    exactly what a user would see opening this file directly.
+
+    Centralizing the read here - rather than each of app.py's three routes
+    that need this file (the Results tab's own table, and the two zip-
+    export routes) doing its own plain csv.reader - is purely to avoid
+    three copies of the same "read the header + rows, handle a missing/
+    empty file" logic drifting out of sync; it has nothing to do with path
+    translation.
+
+    An existing-but-empty file returns {"columns": [], "rows": []}, not
+    None - "the file is there with no data" and "the file was never
+    created" are different states a caller (see api_final_csv() in
+    app.py) may want to tell apart.
+    """
+    csv_path = os.path.join(output_dir, "final_output.csv")
+    if not os.path.isfile(csv_path):
+        return None
+    with open(csv_path, newline="", errors="replace") as f:
+        rows = list(csv.reader(f))
+    if not rows:
+        return {"columns": [], "rows": []}
+    columns, data_rows = rows[0], rows[1:]
+    return {"columns": columns, "rows": data_rows}
 
 
 # ---------------------------------------------------------------------------

@@ -221,7 +221,15 @@ def api_trb():
     log_path = request.args.get("log")
     path = request.args.get("path")
     output_dir = _get_output_dir(log_path)
-    full = _resolve_within_output_dir(output_dir, path)
+    # A Backbones/Models-tab trb_path is already local (built server-side
+    # from the already-translated output_dir) - translate_remote_path() is
+    # a no-op for it. A Results-tab path, derived client-side from
+    # final_output.csv's own path_rfdiff column, is still exactly what
+    # Prosculpt itself wrote (load_final_csv() deliberately returns that
+    # file untouched - see its docstring) - a path as recorded on whichever
+    # cluster the job ran on, translated here, at the one place it's
+    # actually opened, rather than rewriting the CSV data itself.
+    full = _resolve_within_output_dir(output_dir, RT.translate_remote_path(path))
     if not os.path.isfile(full):
         abort(404, description="trb file not found")
     return jsonify(P.load_trb_provenance(full))
@@ -254,16 +262,10 @@ def api_final_pdb():
 def api_final_csv():
     log_path = request.args.get("log")
     output_dir = _get_output_dir(log_path)
-    csv_path = os.path.join(output_dir, "final_output.csv")
-    if not os.path.isfile(csv_path):
+    result = P.load_final_csv(output_dir)
+    if result is None:
         abort(404, description="final_output.csv not found")
-    with open(csv_path, newline="", errors="replace") as f:
-        reader = csv.reader(f)
-        rows = list(reader)
-    if not rows:
-        return jsonify({"columns": [], "rows": []})
-    columns, data_rows = rows[0], rows[1:]
-    return jsonify({"columns": columns, "rows": data_rows})
+    return jsonify(result)
 
 
 @app.route("/api/export_filtered", methods=["POST"])
@@ -281,16 +283,12 @@ def api_export_filtered():
         abort(400, description="Missing log")
 
     output_dir = _get_output_dir(log_path)
-    csv_path = os.path.join(output_dir, "final_output.csv")
-    if not os.path.isfile(csv_path):
+    result = P.load_final_csv(output_dir)
+    if result is None:
         abort(404, description="final_output.csv not found")
-
-    with open(csv_path, newline="", errors="replace") as f:
-        reader = csv.reader(f)
-        rows = list(reader)
-    if not rows:
+    columns, data_rows = result["columns"], result["rows"]
+    if not columns:
         abort(404, description="final_output.csv is empty")
-    columns, data_rows = rows[0], rows[1:]
 
     if row_ids is not None:
         wanted = {int(i) for i in row_ids}
@@ -311,13 +309,19 @@ def api_export_filtered():
 
         if "model_path" in columns:
             idx = columns.index("model_path")
+            # Only used to actually locate+read the file for zipping - the
+            # CSV text written above (writer.writerows(selected_rows)) is
+            # already done and keeps the original, untranslated values, the
+            # same as final_output.csv itself (see load_final_csv()'s
+            # docstring for why that's deliberate).
+            translate = RT.make_path_translator()
             seen = set()
             for r in selected_rows:
                 p = r[idx] if idx < len(r) else ""
                 if not p or p in seen:
                     continue
                 seen.add(p)
-                full = _resolve_within_output_dir_or_none(output_dir, p)
+                full = _resolve_within_output_dir_or_none(output_dir, translate(p))
                 if full and os.path.isfile(full):
                     zf.write(full, arcname=os.path.join("models", os.path.basename(full)))
 
@@ -361,15 +365,12 @@ def api_export_filtered_multi():
         if not log_path:
             continue
         output_dir = _get_output_dir(log_path)
-        csv_path = os.path.join(output_dir, "final_output.csv")
-        if not os.path.isfile(csv_path):
+        result = P.load_final_csv(output_dir)
+        if result is None:
             continue
-        with open(csv_path, newline="", errors="replace") as f:
-            reader = csv.reader(f)
-            rows = list(reader)
-        if not rows:
+        columns, data_rows = result["columns"], result["rows"]
+        if not columns:
             continue
-        columns, data_rows = rows[0], rows[1:]
         if row_ids is not None:
             wanted = {int(i) for i in row_ids}
             selected_rows = [r for i, r in enumerate(data_rows) if i in wanted]
@@ -396,6 +397,13 @@ def api_export_filtered_multi():
                 writer.writerow([label, *(r[col_index[c]] if c in col_index and col_index[c] < len(r) else "" for c in all_columns)])
         zf.writestr("filtered_output.csv", csv_buf.getvalue())
 
+        # One translator, built once and reused across every job in this
+        # export - global (spans all configured targets), not job-specific,
+        # so there's no need to rebuild it per job. Only used to actually
+        # locate+read each file for zipping; the CSV text written above
+        # keeps the original, untranslated values (see load_final_csv()'s
+        # docstring for why that's deliberate).
+        translate = RT.make_path_translator()
         for log_path, label, columns, selected_rows in per_job_selected:
             if "model_path" not in columns:
                 continue
@@ -407,7 +415,7 @@ def api_export_filtered_multi():
                 if not p or p in seen:
                     continue
                 seen.add(p)
-                full = _resolve_within_output_dir_or_none(output_dir, p)
+                full = _resolve_within_output_dir_or_none(output_dir, translate(p))
                 if full and os.path.isfile(full):
                     zf.write(full, arcname=os.path.join("models", label, os.path.basename(full)))
 

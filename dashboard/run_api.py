@@ -269,15 +269,15 @@ def api_run_check_pending():
     pattern = request.args.get("glob", "")
     if not pattern:
         abort(400, description="glob is required")
+    # list_targets() already carries both fields this needs (local_mount_path
+    # is derived there from the target's mounts list, specifically the one
+    # covering projects_path - see its own docstring) - no need for a
+    # separate RT.get_target() round-trip per target just to re-read them.
     allowed_roots = []
     for t in RT.list_targets():
-        try:
-            full = RT.get_target(t["name"])
-        except RT.RunTargetError:
-            continue
-        allowed_roots.append(full.get("projects_path"))
-        if full.get("local_mount_path"):
-            allowed_roots.append(full["local_mount_path"])
+        allowed_roots.append(t.get("projects_path"))
+        if t.get("local_mount_path"):
+            allowed_roots.append(t["local_mount_path"])
     pattern_norm = os.path.normpath(pattern)
     if not any(pattern_norm.startswith(os.path.normpath(root) + os.sep) for root in allowed_roots if root):
         abort(400, description="glob must be under a configured target's projects_path")

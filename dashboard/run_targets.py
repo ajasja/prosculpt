@@ -79,69 +79,157 @@ def get_defaults() -> dict[str, Any]:
     return _load_raw().get("defaults") or {}
 
 
+def _target_mounts(t: dict[str, Any]) -> list[dict[str, Any]]:
+    """A target's `mounts:` list, normalized to always be a list (never
+    None/missing). Each entry is `{remote: ..., local: ..., label: ...}` -
+    `remote` is an absolute path as it appears on the cluster this target
+    runs jobs on, `local` is wherever that same directory is actually
+    reachable from this machine (a mounted/mapped drive), and `label` is
+    optional (see list_browse_roots() for how it's used/defaulted).
+
+    A target isn't limited to exactly one mount, or to mounting only
+    `projects_path`/`slurm_runner_path` specifically - see
+    translate_remote_path()'s docstring for why more than one remote root
+    can be in play for a single target, and dashboard_config.yaml.example
+    for the common two-mount shape. Nothing stops a target from mounting
+    some third, unrelated remote directory too (e.g. shared scratch
+    storage) - it's just another entry in this same list, with no
+    dashboard code change needed to support it."""
+    return t.get("mounts") or []
+
+
+def _target_root_pairs(t: dict[str, Any]) -> list[tuple[Optional[str], Optional[str]]]:
+    """The (remote_root, local_root) pairs worth checking a path against
+    for one target, straight out of its `mounts:` list. A pair with either
+    half missing is still returned (not filtered out here) - the callers
+    below already skip a pair with a missing half, and returning it
+    uniformly keeps this helper a pure "what are the pairs" question,
+    independent of which ones happen to be usable right now."""
+    return [(m.get("remote"), m.get("local")) for m in _target_mounts(t)]
+
+
+def _translate_with_pairs(remote_path: Optional[str], pairs: list[tuple[Optional[str], Optional[str]]]) -> Optional[str]:
+    """Core of translate_remote_path(), factored out so it can be reused
+    against a `pairs` list that's already been built once (see
+    make_path_translator()) instead of reloading/reparsing
+    dashboard_config.yaml on every call - the difference between one
+    config read per API request (translate_remote_path(), used for a
+    single path like output_dir) and one per *cell* of a potentially huge
+    final_output.csv (make_path_translator(), see its own docstring)."""
+    if not remote_path:
+        return remote_path
+    remote_norm = remote_path.replace("\\", "/").rstrip("/")
+    for remote_root, local_root in pairs:
+        if not remote_root or not local_root:
+            continue
+        remote_root_norm = remote_root.replace("\\", "/").rstrip("/")
+        if remote_norm == remote_root_norm or remote_norm.startswith(remote_root_norm + "/"):
+            return local_root.rstrip("/\\") + remote_norm[len(remote_root_norm):]
+    return remote_path
+
+
 def translate_remote_path(remote_path: Optional[str]) -> Optional[str]:
     """Translates an absolute path *as it appears inside a job's own log
     file* (Hydra's own startup config dump prints PWD:/output_dir: lines
     in terms of whatever filesystem the job actually ran on - the remote
     cluster's, not necessarily wherever this dashboard process happens to
     be reading from) into whichever local path it's actually reachable at
-    here, via the first configured target whose projects_path is a prefix
-    of it.
+    here, via the first configured target's `mounts:` entry whose `remote`
+    is a prefix of it.
+
+    Checking every configured mount (not just one fixed root) matters
+    because a job's output_dir isn't always staged under the same remote
+    directory in the first place - that's only guaranteed for a job the
+    Run job tab itself submitted (always under `projects_path`; see
+    job_staging.py). A job launched directly against the prosculpt
+    installation instead - `python slurm_runner.py some_config.yaml
+    ++output_dir=Examples/...` run by hand from `slurm_runner_path`
+    itself, or via run_tests.py, both documented usages in the main
+    README - gets an output_dir resolved relative to *slurm_runner_path*
+    instead, since that's the job's PWD at submission time. Without a
+    mount covering that root too, that path fell through to the
+    "unchanged" fallback below and silently resolved to nothing on any
+    machine whose mount doesn't happen to mirror the remote's entire home
+    directory (see the mount-scoping note further down) - every listing
+    (backbones/sequences/models, the progress numbers on the All jobs
+    overview cards) came back empty despite the job's log itself still
+    parsing fine, since the log's own path needs no translation at all.
+    `dashboard_config.yaml.example` shows both of these as separate
+    `mounts:` entries on the same target - nothing stops a target having
+    more, for some other remote root a job's data can land under.
 
     This is the Track job side's equivalent of computeWatchDir() in
-    run_job.js (which does the same projects_path -> local_mount_path
-    substitution for Run Job's own pending-submission tracking) - the two
-    never shared this logic before because Track job's own path
-    resolution (resolve_output_dir() in parser.py) predates Run Job
-    entirely, and had until now only ever been exercised in setups where
-    it worked by accident: either the dashboard runs directly on the same
-    machine the job ran on (no translation needed - the job's own absolute
-    paths already ARE the right local ones), or happened to have its
-    mounted drive mirror the remote's entire root filesystem rather than
-    just its projects directory (so a leading "/" coincidentally still
-    landed in the right place, via Windows' own "no drive letter = root of
-    the *current* drive" path convention) - neither holds once the mount
-    is deliberately scoped to just the projects subtree, which is when
-    every output-directory listing (backbones/sequences/models, and the
-    progress numbers on the All jobs overview cards) started silently
-    finding nothing, despite the job's log itself still parsing fine (that
-    only ever needed the log's own already-correct local path, no
-    output_dir translation involved).
+    run_job.js (which does the same projects_path -> local mount
+    substitution for Run Job's own pending-submission tracking, though
+    only for that one root - a job Run job itself submits is always staged
+    under projects_path) - the two never shared this logic before because
+    Track job's own path resolution (resolve_output_dir() in parser.py)
+    predates Run Job entirely, and had until now only ever been exercised
+    in setups where it worked by accident: either the dashboard runs
+    directly on the same machine the job ran on (no translation needed -
+    the job's own absolute paths already ARE the right local ones), or
+    happened to have its mounted drive mirror the remote's entire root
+    filesystem rather than just its projects directory (so a leading "/"
+    coincidentally still landed in the right place, via Windows' own "no
+    drive letter = root of the *current* drive" path convention) - neither
+    holds once a mount is deliberately scoped to just one subtree, which
+    is when this stopped working by accident and needed to actually be
+    handled.
 
-    Falls back to the path unchanged if no target matches - covers both
-    "no dashboard_config.yaml at all" and "this path isn't under any
-    configured target's projects_path" (e.g. a job that predates any
-    target being configured), where the original direct-filesystem-access
-    behavior is still exactly correct."""
+    Not just output_dir: the exact same substitution is needed for any
+    other absolute path Prosculpt records at run time and the dashboard
+    later reads back - e.g. final_output.csv's path_rfdiff/model_path/
+    af2_pdb/af3_pdb/... columns (see load_final_csv() in parser.py, which
+    uses make_path_translator() below rather than calling this function
+    once per cell).
+
+    Falls back to the path unchanged if nothing matches - covers both "no
+    dashboard_config.yaml at all" and "this path isn't under any
+    configured mount" (e.g. a job that predates any target/mount being
+    configured), where the original direct-filesystem-access behavior is
+    still exactly correct."""
     if not remote_path:
         return remote_path
     try:
         data = _load_config()
     except RunTargetError:
         return remote_path
-    remote_norm = remote_path.replace("\\", "/").rstrip("/")
-    for t in data["targets"].values():
-        projects_path = t.get("projects_path")
-        local_mount_path = t.get("local_mount_path")
-        if not projects_path or not local_mount_path:
-            continue
-        projects_norm = projects_path.replace("\\", "/").rstrip("/")
-        if remote_norm == projects_norm or remote_norm.startswith(projects_norm + "/"):
-            return local_mount_path.rstrip("/\\") + remote_norm[len(projects_norm):]
-    return remote_path
+    pairs = [pair for t in data["targets"].values() for pair in _target_root_pairs(t)]
+    return _translate_with_pairs(remote_path, pairs)
+
+
+def make_path_translator():
+    """Loads dashboard_config.yaml *once* and returns a plain function
+    `translate(path) -> path` that reuses that single load for as many
+    paths as the caller needs translated - for batch use against many
+    paths at once (e.g. every path-like column of a final_output.csv that
+    can run into the tens of thousands of rows, see load_final_csv() in
+    parser.py) where calling translate_remote_path() per-value would mean
+    one disk read + YAML parse per value instead of one for the whole
+    batch. Degrades to a no-op translator (returns every path unchanged)
+    if there's no config at all - same fallback translate_remote_path()
+    itself has, just resolved once up front instead of on every call."""
+    try:
+        data = _load_config()
+    except RunTargetError:
+        return lambda p: p
+    pairs = [pair for t in data["targets"].values() for pair in _target_root_pairs(t)]
+    return lambda p: _translate_with_pairs(p, pairs)
 
 
 def get_default_browse_root() -> Optional[str]:
     """Best local starting point for the Track job tab's filesystem browser
-    (see /api/browse in app.py): the default target's local_mount_path (an
-    ssh target's remote output, reachable locally) if it has one, else its
-    projects_path (directly meaningful for a local target, and still a
-    reasonable starting guess for an ssh target with no mount configured).
-    None if there's no configured target to make any of this out of, or if
-    the resulting path doesn't actually exist on this machine (a stale/
-    wrong config entry shouldn't break the browser - it should just fall
-    back to the caller's own default, same as before dashboard_config.yaml
-    existed at all)."""
+    (see /api/browse in app.py): the default target's mount covering
+    projects_path if it has one (most likely where actual job directories
+    live), else any other usable mount it has, else projects_path itself
+    directly (meaningful for a kind: local target, where it's already a
+    local path and needs no mount at all - and still a reasonable starting
+    guess for an ssh target with no mounts configured). None if there's no
+    configured target to make any of this out of, or if the resulting path
+    doesn't actually exist on this machine (a stale/wrong config entry
+    shouldn't break the browser - it should just fall back to the
+    caller's own default, same as before dashboard_config.yaml existed at
+    all)."""
     try:
         data = _load_config()
     except RunTargetError:
@@ -153,30 +241,72 @@ def get_default_browse_root() -> Optional[str]:
         # harder" spirit as get_target()'s own fallback: just take
         # whichever target happens to be first.
         name = next(iter(targets))
-    root = targets[name].get("local_mount_path") or targets[name].get("projects_path")
-    return root if root and os.path.isdir(root) else None
+    t = targets[name]
+    projects_path = t.get("projects_path")
+    ordered = sorted(_target_mounts(t), key=lambda m: m.get("remote") != projects_path)
+    for m in ordered:
+        root = m.get("local")
+        if root and os.path.isdir(root):
+            return root
+    return projects_path if projects_path and os.path.isdir(projects_path) else None
+
+
+def _mount_label(target_label: str, t: dict[str, Any], m: dict[str, Any]) -> str:
+    """The "Jump to..." dropdown label for one of a target's mounts -
+    `target_label` plus a suffix distinguishing which remote root this
+    particular mount covers, so e.g. "federico_arc" (projects_path) and
+    "federico_arc (installation)" (slurm_runner_path) don't look identical
+    in a dropdown that lists both. An explicit `label` on the mount entry
+    always wins; otherwise this guesses from whichever of
+    projects_path/slurm_runner_path the mount's `remote` matches (the two
+    roots the dashboard itself cares about), falling back to the remote
+    directory's own basename for anything else (e.g. a third, unrelated
+    mount like shared scratch storage)."""
+    explicit = m.get("label")
+    if explicit:
+        return f"{target_label} ({explicit})"
+    remote = m.get("remote") or ""
+    if remote == t.get("projects_path"):
+        return target_label
+    if remote == t.get("slurm_runner_path"):
+        return f"{target_label} (installation)"
+    basename = remote.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+    return f"{target_label} ({basename})" if basename else target_label
 
 
 def list_browse_roots() -> list[dict[str, Any]]:
-    """One entry per configured target whose best local browsing root
-    (local_mount_path, falling back to projects_path - same preference as
-    get_default_browse_root(), just for every target instead of only the
-    default one) actually exists on this machine right now. Powers the
-    Track job file browser's "Jump to..." dropdown, so a multi-cluster
-    setup doesn't require typing/pasting each cluster's root path by hand
-    to get started. Silently omits a target whose root can't be resolved
-    (no local_mount_path/projects_path at all) or isn't actually reachable
-    right now (e.g. a network mount that's temporarily down) - same
-    "don't guess, just skip it" spirit as get_default_browse_root()."""
+    """One entry per configured target per usable mount (see
+    _target_mounts()) - whichever of those actually exist on this machine
+    right now. Powers the Track job file browser's "Jump to..." dropdown,
+    so a multi-cluster (or multi-mount) setup doesn't require typing/
+    pasting each root's path by hand to get started - a target commonly
+    has more than one mount (see translate_remote_path()'s docstring for
+    why) because not every job lives under the same remote root: one
+    launched directly against the installation (`slurm_runner.py` run by
+    hand, or via run_tests.py, rather than through the Run job tab) writes
+    its output under slurm_runner_path instead of projects_path. Silently
+    omits a mount whose `local` half is missing or isn't actually
+    reachable right now (e.g. a network mount that's temporarily down) -
+    same "don't guess, just skip it" spirit as get_default_browse_root().
+    A target with no mounts configured at all still gets one entry for
+    projects_path directly, same fallback get_default_browse_root() uses."""
     try:
         data = _load_config()
     except RunTargetError:
         return []
     out = []
     for name, t in data["targets"].items():
-        root = t.get("local_mount_path") or t.get("projects_path")
-        if root and os.path.isdir(root):
-            out.append({"name": name, "label": t.get("label", name), "path": root})
+        label = t.get("label", name)
+        mounts = _target_mounts(t)
+        if not mounts:
+            projects_path = t.get("projects_path")
+            if projects_path and os.path.isdir(projects_path):
+                out.append({"name": name, "label": label, "path": projects_path})
+            continue
+        for m in mounts:
+            root = m.get("local")
+            if root and os.path.isdir(root):
+                out.append({"name": name, "label": _mount_label(label, t, m), "path": root})
     return out
 
 
@@ -187,19 +317,30 @@ def list_targets() -> list[dict[str, Any]]:
     data = _load_config()
     out = []
     for name, t in data["targets"].items():
+        projects_path = t.get("projects_path")
+        # The mount covering projects_path specifically, if any - exposed
+        # under this historical field name because it's what
+        # computeWatchDir() in run_job.js already reads to auto-track a
+        # just-submitted job's log file without further SSH calls. A job
+        # Run job itself submits is always staged under projects_path
+        # (never any other mounted root), so that's the only mount this
+        # particular frontend consumer ever needs to know about - it has
+        # no equivalent need for a target's other mounts (e.g. one
+        # covering slurm_runner_path), which only matter for tracking a
+        # job that wasn't submitted through the Run job tab in the first
+        # place.
+        local_mount_path = next(
+            (m.get("local") for m in _target_mounts(t) if m.get("remote") == projects_path),
+            None,
+        )
         out.append(
             {
                 "name": name,
                 "label": t.get("label", name),
                 "kind": t.get("kind", "local"),
                 "is_default": name == data.get("default_target"),
-                "projects_path": t.get("projects_path"),
-                # Only meaningful for an ssh target whose output is *also*
-                # reachable as a normal mounted path from this machine - lets
-                # the frontend translate a remote job directory back into a
-                # local path it can poll for a just-appeared log file
-                # without any further SSH calls. None if not configured.
-                "local_mount_path": t.get("local_mount_path"),
+                "projects_path": projects_path,
+                "local_mount_path": local_mount_path,
             }
         )
     return out

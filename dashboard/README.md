@@ -97,11 +97,15 @@ committed) and fill in at least one:
   as. Needs a working `ssh <ssh_host>` connection already trusted (key or
   agent - **no password is ever asked for, stored, or sent**; set up host
   key trust and key/agent auth once, outside the dashboard, the normal
-  way). Optionally set `local_mount_path` if that cluster's output is
-  *also* reachable as a mounted filesystem path from wherever the
-  dashboard runs (the way the tracking side of this dashboard already
-  assumes for any tracked job) - without it, submission still works, but a
-  submitted job won't auto-appear on the Track job tab (see below).
+  way). Optionally set `mounts` - a list of `{remote, local}` pairs, one
+  per remote directory that's *also* reachable as a mounted filesystem
+  path from wherever the dashboard runs - without at least one covering
+  `projects_path`, submission still works, but a submitted job won't
+  auto-appear on the Track job tab (see below), **and** any job's Track
+  job listings (backbones/sequences/models/results) will come up empty
+  even once added by hand, since there's nothing to translate that job's
+  own remote output_dir against (see the next paragraph and
+  Troubleshooting below).
 
 Each target also needs `slurm_runner_path` (where the prosculpt
 installation's `slurm_runner.py` lives - it needs its own working
@@ -115,6 +119,19 @@ non-interactive SSH session (remote) - usually **not** prosculpt's env,
 and for SSH in particular `conda activate` often isn't even available in
 that kind of session at all. Pointing straight at the env's own
 interpreter avoids relying on shell activation entirely.
+
+A `mounts` entry covering `projects_path` only helps track jobs staged
+there - i.e. ones this dashboard's own Run job tab submitted. A job
+launched directly against the installation instead (`python
+slurm_runner.py some_config.yaml ++output_dir=Examples/...` run by hand
+from `slurm_runner_path`, or via `run_tests.py` - both documented usages
+of Prosculpt itself, independent of this dashboard) writes its output
+under `slurm_runner_path` instead, which needs its own separate `mounts`
+entry to be trackable the same way. Add as many entries as you actually
+have mounted - none, one, or several, in any combination, including for
+some other remote directory entirely if a job's data can land there too -
+see `dashboard_config.yaml.example` for the full explanation and worked
+examples.
 
 The same file also has an optional top-level `defaults:` section for
 dashboard-wide settings unrelated to any one target - currently just
@@ -181,7 +198,7 @@ under the job's directory) and, once it does, adds it to the Track job tab
 automatically - the exact same `addJobs()` a manually-pasted log path
 would go through, so there's nothing job-submission-specific about how a
 promoted job is tracked afterward. This only works for a `local` target,
-or an `ssh` target with `local_mount_path` configured (see above); without
+or an `ssh` target with a `mounts` entry covering `projects_path` (see above); without
 that, a pending entry says so and you add it to Track job by hand once you
 know its log path.
 
@@ -322,9 +339,13 @@ chain in file order - no chain-letter/resnum bookkeeping at all):
 `con_hal_idx0` (flat indices of motif residues), `inpaint_str` (per-residue
 bool - True wherever the structure is fixed to the reference), and
 `inpaint_seq` (per-residue bool - True wherever the sequence is fixed to
-the reference). Motif is `con_hal_idx0`; of the rest, `inpaint_str` False
-is Sculpted, `inpaint_str` True with `inpaint_seq` False is Inpainted
-sequence, and `inpaint_str` True with `inpaint_seq` True is Fixed chains.
+the reference). `inpaint_str` False is Sculpted regardless of anything
+else; of the rest (`inpaint_str` True), `inpaint_seq` False is Inpainted
+sequence - this takes priority over `con_hal_idx0` membership, since a
+motif residue can still have its sequence freed up for redesign and the
+point of this coloring is to show what's actually still changeable; of
+what's left, `con_hal_idx0` membership is Motif, and everything else is
+Fixed chains.
 Because this is purely positional, it needs no reconciling of
 RFdiffusion's own raw backbone `.pdb` (Backbones tab, which keeps counting
 resnums up across chain boundaries) against AlphaFold3/Boltz's output
@@ -543,6 +564,30 @@ sync over time, so both tabs share one implementation instead.
   check would reject a perfectly legitimate file the moment it's expressed
   via a different alias than the one `output_dir` happened to resolve to -
   `realpath()` resolves symlinks first, so both aliases compare equal.
+- **`final_output.csv` is returned exactly as written; paths inside it are
+  translated only at the point something actually opens a file, not
+  baked into the data itself.** `output_dir` itself is translated in
+  `resolve_output_dir()` (see `mounts`
+  in §3) - everything the Backbones/Sequences/Models tabs and the Results
+  table list is built from that already-local `output_dir` server-side, so
+  none of it needs any further translation. `final_output.csv` is
+  different: `load_final_csv()` in `parser.py` returns it completely
+  as-is, including any path-like column (`model_path`, `path_rfdiff`, and
+  whichever others a given prediction backend adds), because Prosculpt
+  itself records those as paths *on the cluster the job ran on*, and nothing
+  reads that file to *display* rewritten data - the raw values are what
+  populate the results table and get written into "Export filtered"'s own
+  `filtered_output.csv`. The two places that actually need to *open* one of
+  those files - `path_rfdiff`, fetched for the Results tab's "Color by
+  RFdiffusion provenance" feature, and `model_path`, looked up to include
+  the right pdb bytes in an export zip - translate it themselves, right
+  where they use it (`RT.translate_remote_path()`/`RT.make_path_translator()`,
+  called from `api_trb()`/`api_export_filtered()`/`api_export_filtered_multi()`
+  in `app.py`), rather than the read itself rewriting anything. Anything
+  that reads a path out of job data going forward and needs to actually
+  open the file it points to (a future confidence-JSON field, a future
+  `.trb` field, ...) should do the same: translate it right there, not in
+  whatever function first reads the surrounding data.
 - **Filesystem is ground truth, the log gives rates.** Counts and listings
   (how many backbones exist, which sequences/models exist) are read
   straight off disk, not inferred from the log — this keeps things correct
@@ -626,10 +671,32 @@ start_dashboard.ps1  Windows: launch at logon via Task Scheduler/Startup -
   `output_dir: <path>` line from the printed config). If your log format
   differs, check `resolve_output_dir()` in `parser.py`.
 - **A tab shows "No X generated yet" for something you know exists** —
-  the dashboard looks for very specific file patterns (e.g. `_*.pdb` in
-  `1_rfdiff/`, `*summary_confidences.json` / `confidence_*.json` under
-  `3_models/`). If Prosculpt's output layout has changed, these glob
-  patterns in `parser.py` are the place to update.
+  two different causes, depending on whether this is a remote (`ssh`)
+  target:
+  - The dashboard looks for very specific file patterns (e.g. `_*.pdb` in
+    `1_rfdiff/`, `*summary_confidences.json` / `confidence_*.json` under
+    `3_models/`). If Prosculpt's output layout has changed, these glob
+    patterns in `parser.py` are the place to update.
+  - For an `ssh` target: this is the expected result of an *unmapped*
+    remote path, not a bug - it means the dashboard resolved the job's
+    output_dir correctly (as a path on the remote cluster's own
+    filesystem) but has no `mounts` entry to translate it into a path
+    actually reachable from here, so every listing comes up empty while
+    the log itself still loads fine (the log's own path needs no
+    translation - only the paths *printed inside* it do). Check that this
+    job's output_dir actually falls under one of this target's `mounts`
+    (each entry's `remote` needs to be an exact prefix of it) - typically
+    one entry covering `projects_path` (jobs the Run job tab itself
+    staged) and another covering `slurm_runner_path` (jobs launched
+    directly against the installation, e.g. via `run_tests.py` or a
+    hand-run `slurm_runner.py` call), though a target can have as many
+    mounts as it actually needs - see the `mounts` notes in
+    `dashboard_config.yaml.example` and §3 above. A job whose output_dir
+    falls under none of them (e.g. one that predates any target being
+    configured, or one run somewhere unrelated to all of them) can't be
+    translated no matter what's configured - `translate_remote_path()` in
+    `run_targets.py` is the place to look if you need something more
+    involved than a list of mount prefixes already covers.
 - **Error log tab doesn't appear** — it's only shown once a `.err` file is
   actually found next to the log (same basename, `.err` extension); the
   Overview card's "Error log" stat says "not found" in that case. A job
