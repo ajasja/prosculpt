@@ -522,39 +522,62 @@ def _natural_key(s: str):
 
 
 # ---------------------------------------------------------------------------
-# RFdiffusion .trb sidecar (residue provenance: motif / fixed chain / de
-# novo) - used for the "color by RFdiffusion provenance" viewer option.
+# RFdiffusion .trb sidecar (residue provenance: motif / fixed chain /
+# inpainted sequence / sculpted) - used for the "color by RFdiffusion
+# provenance" viewer option.
 # ---------------------------------------------------------------------------
 
 
 def load_trb_provenance(trb_path: str) -> dict:
     """A .trb file is a pickled dict RFdiffusion writes alongside each
-    backbone .pdb. Two fields drive this, both lists of (chain, resnum)
-    pairs in the *generated* structure's own numbering:
+    backbone .pdb. Earlier versions of this function keyed provenance off
+    one of RFdiffusion's own (chain, resnum)-pair fields (con_hal_pdb_idx /
+    receptor_con_hal_pdb_idx / complex_con_hal_pdb_idx) - every one of those
+    turned out to get chain letters and/or residue numbers wrong in some
+    case. Instead, this reads three fields that are all indexed purely by a
+    residue's flat, 0-based *position* in the generated structure (residue
+    0 is the first residue of the first chain, residue 1 the next, and so
+    on across every chain in file order - no chain-letter/resnum bookkeeping
+    involved at all):
 
-      con_hal_pdb_idx         - residues taken from the reference structure
-                                 that ended up in a redesigned chain
-                                 ("Motif").
-      complex_con_hal_pdb_idx - every non-sculpted residue (motif AND fixed
-                                 chains together), correctly chained and
-                                 numbered. Only present at all when the run
-                                 actually had fixed chains.
+      con_hal_idx0 - flat indices of "motif" residues: reference-structure
+                      residues (both structure and sequence) that ended up
+                      in a redesigned chain.
+      inpaint_str  - per-residue bool; True wherever the residue's
+                      *structure* (backbone conformation) came from the
+                      reference rather than being generated de novo.
+      inpaint_seq  - per-residue bool; True wherever the residue's
+                      *sequence* (identity) is fixed to the reference
+                      rather than being (re)designed.
 
-    "Fixed chains" is derived as complex_con_hal_pdb_idx minus
-    con_hal_pdb_idx (set difference on (chain, resnum) pairs) rather than
-    read from receptor_con_hal_pdb_idx directly - that field turns out to
-    get both the resnums AND the chain letters wrong (it doesn't reset
-    resnums per chain, and mislabels which chain a residue belongs to).
-    complex_con_hal_pdb_idx, by contrast, already uses correct chain
-    letters and correct (chain-local) residue numbers, so no renumbering
-    is needed on the result - unlike the old receptor_con_hal_pdb_idx-based
-    approach. If complex_con_hal_pdb_idx is absent from the pickle at all,
-    the run had no fixed chains - every non-sculpted residue is already
-    covered by con_hal_pdb_idx, so fixed_chain is simply empty.
+    Every residue falls into exactly one of four categories:
 
-    Any residue in neither list was generated de novo ("Sculpted") - that
-    set isn't enumerated here since the caller already knows the full
-    residue list from the structure itself.
+      motif         - index is in con_hal_idx0.
+      inpainted_seq - not motif, inpaint_str True (structure fixed) but
+                      inpaint_seq False (sequence being redesigned) - e.g.
+                      a fixed-chain residue whose structure is kept but
+                      whose identity ProteinMPNN is still free to change.
+      fixed_chain   - not motif, inpaint_str True AND inpaint_seq True
+                      (structure and sequence both taken verbatim from the
+                      reference).
+      sculpted      - inpaint_str False (generated de novo - neither
+                      structure nor sequence comes from the reference).
+
+    Because this is purely positional, it needs no reconciling of
+    RFdiffusion's own raw backbone .pdb (which keeps counting resnums up
+    across chain boundaries) against AlphaFold3/Boltz's differently-numbered
+    output (which resets every chain to 1), nor does it care that
+    rechain_rfdiff_pdbs() can reassign chain letters after RFdiffusion runs
+    based on physical distance - residue order (and count) is preserved
+    end-to-end through the pipeline regardless of any of that, so a flat
+    positional index is a reliable, convention-agnostic residue identity.
+    The frontend matches this up against a loaded structure's own residues
+    in the same file order via NGL's atom.residueIndex (see
+    makeProvenanceColorScheme() in app.js) - no chain/resnum lookup needed
+    there either.
+
+    Returns {"categories": [...]}, one category string per residue index
+    0..N-1 (N = len(inpaint_str)).
     """
     try:
         with open(trb_path, "rb") as f:
@@ -569,30 +592,33 @@ def load_trb_provenance(trb_path: str) -> dict:
             )
         }
 
-    def normalize(entries):
-        out = []
-        for entry in entries or []:
-            try:
-                chain, resnum = entry[0], entry[1]
-                out.append([str(chain), int(resnum)])
-            except Exception:
-                continue  # skip anything not shaped like (chain, resnum)
-        return out
+    def _as_list(x):
+        # `x or []` would seem simpler, but these fields are numpy
+        # arrays in a real .trb - `bool(numpy_array)` raises ("truth
+        # value of an array with more than one element is ambiguous")
+        # rather than ever reaching the `or`, so presence has to be
+        # checked with `is None` instead of relying on truthiness.
+        return [] if x is None else list(x)
 
-    motif = normalize(data.get("con_hal_pdb_idx"))
+    try:
+        inpaint_str = [bool(v) for v in _as_list(data.get("inpaint_str"))]
+        inpaint_seq = [bool(v) for v in _as_list(data.get("inpaint_seq"))]
+        motif_idx = {int(i) for i in _as_list(data.get("con_hal_idx0"))}
+    except Exception as e:
+        return {"error": f"Unexpected .trb file contents ({e})."}
 
-    fixed_chain = []
-    if "complex_con_hal_pdb_idx" in data:
-        motif_set = {tuple(entry) for entry in motif}
-        fixed_chain = [
-            entry for entry in normalize(data.get("complex_con_hal_pdb_idx"))
-            if tuple(entry) not in motif_set
-        ]
+    categories = []
+    for i, structure_is_fixed in enumerate(inpaint_str):
+        if i in motif_idx:
+            categories.append("motif")
+        elif not structure_is_fixed:
+            categories.append("sculpted")
+        elif i < len(inpaint_seq) and not inpaint_seq[i]:
+            categories.append("inpainted_seq")
+        else:
+            categories.append("fixed_chain")
 
-    return {
-        "motif": motif,
-        "fixed_chain": fixed_chain,
-    }
+    return {"categories": categories}
 
 
 # ---------------------------------------------------------------------------

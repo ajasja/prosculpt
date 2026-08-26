@@ -1143,7 +1143,7 @@ const CHAIN_PALETTES = {
   ocean: ["#00b4d8", "#7209b7", "#48cae4", "#3a86ff", "#80ffdb", "#4895ef", "#90e0ef", "#4cc9f0"],
 };
 
-const DEFAULT_PROVENANCE_COLORS = { motif: "#ffd166", fixed_chain: "#8b93a7", sculpted: "#06d6a0" };
+const DEFAULT_PROVENANCE_COLORS = { motif: "#ffd166", fixed_chain: "#8b93a7", inpainted_seq: "#ef476f", sculpted: "#06d6a0" };
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
 let viewerSettings = {
@@ -1331,37 +1331,33 @@ function refreshChainLegendFor(selector) {
   wireChainLegendColorInputs(legendEl);
 }
 
-// RFdiffusion residue provenance coloring ("color by .trb"): every
-// residue in a generated structure is either part of a grafted motif
-// (present in a redesigned chain but taken from the reference), part of
-// an entirely fixed/non-designed chain, or generated de novo. See
-// parser.load_trb_provenance() for where con_hal_pdb_idx /
-// complex_con_hal_pdb_idx come from.
-const PROVENANCE_LABELS = { motif: "Motif", fixed_chain: "Fixed chains", sculpted: "Sculpted" };
-
-function buildProvenanceMap(trbData) {
-  const map = {};
-  (trbData.motif || []).forEach(([chain, resno]) => { map[`${chain}:${resno}`] = "motif"; });
-  (trbData.fixed_chain || []).forEach(([chain, resno]) => { map[`${chain}:${resno}`] = "fixed_chain"; });
-  return map;
-}
+// RFdiffusion residue provenance coloring ("color by .trb"): every residue
+// in a generated structure is either part of a grafted motif (present in a
+// redesigned chain but taken from the reference), part of an entirely
+// fixed/non-designed chain (further split into "fully fixed" vs. "fixed
+// structure, redesigned sequence"), or generated de novo. See
+// parser.load_trb_provenance() for where con_hal_idx0 / inpaint_str /
+// inpaint_seq come from, and why categories arrive as a flat array indexed
+// by residue position rather than by (chain, resnum).
+const PROVENANCE_LABELS = { motif: "Motif", fixed_chain: "Fixed chains", inpainted_seq: "Inpainted sequence", sculpted: "Sculpted" };
 
 // Unlike the chain palette (one global scheme that reads shared settings
-// live), each structure has its own provenance map, so a fresh scheme is
+// live), each structure has its own provenance data, so a fresh scheme is
 // registered per use rather than trying to share/mutate one - keeps two
 // viewers showing different structures' provenance from stepping on each
-// other. `chainOffsets` (from computeStructureChainInfo, minResno - 1 per
-// chain) normalizes the *loaded structure's* residue numbers onto the
-// chain-local numbering parser.load_trb_provenance() already puts the
-// fixed_chain data in - needed because RFdiffusion's own raw backbone
-// .pdb keeps counting resnums up across chain boundaries instead of
-// resetting per chain like AlphaFold3/Boltz's output does, so the two
-// tabs' structures don't share one numbering convention.
-function makeProvenanceColorScheme(provenanceMap, chainOffsets) {
+// other. `categories[atom.residueIndex]` works directly, with no
+// chain-letter/resnum lookup at all: parser.load_trb_provenance() already
+// returns one category per residue in the generated structure's own file
+// order, and NGL's atom.residueIndex is exactly that same flat, 0-based,
+// file-order position within whichever structure is currently loaded -
+// this is what sidesteps RFdiffusion's raw backbone .pdb (continuous
+// resnums across chains) vs. AlphaFold3/Boltz's output (resnums reset per
+// chain) ever needing to be reconciled, and also survives
+// rechain_rfdiff_pdbs() reassigning chain letters after RFdiffusion runs.
+function makeProvenanceColorScheme(categories) {
   return NGL.ColormakerRegistry.addScheme(function () {
     this.atomColor = function (atom) {
-      const offset = (chainOffsets && chainOffsets[atom.chainname]) || 0;
-      const category = provenanceMap[`${atom.chainname}:${atom.resno - offset}`] || "sculpted";
+      const category = (categories && categories[atom.residueIndex]) || "sculpted";
       return parseInt(viewerSettings.provenanceColors[category].slice(1), 16);
     };
   });
@@ -1667,10 +1663,7 @@ async function applyProvenanceColoring(selector, trbPath, legendEl, logOverride)
   try {
     const data = await apiGet("/api/trb", { path: trbPath, log: logOverride });
     if (data.error) throw new Error(data.error);
-    const chainInfo = computeStructureChainInfo(entry.component.structure);
-    const chainOffsets = {};
-    Object.keys(chainInfo).forEach((c) => { chainOffsets[c] = chainInfo[c].minResno - 1; });
-    const schemeId = makeProvenanceColorScheme(buildProvenanceMap(data), chainOffsets);
+    const schemeId = makeProvenanceColorScheme(data.categories || []);
     entry.colorMode = "provenance";
     entry.provenanceSchemeId = schemeId;
     setCartoonColor(selector, schemeId);

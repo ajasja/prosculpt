@@ -295,43 +295,54 @@ provenance** as an alternative to chain coloring. RFdiffusion writes a
 since the pickle contains `numpy` array/scalar objects) next to each
 backbone `.pdb`, recording which residues were copied in from the
 reference structure versus generated de novo. The dashboard buckets every
-residue into one of three categories, colored consistently across all
+residue into one of four categories, colored consistently across all
 three tabs and shown in a small legend next to the dropdown, each with
-its own color picker so the palette can be retuned: **Motif**
-(`con_hal_pdb_idx` - reference residues present in a *redesigned* chain),
-**Fixed chains** (`complex_con_hal_pdb_idx` minus `con_hal_pdb_idx` -
-reference residues in a *non-designed* chain; `complex_con_hal_pdb_idx`
-covers every non-sculpted residue with correct chain/residue numbers, and
-is only present in the pickle at all when the run actually had fixed
-chains - absent means no fixed chains, so `fixed_chain` is simply empty.
-`receptor_con_hal_pdb_idx` looked like the obvious field for this but
-turns out to get both the resnums *and* the chain letters wrong, which no
-amount of renumbering could fix), and **Sculpted** (everything else -
-generated de novo). Residue identity for this is chain letter + residue number, but
-the files this needs to apply to don't agree on numbering convention:
-RFdiffusion's own raw backbone `.pdb` (Backbones tab) keeps counting
-residue numbers up across chain boundaries instead of resetting per
-chain, while AlphaFold3/Boltz's output (Models and Results tabs) resets
-every chain back to 1 like a normally-numbered PDB file does. Every
-`3_models/model_N` directory traces back to the same-indexed
+its own color picker so the palette can be retuned: **Motif** (residues
+present in a *redesigned* chain but taken from the reference, both
+structure and sequence), **Fixed chains** (residues in a *non-designed*
+chain, structure and sequence both taken from the reference verbatim),
+**Inpainted sequence** (residues whose *structure* is fixed to the
+reference but whose *sequence* ProteinMPNN is still free to redesign -
+e.g. a fixed-chain residue with an unknown/masked identity), and
+**Sculpted** (everything else - generated de novo, neither structure nor
+sequence from the reference).
+
+Earlier versions of this keyed provenance off one of RFdiffusion's own
+`.trb` fields that pair a residue with its (chain, resnum) - every one
+tried (`con_hal_pdb_idx`+`receptor_con_hal_pdb_idx`, then
+`con_hal_pdb_idx`+`complex_con_hal_pdb_idx`) turned out to get chain
+letters and/or residue numbers wrong in some case. `load_trb_provenance()`
+now reads three fields keyed purely by a residue's flat, 0-based
+*position* in the generated structure instead (residue 0 is the first
+residue of the first chain, residue 1 the next, and so on across every
+chain in file order - no chain-letter/resnum bookkeeping at all):
+`con_hal_idx0` (flat indices of motif residues), `inpaint_str` (per-residue
+bool - True wherever the structure is fixed to the reference), and
+`inpaint_seq` (per-residue bool - True wherever the sequence is fixed to
+the reference). Motif is `con_hal_idx0`; of the rest, `inpaint_str` False
+is Sculpted, `inpaint_str` True with `inpaint_seq` False is Inpainted
+sequence, and `inpaint_str` True with `inpaint_seq` True is Fixed chains.
+Because this is purely positional, it needs no reconciling of
+RFdiffusion's own raw backbone `.pdb` (Backbones tab, which keeps counting
+resnums up across chain boundaries) against AlphaFold3/Boltz's output
+(Models and Results tabs, which resets every chain back to 1) - residue
+order (and count) is preserved end-to-end through the pipeline regardless
+of that numbering difference, or of `rechain_rfdiff_pdbs()` reassigning
+chain letters after RFdiffusion runs. The frontend matches a loaded
+structure's residues up against this flat category list via NGL's own
+`atom.residueIndex` (`makeProvenanceColorScheme()` in `app.js`) - the
+same flat, 0-based, file-order position, so no chain/resnum lookup is
+needed there either.
+
+Every `3_models/model_N` directory traces back to the same-indexed
 `1_rfdiff/_N.trb` regardless of which sequence/sample/monomer-vs-complex
 variant a given row is (`list_models()` in `parser.py` resolves this and
 stamps each row with its `trb_path`), and a Results row finds its `.trb`
 the same way the Backbones tab does - same basename as that row's
-`path_rfdiff`, `.trb` extension. `load_trb_provenance()`'s `fixed_chain`
-residue numbers come out already on the chain-local convention (each
-chain's lowest resnum effectively 1, then 2, ...) straight from
-`complex_con_hal_pdb_idx` itself, no extra renumbering needed -
-`con_hal_pdb_idx`/`motif` is on the same convention too, since the
-designed chain(s) it refers to always come first and so are never offset
-either way - and the frontend (`computeStructureChainInfo()` in
-`app.js`) works out each *loaded* structure's own per-chain offset the
-same way and normalizes onto it, so the same provenance data colors
-correctly regardless of which convention the structure in front of it
-happens to use. If a backbone/model has no `.trb` file, or it can't be
-read (e.g. `numpy` isn't installed in the dashboard's own environment),
-the dropdown falls back to chain coloring with a short explanation in
-place of the legend rather than failing silently.
+`path_rfdiff`, `.trb` extension. If a backbone/model has no `.trb` file,
+or it can't be read (e.g. `numpy` isn't installed in the dashboard's own
+environment), the dropdown falls back to chain coloring with a short
+explanation in place of the legend rather than failing silently.
 
 ## 5. Track multiple jobs at once
 
