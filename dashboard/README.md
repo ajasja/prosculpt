@@ -272,20 +272,23 @@ viewer in place (swap the cartoon representation for one using a new NGL
 color scheme via `setCartoonColor()`) rather than reloading the
 structure, so it doesn't reset your camera zoom/rotation.
 
-A **Show sidechains** control (three mutually-exclusive options: "Only
-selected", "Interface", "All") governs which residues' sidechains are
-drawn as licorice sticks on top of the cartoon, independent of whichever
-residue is currently click-highlighted. "Only selected" (the default)
-shows nothing extra beyond whatever the click/sequence-panel highlight
-already draws. "Interface" shows the sidechains of every residue that has
-any atom within 5 Å of an atom belonging to a *different* chain -
+A **Show sidechains** control (four mutually-exclusive options: "Only
+selected", "Interface", "Hydrophobic", "All") governs which residues'
+sidechains are drawn as licorice sticks on top of the cartoon, independent
+of whichever residue is currently click-highlighted. "Only selected" (the
+default) shows nothing extra beyond whatever the click/sequence-panel
+highlight already draws. "Interface" shows the sidechains of every residue
+that has any atom within 5 Å of an atom belonging to a *different* chain -
 computed per chain via `structure.getAtomSet()` intersected with
 `getAtomSetWithinSelection("not :chain", 5)`, then expanded to whole
 residues and OR'd across chains (`computeInterfaceSele()` in `app.js`) -
 useful for eyeballing a binder's interface at a glance without having to
-click through it residue by residue. "All" shows every sidechain in the
-structure. This setting, like the background and palette ones, is shared
-across every viewer and remembered in local storage.
+click through it residue by residue. "Hydrophobic" shows the sidechains of
+every hydrophobic residue (ALA/VAL/LEU/ILE/PRO/PHE/MET/TRP), via NGL's own
+built-in `hydrophobic` selection keyword - no separate residue list needed.
+"All" shows every sidechain in the structure. This setting, like the
+background and palette ones, is shared across every viewer and remembered
+in local storage.
 
 The Backbones, Models and Results tabs additionally have a **Color
 residues by** / **Color structure by** dropdown, offering **RFdiffusion

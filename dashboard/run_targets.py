@@ -157,6 +157,29 @@ def get_default_browse_root() -> Optional[str]:
     return root if root and os.path.isdir(root) else None
 
 
+def list_browse_roots() -> list[dict[str, Any]]:
+    """One entry per configured target whose best local browsing root
+    (local_mount_path, falling back to projects_path - same preference as
+    get_default_browse_root(), just for every target instead of only the
+    default one) actually exists on this machine right now. Powers the
+    Track job file browser's "Jump to..." dropdown, so a multi-cluster
+    setup doesn't require typing/pasting each cluster's root path by hand
+    to get started. Silently omits a target whose root can't be resolved
+    (no local_mount_path/projects_path at all) or isn't actually reachable
+    right now (e.g. a network mount that's temporarily down) - same
+    "don't guess, just skip it" spirit as get_default_browse_root()."""
+    try:
+        data = _load_config()
+    except RunTargetError:
+        return []
+    out = []
+    for name, t in data["targets"].items():
+        root = t.get("local_mount_path") or t.get("projects_path")
+        if root and os.path.isdir(root):
+            out.append({"name": name, "label": t.get("label", name), "path": root})
+    return out
+
+
 def list_targets() -> list[dict[str, Any]]:
     """Public, UI-safe view of every configured target - never includes
     anything secret (there is nothing secret to include: no passwords/keys

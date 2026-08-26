@@ -459,6 +459,15 @@ def api_output_log():
 # ---------------------------------------------------------------------------
 
 
+@app.route("/api/browse_roots")
+def api_browse_roots():
+    """Every configured target's best locally-reachable root (see
+    list_browse_roots() in run_targets.py) - powers the file browser's
+    "Jump to..." dropdown, so a multi-cluster setup can switch between
+    clusters without typing/pasting each one's root path by hand."""
+    return jsonify(RT.list_browse_roots())
+
+
 @app.route("/api/browse")
 def api_browse():
     # No ?path= at all means "just opened the browser" (the frontend omits
@@ -469,6 +478,16 @@ def api_browse():
     # the way this always worked before that file existed.
     path = request.args.get("path") or RT.get_default_browse_root() or os.path.expanduser("~")
     path = os.path.abspath(path)
+    # A pasted full path to a specific log file (rather than a directory -
+    # see the "paste a path" input in the browser, goToBrowsePath() in
+    # app.js) is resolved to its containing folder, with the file itself
+    # reported back as `preselect` so the frontend can land there with it
+    # already ticked - pasting the exact path you already know shouldn't
+    # require re-navigating to it folder by folder.
+    preselect = None
+    if os.path.isfile(path):
+        preselect = path
+        path = os.path.dirname(path)
     if not os.path.isdir(path):
         abort(400, description="Not a directory")
     entries = []
@@ -481,8 +500,15 @@ def api_browse():
             entries.append({"name": name, "path": full, "is_dir": is_dir})
     except PermissionError:
         abort(403, description="Permission denied")
+    if preselect and not any(e["path"] == preselect for e in entries):
+        # The preselected file may have an extension the listing above
+        # otherwise filters out (e.g. someone pasted a .err path by
+        # mistake) - still show it, since it's the one thing the user
+        # explicitly asked to go to.
+        entries.append({"name": os.path.basename(preselect), "path": preselect, "is_dir": False})
+        entries.sort(key=lambda e: e["name"])
     parent = os.path.dirname(path) if path != os.path.dirname(path) else None
-    return jsonify({"path": path, "parent": parent, "entries": entries})
+    return jsonify({"path": path, "parent": parent, "entries": entries, "preselect": preselect})
 
 
 if __name__ == "__main__":

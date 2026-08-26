@@ -414,6 +414,13 @@
       <span id="browsePath"></span>
       <button id="browseCloseBtn">✕</button>
     </div>
+    <div class="browse-nav-row">
+      <select id="browseRootSelect" class="browse-root-select" title="Jump to a configured cluster's root directory">
+        <option value="">Jump to…</option>
+      </select>
+      <input type="text" id="browseGoToPathInput" class="browse-goto-input" placeholder="…or paste a full path and press Enter">
+      <button type="button" id="browseGoToPathBtn" class="secondary">Go</button>
+    </div>
     <input type="text" id="browseFilterInput" class="browse-filter-input" placeholder="Filter this folder by name…">
     <div id="browseEntries" class="browse-entries"></div>
     <div class="modal-footer">

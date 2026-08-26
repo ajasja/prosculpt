@@ -193,6 +193,53 @@ function initTopbar() {
     qs("#browseModal").classList.add("hidden");
   });
   qs("#browseFilterInput").addEventListener("input", (e) => renderBrowseEntries(e.target.value));
+
+  loadBrowseRoots();
+  qs("#browseRootSelect").addEventListener("change", (e) => {
+    const path = e.target.value;
+    e.target.value = ""; // a jump, not a persistent selection - avoid it going stale as the user navigates further
+    if (path) openBrowse(path);
+  });
+  qs("#browseGoToPathBtn").addEventListener("click", () => goToBrowsePath());
+  qs("#browseGoToPathInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); goToBrowsePath(); }
+  });
+}
+
+function goToBrowsePath() {
+  const input = qs("#browseGoToPathInput");
+  const path = input.value.trim();
+  if (!path) return;
+  input.value = "";
+  openBrowse(path);
+}
+
+// One dropdown entry per configured target whose root is actually reachable
+// from this machine right now (see list_browse_roots() in run_targets.py) -
+// lets a multi-cluster setup jump straight to another cluster's project
+// root instead of pasting/typing its path by hand. Silently leaves the
+// dropdown at just its placeholder option if none are configured/reachable
+// (e.g. no dashboard_config.yaml yet) - the existing folder-by-folder
+// browsing and the "paste a path" input above still work either way, so
+// this is a nice-to-have, never a hard requirement to open the browser at
+// all.
+async function loadBrowseRoots() {
+  const sel = qs("#browseRootSelect");
+  try {
+    const roots = await fetch("/api/browse_roots").then((r) => r.json());
+    if (!Array.isArray(roots) || !roots.length) return;
+    roots.forEach((r) => {
+      const opt = document.createElement("option");
+      opt.value = r.path;
+      opt.textContent = r.label;
+      opt.title = r.path;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    // Leave the dropdown at just its placeholder - not worth surfacing an
+    // error for a nice-to-have shortcut when the rest of the browser still
+    // works fine without it.
+  }
 }
 
 // Loading a (possibly new, possibly still-running) job should always start
@@ -270,7 +317,9 @@ async function openBrowse(path) {
     state.browsePath = data.path;
     qs("#browsePath").textContent = data.path;
     browseListing = { parent: data.parent, entries: data.entries };
+    if (data.preselect) browseSelectedPaths.add(data.preselect);
     renderBrowseEntries("");
+    updateBrowseSelectedCount();
   } catch (err) {
     browseListing = { parent: null, entries: [] };
     qs("#browseEntries").innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
