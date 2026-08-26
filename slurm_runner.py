@@ -70,16 +70,22 @@ with open(out_command_file, 'w') as f:
         #print("+output_dir="+output_dir)
 
         cmdline = " ".join(arguments) #join all arguments passed that aren't number of tasks or task name
-        # sys.executable, not a bare "python": this script is already
-        # running under whatever interpreter actually has prosculpt's own
-        # deps available (its own conda env, whether that's because a
-        # human activated it before running this manually, or because
-        # something invoked this script with that env's interpreter
-        # directly) - reusing that exact interpreter for the compute-node
-        # side of the job means it doesn't matter what $PATH/conda-activation
-        # state exists on the compute node once the job actually starts,
-        # which is not guaranteed to be anything in particular.
-        line = f"""{sys.executable} {slurm_runner_path}/prosculpt_run.py {cmdline}"""
+        # installation.yaml's own prosculpt_python_path, not sys.executable
+        # and not a bare "python": sys.executable is whatever interpreter
+        # happens to be running *this* script, which depends on how the
+        # caller invoked slurm_runner.py - fine when the dashboard does it
+        # (it explicitly launches slurm_runner.py with its configured
+        # python_path), but silently wrong if a human runs `python
+        # slurm_runner.py ...` without having activated the prosculpt conda
+        # env first (or any other caller whose active interpreter isn't
+        # prosculpt's). A bare "python" has the matching problem one step
+        # later: it gets resolved fresh on the compute node when the job
+        # actually runs, which isn't guaranteed to have the right env either.
+        # installation.yaml's prosculpt_python_path is the one absolute path
+        # meant to always be correct regardless of who/what invoked this
+        # script - it's the same value prosculpt_run.py itself uses to call
+        # scoring_script.py, so this keeps both call sites in sync.
+        line = f"""{installation_yaml_data['prosculpt_python_path']} {slurm_runner_path}/prosculpt_run.py {cmdline}"""
         print(line, file=f)
 
 print(f"Slurm command can be found in {out_command_file}")
