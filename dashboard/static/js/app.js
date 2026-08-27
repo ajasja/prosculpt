@@ -712,6 +712,137 @@ function refreshActiveTabData() {
 }
 
 // ---------------------------------------------------------------------
+// Cancel job
+// ---------------------------------------------------------------------
+// Cancelling actually runs scancel against a real cluster, so this is
+// deliberately more ceremonious than the rest of the tracking UI: it asks
+// which configured target the job's cluster is (the dashboard has no other
+// way to know - a job just added by pasting a log path was never
+// necessarily submitted through the Run job tab, so there's no target on
+// record for it) and requires an explicit "I'm sure" confirmation before
+// the request is ever sent. jobId/logPath are captured once when the modal
+// opens (rather than re-read from state.lastStatus at submit time) so a
+// poll tick landing mid-dialog can't quietly swap out which job the button
+// is about to cancel.
+let cancelJobCtx = { jobId: null, logPath: null };
+
+function initCancelJobModal() {
+  qs("#cancelJobBtn").addEventListener("click", openCancelJobModal);
+  qs("#cancelJobCloseBtn").addEventListener("click", closeCancelJobModal);
+  qs("#cancelJobBackBtn").addEventListener("click", closeCancelJobModal);
+  qs("#cancelJobConfirmCheck").addEventListener("change", refreshCancelJobConfirmEnabled);
+  qs("#cancelJobTargetSelect").addEventListener("change", refreshCancelJobConfirmEnabled);
+  qs("#cancelJobConfirmBtn").addEventListener("click", doCancelJob);
+}
+
+async function openCancelJobModal() {
+  if (!state.logPath) return;
+  const job = (state.lastStatus && state.lastStatus.job_info) || {};
+  cancelJobCtx = { jobId: job.job_id || null, logPath: state.logPath };
+
+  const resultEl = qs("#cancelJobResult");
+  resultEl.classList.add("hidden");
+  resultEl.textContent = "";
+  qs("#cancelJobStatus").textContent = "";
+  const checkbox = qs("#cancelJobConfirmCheck");
+  checkbox.checked = false;
+  checkbox.disabled = false;
+  qs("#cancelJobBackBtn").disabled = false;
+
+  const intro = qs("#cancelJobIntro");
+  if (cancelJobCtx.jobId) {
+    intro.innerHTML = `Cancel SLURM job <b>#${escapeHtml(cancelJobCtx.jobId)}</b> for <b>${escapeHtml(jobLabel(state.logPath))}</b>? This runs <code>scancel</code> on the cluster right away - it cannot be undone.`;
+  } else {
+    intro.innerHTML = `This job's SLURM job ID hasn't been found in its log yet (it may not have started running), so it can't be cancelled from here yet. Try again once the <b>Overview</b> tab shows a "Slurm job" number.`;
+  }
+  checkbox.disabled = !cancelJobCtx.jobId;
+
+  const targetSelect = qs("#cancelJobTargetSelect");
+  const targetsWarning = qs("#cancelJobTargetsWarning");
+  targetSelect.innerHTML = `<option value="">Loading…</option>`;
+  targetSelect.disabled = true;
+  targetsWarning.classList.add("hidden");
+  qs("#cancelJobModal").classList.remove("hidden");
+
+  try {
+    const data = await apiGet("/api/run/targets");
+    const targets = data.targets || [];
+    if (!targets.length) {
+      targetSelect.innerHTML = `<option value="">(no targets configured)</option>`;
+      targetsWarning.textContent = data.error || "No run targets configured - copy dashboard/dashboard_config.yaml.example to dashboard_config.yaml and fill in at least one target.";
+      targetsWarning.classList.remove("hidden");
+    } else {
+      targetSelect.innerHTML = targets
+        .map((t) => `<option value="${escapeHtml(t.name)}" ${t.is_default ? "selected" : ""}>${escapeHtml(t.label)} (${t.kind})</option>`)
+        .join("");
+      targetSelect.disabled = false;
+    }
+  } catch (e) {
+    targetSelect.innerHTML = `<option value="">(could not load targets)</option>`;
+    targetsWarning.textContent = String(e.message || e);
+    targetsWarning.classList.remove("hidden");
+  }
+  refreshCancelJobConfirmEnabled();
+}
+
+function closeCancelJobModal() {
+  qs("#cancelJobModal").classList.add("hidden");
+}
+
+function refreshCancelJobConfirmEnabled() {
+  const ready = !!cancelJobCtx.jobId &&
+    qs("#cancelJobConfirmCheck").checked &&
+    !!qs("#cancelJobTargetSelect").value;
+  qs("#cancelJobConfirmBtn").disabled = !ready;
+}
+
+async function doCancelJob() {
+  const target = qs("#cancelJobTargetSelect").value;
+  const jobId = cancelJobCtx.jobId;
+  if (!jobId || !target) return;
+
+  const confirmBtn = qs("#cancelJobConfirmBtn");
+  const backBtn = qs("#cancelJobBackBtn");
+  const statusEl = qs("#cancelJobStatus");
+  const resultEl = qs("#cancelJobResult");
+  confirmBtn.disabled = true;
+  backBtn.disabled = true;
+  qs("#cancelJobConfirmCheck").disabled = true;
+  qs("#cancelJobTargetSelect").disabled = true;
+  statusEl.innerHTML = `<span class="spinner"></span>Cancelling…`;
+  resultEl.classList.add("hidden");
+
+  try {
+    const res = await fetch("/api/run/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target, job_id: jobId }),
+    });
+    const data = await res.json().catch(() => ({ ok: false, stderr: `HTTP ${res.status}` }));
+    statusEl.textContent = "";
+    resultEl.classList.remove("hidden");
+    if (data.ok) {
+      resultEl.className = "ok";
+      resultEl.textContent = `Sent scancel for job #${jobId}. It may take a few seconds for the cluster to actually stop the job - the status banners here will update on the next refresh.`;
+      if (state.logPath === cancelJobCtx.logPath) refreshAll(false);
+    } else {
+      resultEl.className = "err";
+      resultEl.textContent = data.error || data.stderr || data.stdout || "scancel failed for an unknown reason.";
+    }
+  } catch (e) {
+    statusEl.textContent = "";
+    resultEl.classList.remove("hidden");
+    resultEl.className = "err";
+    resultEl.textContent = String(e.message || e);
+  } finally {
+    backBtn.disabled = false;
+    qs("#cancelJobConfirmCheck").disabled = !cancelJobCtx.jobId;
+    qs("#cancelJobTargetSelect").disabled = false;
+    refreshCancelJobConfirmEnabled();
+  }
+}
+
+// ---------------------------------------------------------------------
 // Polling
 // ---------------------------------------------------------------------
 
@@ -972,6 +1103,23 @@ function renderStatusBanners(status) {
   const tabBtn = qs("#errorTabBtn");
   tabBtn.classList.toggle("visible", !!errFile.err_exists);
   tabBtn.classList.toggle("alert", !!crash.crashed || !!status.cancelled);
+
+  updateCancelJobBtn(status);
+}
+
+// Cancel job is only meaningful for a job that's actually still running -
+// once it's reached a terminal state there's nothing left for scancel to
+// do, so the button is disabled (same "is this job done" check already
+// used to stop polling - see isTerminalStatus()) rather than left clickable
+// but pointless.
+function updateCancelJobBtn(status) {
+  const btn = qs("#cancelJobBtn");
+  if (!btn) return;
+  const terminal = isTerminalStatus(status);
+  btn.disabled = terminal;
+  btn.title = terminal
+    ? "This job has already finished, crashed, or been cancelled - nothing to cancel."
+    : "Cancel this SLURM job";
 }
 
 function renderRfdiffStage(rf) {
@@ -3132,6 +3280,7 @@ document.addEventListener("DOMContentLoaded", () => {
   initAppModeTabs();
   initJobTabsBar();
   initTabs();
+  initCancelJobModal();
   resultsView.initAll();
   allResultsView.initAll();
   qs("#modelsFilter").addEventListener("input", renderModelsList);

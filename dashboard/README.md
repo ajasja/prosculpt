@@ -550,6 +550,18 @@ sync over time, so both tabs share one implementation instead.
   of the affected view, since "page 3" means something different once the
   underlying row set or order has changed.
 
+Also on the per-job tab bar, pushed to the far right and styled with a red
+outline: a **Cancel job** button, enabled only while the job still looks to
+be running (disabled once it's finished, crashed, or already been
+cancelled). It runs `scancel` against the job's own Slurm job ID (the same
+one shown on the Overview tab, parsed from the log's "Hello from job ..."
+line). Since Track job has no other way to know which configured target a
+tracked job's cluster actually is - a job just added by pasting a log path
+was never necessarily submitted through the Run job tab - clicking it opens
+a small dialog asking which target owns the job, and requires an explicit
+"I'm sure I want to cancel this job" confirmation before anything is
+actually sent.
+
 ## Design notes / known limitations
 
 - **File-serving paths are checked by *real* location, not by string.**
@@ -636,8 +648,10 @@ sync over time, so both tabs share one implementation instead.
 
 ```
 app.py              Flask routes / API for the Track job side
-run_api.py          Flask routes / API for the Run job side (submit/squeue/
-                    check_pending) - registered as a blueprint from app.py
+run_api.py          Flask routes / API for job submission/monitoring
+                    (submit/squeue/cancel/check_pending) - registered as a
+                    blueprint from app.py; squeue/cancel are also used by
+                    Track job's own "Cancel job" button, not just Run job
 run_targets.py       Run-target config + dashboard-wide defaults (both read
                     from dashboard_config.yaml) + the shared local/ssh
                     execution primitive

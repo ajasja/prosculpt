@@ -193,6 +193,31 @@ button.small { padding: 4px 9px; font-size: 11.5px; }
 .tab-btn#errorTabBtn.alert.active { border-bottom-color: var(--danger); }
 .tab-btn#errorTabBtn.alert::before { content: "⚠ "; }
 
+/* Cancel job: the one button on the per-job tab bar that does something
+   rather than switching tabs, so it's deliberately not a .tab-btn (see
+   index.html) and gets its own look - a red outline rather than a filled
+   button, since it's a dangerous-but-not-yet-committed action, and pushed
+   to the far right of the bar via margin-left:auto (.tabs is a flex row). */
+.cancel-job-btn {
+  margin-left: auto;
+  align-self: center;
+  background: transparent;
+  color: var(--danger);
+  border: 1.5px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.cancel-job-btn:hover { background: rgba(239, 90, 111, 0.12); }
+.cancel-job-btn:disabled { opacity: 0.4; cursor: not-allowed; background: transparent; filter: none; }
+
+/* Filled counterpart, for the modal's actual "commit" button - a solid red
+   fill reads as more final than the outline button that opened the modal,
+   which matters since this is the one that actually runs scancel. */
+button.danger { background: var(--danger); color: #fff; }
+button.danger:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+
 /* Top-level selector (multi-job tracking): the two "All jobs ..." tabs
    plus one chip per tracked job, one level above the per-job .tabs bar
    underneath it. Styled as pill buttons rather than underlined tabs so
@@ -1011,6 +1036,21 @@ select {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
   padding: 10px 16px; border-top: 1px solid var(--border);
 }
+
+/* Cancel job modal - shares .modal/.modal-content/.modal-header/.modal-footer
+   with the browse modal above; only the body in between is bespoke. */
+.cancel-job-modal-content { width: min(420px, 90vw); max-height: none; }
+.cancel-job-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.cancel-job-body #cancelJobIntro { margin: 0; font-size: 13px; color: var(--text); }
+.cancel-job-body select {
+  padding: 7px 10px; background: var(--panel-2); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--radius); font-size: 13px;
+}
+.cancel-job-body .toggle-label { margin-bottom: 0; }
+#cancelJobResult { margin: 0; font-size: 12.5px; white-space: pre-wrap; }
+#cancelJobResult.ok { color: var(--accent-2); }
+#cancelJobResult.err { color: var(--danger); }
+.cancel-job-actions { display: flex; gap: 8px; }
 
 /* Spinner */
 .spinner {

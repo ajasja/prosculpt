@@ -64,6 +64,37 @@ def api_run_squeue():
     return jsonify(result)
 
 
+@run_api.route("/api/run/cancel", methods=["POST"])
+def api_run_cancel():
+    """Cancels one SLURM job (`scancel <job_id>`) on a target - used by the
+    Track job tab's per-job "Cancel job" button. `job_id` is whatever the
+    frontend read out of the job's own log (parser.parse_job_info's
+    SLURM_JOB_ID, printed by the job itself at startup - unique per task
+    even for an array job, so this never touches sibling tasks). Requires an
+    explicit target the same way /api/run/squeue does: a job just being
+    tracked by log path was never necessarily submitted through this
+    dashboard, so there's no other record of which configured target its
+    cluster actually is."""
+    body = request.get_json(silent=True) or {}
+    target = _target_or_400(body.get("target"))
+    job_id = str(body.get("job_id") or "").strip()
+    if not job_id.isdigit():
+        abort(400, description="job_id must be a numeric SLURM job id")
+    try:
+        result = RT.run_remote_or_local(target, ["scancel", job_id])
+    except RT.RunTargetError as e:
+        abort(502, description=str(e))
+    return jsonify(
+        {
+            "ok": result["returncode"] == 0,
+            "job_id": job_id,
+            "target": target["name"],
+            "stdout": result["stdout"],
+            "stderr": result["stderr"],
+        }
+    )
+
+
 def _collect_uploaded_files() -> dict[str, bytes]:
     """Reconstructs the {relative_path: content} file map the frontend
     sends as two parallel multipart fields: repeated `file_paths` (text,

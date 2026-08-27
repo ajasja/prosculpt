@@ -160,6 +160,11 @@
   <button class="tab-btn" data-tab="results">Results</button>
   <button class="tab-btn" data-tab="error" id="errorTabBtn">Error log</button>
   <button class="tab-btn" data-tab="outputlog">Output log</button>
+  <!-- Deliberately not a .tab-btn (no data-tab/panel of its own - it does
+       something rather than navigating somewhere) - pushed to the far
+       right of the bar via margin-left:auto in CSS. Opens #cancelJobModal;
+       see initCancelJobModal() in app.js. -->
+  <button id="cancelJobBtn" class="cancel-job-btn" title="Cancel this SLURM job">✕ Cancel job</button>
 </nav>
 
   <section id="tab-overview" class="tab-panel active">
@@ -426,6 +431,38 @@
     <div class="modal-footer">
       <span id="browseSelectedCount" class="muted"></span>
       <button id="browseAddSelectedBtn" class="secondary" disabled>Add selected jobs</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cancel job confirmation: asks which target/account the job's cluster is
+     on (the dashboard has no other way to know - a job just tracked by log
+     path was never necessarily submitted through this dashboard) and makes
+     the user explicitly confirm before an scancel is actually sent. See
+     openCancelJobModal()/doCancelJob() in app.js. -->
+<div id="cancelJobModal" class="modal hidden">
+  <div class="modal-content cancel-job-modal-content">
+    <div class="modal-header">
+      <span>Cancel job</span>
+      <button id="cancelJobCloseBtn">✕</button>
+    </div>
+    <div class="cancel-job-body">
+      <p id="cancelJobIntro"></p>
+      <label class="toolbar-label" for="cancelJobTargetSelect">Which account does this job belong to?</label>
+      <select id="cancelJobTargetSelect"></select>
+      <p id="cancelJobTargetsWarning" class="muted hidden"></p>
+      <label class="toggle-label" id="cancelJobConfirmLabel">
+        <input type="checkbox" id="cancelJobConfirmCheck">
+        I'm sure I want to cancel this job.
+      </label>
+      <p id="cancelJobResult" class="hidden"></p>
+    </div>
+    <div class="modal-footer">
+      <span id="cancelJobStatus" class="muted"></span>
+      <div class="cancel-job-actions">
+        <button id="cancelJobBackBtn" class="secondary">Never mind</button>
+        <button id="cancelJobConfirmBtn" class="danger" disabled>Cancel job</button>
+      </div>
     </div>
   </div>
 </div>
