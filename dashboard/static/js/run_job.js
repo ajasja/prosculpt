@@ -369,6 +369,32 @@ function renderRepeatableModuleBody(bodyEl, moduleKey, spec, state) {
           card.appendChild(wrap);
           return;
         }
+        // Generic version of the same pattern, for any other repeatable
+        // module that needs a small per-item file upload (currently just
+        // the filters module's filter_script) - keyed by field.key (not
+        // hardcoded like pdb_upload_small above) on item.__uploads so two
+        // different file_upload_small fields on the same item type, if
+        // that's ever needed, wouldn't clobber each other's stored file.
+        if (field.type === "file_upload_small") {
+          item.__uploads = item.__uploads || {};
+          const current = item.__uploads[field.key];
+          const wrap = document.createElement("div");
+          wrap.className = "rj-field";
+          const helpHtml = field.help ? `<div class="rj-field-help">${escapeHtml(field.help)}</div>` : "";
+          wrap.innerHTML = `<label>${escapeHtml(field.label)}${field.required ? " *" : ""}</label>
+            <input type="file" ${field.accept ? `accept="${escapeHtml(field.accept)}"` : ""}>
+            <span class="muted rj-small-filename">${escapeHtml(current ? current.name : "no file chosen")}</span>
+            ${helpHtml}`;
+          qs("input[type=file]", wrap).addEventListener("change", (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            item.__uploads[field.key] = { file, name: file.name };
+            qs(".rj-small-filename", wrap).textContent = file.name;
+            syncFormToYaml();
+          });
+          card.appendChild(wrap);
+          return;
+        }
         const value = item[field.key];
         const ctrl = renderFieldControl(field, value, (v) => {
           item[field.key] = v;
@@ -380,6 +406,37 @@ function renderRepeatableModuleBody(bodyEl, moduleKey, spec, state) {
     });
   }
   renderRepeatItems();
+}
+
+// Assigns each filters-module item's uploaded script a target path under
+// filters/ in the job directory - the original filename by default (so
+// the project directory reads naturally if someone browses it later,
+// rather than a synthetic name), disambiguated with a _2, _3, ... suffix
+// before the extension if two items happen to upload same-named files.
+// Without that, two same-named uploads would silently collide into one
+// file server-side (both would stage to the same "filters/<name>" path,
+// see _collect_uploaded_files() in run_api.py, which is keyed by path) -
+// each filter's config entry would still get a filter_script value, but
+// one of them would silently be pointed at the wrong script's content.
+// Returns items.length paths in the same order as `items`, with null for
+// any item that hasn't had a file uploaded yet.
+function resolveFilterScriptPaths(items) {
+  const used = new Set();
+  return items.map((item) => {
+    const upload = item.__uploads && item.__uploads.filter_script;
+    if (!upload) return null;
+    const dot = upload.name.lastIndexOf(".");
+    const stem = dot > 0 ? upload.name.slice(0, dot) : upload.name;
+    const ext = dot > 0 ? upload.name.slice(dot) : "";
+    let candidate = `filters/${upload.name}`;
+    let n = 2;
+    while (used.has(candidate)) {
+      candidate = `filters/${stem}_${n}${ext}`;
+      n += 1;
+    }
+    used.add(candidate);
+    return candidate;
+  });
 }
 
 // ---------------------------------------------------------------------
@@ -459,9 +516,17 @@ function buildConfigObject() {
   cfg.pass_to_rfdiff = PASS_TO_RFDIFF_ORDER.filter((k) => passToRfdiff.has(k));
 
   if (mods.filters && mods.filters.enabled && mods.filters.items.length) {
-    cfg.rfdiff_backbone_filters = mods.filters.items.map((it) => ({
+    // Resolved (and stashed back onto each item as __resolvedScriptPath)
+    // here rather than separately in collectUploadFiles() at submit time -
+    // this function already runs on every relevant form change (see
+    // syncFormToYaml()), so by submit time it's already up to date, and
+    // there's exactly one place computing it instead of two that could
+    // disagree about which item got which disambiguated path.
+    const scriptPaths = resolveFilterScriptPaths(mods.filters.items);
+    mods.filters.items.forEach((it, i) => { it.__resolvedScriptPath = scriptPaths[i]; });
+    cfg.rfdiff_backbone_filters = mods.filters.items.map((it, i) => ({
       filter_name: it.filter_name,
-      filter_script: it.filter_script,
+      filter_script: scriptPaths[i] || "",
       delete_failed: !!it.delete_failed,
     }));
   }
@@ -602,6 +667,21 @@ function collectUploadFiles() {
       if (item.__pdbFile) {
         paths.push(`boltz_templates/template_${i}.pdb`);
         files.push(item.__pdbFile);
+      }
+    });
+  }
+  const filtersMod = runJob.modules.filters;
+  if (filtersMod && filtersMod.enabled) {
+    // __resolvedScriptPath is set by buildConfigObject() (via
+    // resolveFilterScriptPaths()), which syncFormToYaml() already keeps
+    // current on every relevant change - reused here rather than
+    // recomputed so the path a filter's config entry actually references
+    // and the path its script gets staged at can never drift apart.
+    filtersMod.items.forEach((item) => {
+      const upload = item.__uploads && item.__uploads.filter_script;
+      if (upload && item.__resolvedScriptPath) {
+        paths.push(item.__resolvedScriptPath);
+        files.push(upload.file);
       }
     });
   }

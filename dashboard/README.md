@@ -716,3 +716,28 @@ start_dashboard.ps1  Windows: launch at logon via Task Scheduler/Startup -
   Overview card's "Error log" stat says "not found" in that case. A job
   that's merely slow or stalled, with no crash/cancellation, will still
   show the tab (if the `.err` file exists) but without a warning banner.
+- **The whole dashboard freezes for every user at once, then resumes the
+  instant someone presses a key in its console window** — this is Windows
+  console "QuickEdit Mode": clicking, scrolling, or selecting text in a
+  `cmd.exe`/`powershell.exe` window pauses that console entirely, so any
+  process (this one included) blocks the moment it tries to write another
+  line to it - including Werkzeug's own per-request access log line (the
+  `"GET ... 200 -"` lines) - until a key is pressed to cancel the
+  selection. Two things compound this into "the whole dashboard is dead
+  for everyone", not just a paused terminal:
+  - `app.run()` was single-threaded by default, so the one worker thread
+    stuck on that blocked console write couldn't pick up any other
+    request either - fixed by passing `threaded=True` (already done in
+    `app.py`), so one stuck request (a frozen console write, or anything
+    else slow - a stalled network mount under a glob(), a huge
+    `final_output.csv`, ...) only ever stalls itself, not every other
+    user's request.
+  - The freeze itself still happens (threading doesn't stop the console
+    from pausing, just stops it from taking the whole server down with
+    it) - to stop it happening at all, either disable QuickEdit Mode on
+    that console window (right-click the title bar → Properties →
+    Options → untick "QuickEdit Mode"), or don't run the dashboard in a
+    visible, clickable console window in the first place - launch it via
+    `start_dashboard.ps1` instead (see "Run automatically at Windows
+    logon" above), which redirects all output to a log file and runs with
+    no console window to accidentally click into.

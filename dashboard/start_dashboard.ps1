@@ -58,7 +58,22 @@ Set-Location $DashboardDir
 $env:PORT = $Port
 
 Log "Starting dashboard on port $Port (cwd: $DashboardDir)..."
-# *>> redirects every stream (stdout, stderr, ...) to the log file, since
-# this process has no console attached once launched from Task Scheduler.
-& $Python app.py *>> $LogFile
+# PYTHONUNBUFFERED=1: Python block-buffers stdout by default once it isn't
+# attached to a real console (as it never is here, whether launched from
+# Task Scheduler or run by hand) - without this, log lines arrive in
+# delayed bursts instead of as they're actually printed, which matters
+# for a log you're trying to read/tail live.
+$env:PYTHONUNBUFFERED = "1"
+# 2>&1 merges stderr into stdout so both streams get captured, piped into
+# Out-File with an explicit -Encoding. Deliberately NOT `*>> $LogFile`
+# (which looks equivalent and used to be what this line did) - Windows
+# PowerShell's raw native-process redirection (`*>>`/`>>`) has a
+# long-standing quirk where a native exe's UTF-8 output gets silently
+# re-encoded as UTF-16 on the way into the file, inserting a null byte
+# after every character. That reads back as a space between every single
+# letter in anything that doesn't auto-detect UTF-16 (Notepad does;
+# `type`/`cat`-style viewers and many simpler editors don't) - piping
+# through Out-File with an explicit -Encoding avoids that redirection
+# path entirely instead of fighting it.
+& $Python app.py 2>&1 | Out-File -FilePath $LogFile -Append -Encoding utf8
 Log "Dashboard process exited."

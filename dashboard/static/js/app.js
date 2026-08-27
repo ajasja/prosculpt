@@ -102,6 +102,24 @@ async function apiGet(path, params = {}) {
   return res.json();
 }
 
+// Mirrors apiGet()'s own error handling, for the handful of call sites
+// that fetch() a PDB/text file directly (structure viewers) instead of
+// going through apiGet() (JSON API calls) - a failure there gets rendered
+// straight into the viewer's own "could not load" message rather than
+// thrown up to a caller that already knows how to display an Error.
+// Every error path in this app (including the OSError handler in app.py)
+// returns {"error": "..."} on failure, so that's tried first; falls back
+// to the response's statusText if the body isn't parseable JSON at all
+// (e.g. a proxy/webserver-level failure that never reached Flask).
+async function fetchErrorMessage(res) {
+  try {
+    const j = await res.json();
+    return j.error || j.message || res.statusText || `HTTP ${res.status}`;
+  } catch (e) {
+    return res.statusText || `HTTP ${res.status}`;
+  }
+}
+
 function fmtSeconds(s) {
   if (s === null || s === undefined || isNaN(s)) return "—";
   s = Math.round(s);
@@ -1077,6 +1095,19 @@ function renderStatusBanners(status) {
   const crash = status.crash || {};
   const errFile = status.err_file || {};
 
+  // output_dir_exists is only False once the log itself has told us where
+  // output_dir is - a job that's still in "setup" and hasn't reached that
+  // config-dump line yet has output_dir_exists === undefined here, not
+  // false, so this deliberately checks `=== false` rather than `!`.
+  const outputDirBanner = qs("#outputDirBanner");
+  if (status.output_dir_exists === false) {
+    outputDirBanner.classList.remove("hidden");
+    const resolvedPath = (status.location && status.location.output_dir) || "(unknown)";
+    outputDirBanner.innerHTML = `<span class="crash-icon">📁</span><div><b>Output directory not reachable from this machine.</b> The resolved path is <code>${escapeHtml(resolvedPath)}</code>, but it doesn't exist here, so Backbones/Sequences/Models/Results will stay empty until it does. If that same path opens fine when you paste it directly into File Explorer, the process running this dashboard likely can't see it even though you can: a mapped network drive is only visible within the Windows session it was connected in, so a dashboard started via Task Scheduler/as a background service may not see a drive mapped in your own interactive login.</div>`;
+  } else {
+    outputDirBanner.classList.add("hidden");
+  }
+
   const crashBanner = qs("#crashBanner");
   if (crash.crashed) {
     crashBanner.classList.remove("hidden");
@@ -1301,14 +1332,14 @@ async function selectBackbone(b) {
   const url = `/api/backbone_pdb?log=${encodeURIComponent(state.logPath)}&name=${encodeURIComponent(b.name)}&status=${b.status}`;
   try {
     const res = await fetch(url);
-    if (!res.ok) throw new Error("pdb not found");
+    if (!res.ok) throw new Error(await fetchErrorMessage(res));
     const pdbText = await res.text();
     await renderMol("#backboneViewer", pdbText);
     if (state.backboneColorMode === "provenance") {
       await applyProvenanceColoring("#backboneViewer", b.trb_path, qs("#backboneColorLegend"));
     }
   } catch (e) {
-    qs("#backboneViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure.</p>`;
+    qs("#backboneViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure: ${escapeHtml(e.message)}</p>`;
   }
 }
 
@@ -2258,7 +2289,7 @@ async function selectModel(m) {
       const url = `/api/model_pdb?log=${encodeURIComponent(state.logPath)}&path=${encodeURIComponent(m.structure_path)}`;
       try {
         const res = await fetch(url);
-        if (!res.ok) throw new Error("not found");
+        if (!res.ok) throw new Error(await fetchErrorMessage(res));
         const text = await res.text();
         await renderMol("#modelViewer", text, m.structure_format || "pdb");
         label.textContent = m.structure_format === "cif" ? "Preview from .cif — final .pdb not written yet" : "";
@@ -2267,7 +2298,7 @@ async function selectModel(m) {
         }
         renderModelsSequencePanel();
       } catch (e) {
-        qs("#modelViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure.</p>`;
+        qs("#modelViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure: ${escapeHtml(e.message)}</p>`;
         label.textContent = "";
         renderModelsSequencePanel();
       }
@@ -2742,7 +2773,7 @@ function createResultsView(cfg) {
     const url = `/api/final_pdb?log=${encodeURIComponent(rowLog)}&name=${encodeURIComponent(pdbName)}`;
     try {
       const res = await fetch(url);
-      if (!res.ok) throw new Error("pdb not found");
+      if (!res.ok) throw new Error(await fetchErrorMessage(res));
       const pdbText = await res.text();
       const stage = await renderMol(cfg.viewerSelector, pdbText);
       if (colorMode === "provenance") {
@@ -2755,7 +2786,7 @@ function createResultsView(cfg) {
       // structure still sitting in the registry.
       if (stage) renderSequencePanel(); else qs(cfg.ids.seqContent).innerHTML = "";
     } catch (e) {
-      qs(cfg.viewerSelector).innerHTML = `<p class="muted" style="padding:20px">Could not load structure for this row.</p>`;
+      qs(cfg.viewerSelector).innerHTML = `<p class="muted" style="padding:20px">Could not load structure for this row: ${escapeHtml(e.message)}</p>`;
       qs(cfg.ids.seqContent).innerHTML = "";
     }
   }

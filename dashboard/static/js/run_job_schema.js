@@ -95,7 +95,16 @@ const MODULES = {
     configKey: "rfdiff_backbone_filters",
     itemFields: [
       { key: "filter_name", label: "Filter name", type: "text", required: true },
-      { key: "filter_script", label: "Filter script path", type: "text", required: true, help: "e.g. plugins/SS_filter.py" },
+      // Uploaded (not typed) - see the "file_upload_small" handling in
+      // renderRepeatItems()/collectUploadFiles() in run_job.js. Staged
+      // into a filters/ subdirectory of the job's own project directory,
+      // with filter_script set to that path automatically - matches how
+      // boltz2_templates' own "pdb" field uploads a file rather than
+      // asking for a path to one that would have to already exist
+      // somewhere the submitting machine (not necessarily this one) can
+      // see.
+      { key: "filter_script", label: "Filter script", type: "file_upload_small", accept: ".py", required: true,
+        help: "Uploaded into this job's filters/ subdirectory; the path below is set automatically." },
       { key: "delete_failed", label: "Delete failed structures", type: "boolean", default: false },
     ],
   },

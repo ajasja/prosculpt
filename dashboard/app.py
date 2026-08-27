@@ -45,6 +45,45 @@ def handle_http_exception(e):
     response.status_code = e.code
     return response
 
+
+# A network-mounted drive going into a bad state mid-request (this
+# deployment has hit both a Windows "insufficient system resources" and a
+# "volume does not contain a recognized file system" from a flaky
+# SSHFS-Win/WinFsp mount - real incidents, not hypothetical) surfaces as a
+# raw OSError from whatever os.*/open()/glob.glob() call happened to be
+# touching it at the time - never something a client request itself did
+# wrong. Without this handler, Flask's default handling turns that into a
+# generic HTML 500 page: apiGet() in app.js can't parse HTML as JSON, so
+# the frontend shows a bare "Internal Server Error" with none of the
+# actual reason - visible only in this process's own console/log, which
+# is how this class of failure has had to be diagnosed by hand so far.
+# Registering this on OSError (not just for one endpoint) covers every
+# route uniformly, since the trigger is never which endpoint was called,
+# only whether the mount happened to be in a bad state at that moment.
+@app.errorhandler(OSError)
+def handle_os_error(e):
+    # Not just f"{e}" - OSError.__str__() formats its filename with repr(),
+    # which doubles up every backslash in a Windows path (a real path with
+    # one '' between components shows up as '\' in the message). That's
+    # meant for a Python traceback, not a path someone's about to copy out
+    # of this error and paste into Explorer to go check on it themselves -
+    # e.filename/e.filename2 are the plain, unescaped strings the OS call
+    # actually failed on, so those are used directly instead.
+    detail = e.strerror or str(e)
+    for fname in (e.filename, e.filename2):
+        if fname:
+            detail = f"{detail}: {fname}"
+    response = jsonify(
+        {
+            "error": f"Filesystem error ({e.__class__.__name__}): {detail}. This usually means "
+            "a network-mounted drive this dashboard reads from is temporarily unreachable "
+            "- try again in a moment; if it keeps happening, that drive's mount likely needs "
+            "attention on the machine running this dashboard."
+        }
+    )
+    response.status_code = 502
+    return response
+
 # Simple in-memory cache of the last resolved output_dir per log path, so
 # helper endpoints (pdb/json fetchers) don't need to re-parse the whole log
 # on every click.
@@ -73,8 +112,29 @@ def _is_within(candidate: str, base: str) -> bool:
     # arrives expressed via a different alias than the one `base` resolved
     # to - realpath() doesn't require the path to exist to be resolved, so
     # this is safe to call even for a path that turns out not to be there.
-    base_real = os.path.realpath(base)
-    full_real = os.path.realpath(candidate)
+    #
+    # Falls back to a purely lexical comparison (normpath, no symlink
+    # resolution) if realpath() itself raises - not a hypothetical: on a
+    # WinFsp-mounted network drive (SSHFS-Win, this deployment's actual
+    # setup), realpath()'s underlying GetFinalPathNameByHandle call is a
+    # known-unreliable Win32 API (see winfsp/winfsp#427, winfsp/sshfs-win#243),
+    # raising WinError 1005 "volume does not contain a recognized file
+    # system" even though the exact same path opens/reads/lists fine
+    # through every other API - not a sign the path is actually
+    # unreachable. Losing symlink-awareness in that fallback is an
+    # acceptable trade: the property this function exists for (candidate
+    # can't escape outside base) still holds via a plain prefix check, it
+    # just won't additionally catch a symlink-based escape on a filesystem
+    # where realpath() itself can't be trusted to work at all right now.
+    # Both paths are re-derived the same way on any failure (not just
+    # whichever call happened to raise) so they're never compared in a
+    # part-resolved, part-lexical mismatched state.
+    try:
+        base_real = os.path.realpath(base)
+        full_real = os.path.realpath(candidate)
+    except OSError:
+        base_real = os.path.normpath(base)
+        full_real = os.path.normpath(candidate)
     return full_real == base_real or full_real.startswith(base_real + os.sep)
 
 
@@ -522,4 +582,13 @@ def api_browse():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    # threaded=True: Werkzeug's dev server otherwise handles exactly one
+    # request at a time - with several people pointed at the same
+    # dashboard, one request that's slow for any reason (a stalled network
+    # mount under a glob(), a big final_output.csv, a wedged console write
+    # to this very terminal - see dashboard/README.md's Troubleshooting
+    # section) blocks every other user's request too, not just the one
+    # that triggered it, since there's no second worker to pick up new
+    # ones. One thread per request means a single slow/stuck request only
+    # ever stalls itself.
+    app.run(host="0.0.0.0", port=port, debug=debug, threaded=True)

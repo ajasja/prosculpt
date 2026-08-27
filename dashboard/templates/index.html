@@ -169,6 +169,15 @@
 
   <section id="tab-overview" class="tab-panel active">
     <div id="errorBanner" class="error-banner hidden"></div>
+    <!-- Shown when output_dir_exists is False (see get_status() in
+         parser.py) - the resolved path (translated via a target's mounts,
+         or used as-is for a local/no-target setup) simply isn't there from
+         this machine's point of view. Kept separate from crashBanner/
+         cancelBanner (log-content-driven, and still meaningful even when
+         this fires - stage detection needs only the log) since this is a
+         different, "can't even see the data" kind of problem. See
+         renderStatusBanners() in app.js. -->
+    <div id="outputDirBanner" class="alert-banner hidden"></div>
     <div id="crashBanner" class="alert-banner hidden"></div>
     <div id="cancelBanner" class="alert-banner hidden"></div>
     <div class="stepper" id="stepper"></div>
