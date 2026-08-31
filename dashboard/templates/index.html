@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Prosculpt Dashboard</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+<script src="https://unpkg.com/ngl@2.4.0/dist/ngl.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">🧬 Prosculpt Dashboard</div>
+  <!-- Run job / Track job - a split above everything else on the page.
+       Track job is the entire pre-existing tracking UI (job-picker, pill
+       bar, per-job tabs), wrapped unchanged in #trackJobRoot below; Run
+       job is a wholly separate sibling, #runJobRoot. See
+       showAppMode()/initAppModeTabs() in app.js. -->
+  <nav class="app-mode-tabs">
+    <button class="app-mode-btn" data-mode="run">Run job</button>
+    <button class="app-mode-btn" data-mode="track">Track job</button>
+  </nav>
+  <button id="themeToggleBtn" class="secondary" title="Switch theme">☀️</button>
+</header>
+
+<div id="trackJobRoot">
+<div class="log-picker">
+  <textarea id="jobDirInput" rows="1" placeholder="/path/to/output_dir (paste several, one per line, to add them all at once)"></textarea>
+  <button id="loadBtn">Add job</button>
+  <button id="browseBtn" title="Browse filesystem">Browse…</button>
+  <span id="autoRefreshLabel">
+    <label><input type="checkbox" id="autoRefreshToggle" checked> auto-refresh</label>
+    <span id="autoRefreshNote" class="muted hidden"></span>
+  </span>
+</div>
+
+<!-- Top-level selector: the two "all jobs" tabs plus one chip per tracked
+     job. Picking a chip shows that job's own tab bar (below); picking
+     either "all jobs" tab shows an aggregate view instead - see
+     switchTopView() in app.js. -->
+<nav class="job-tabs" id="jobTabsBar">
+  <button class="job-tab-btn special" data-top="all-overview">All jobs overview</button>
+  <button class="job-tab-btn special" data-top="all-results">All jobs results</button>
+  <div id="jobChips" class="job-chips"></div>
+</nav>
+
+<main>
+<section id="tab-all-overview" class="hidden">
+  <div id="allOverviewList"><p class="muted">Add a job above to get started.</p></div>
+</section>
+
+<section id="tab-all-results" class="hidden">
+  <div class="card" id="allResultsToolbar">
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <button id="allFiltersBtn" class="secondary">🔧 Filters <span id="allFiltersBadge" class="filters-badge hidden">0</span></button>
+        <div id="allFiltersPanel" class="filters-panel hidden">
+          <div class="filters-panel-header">
+            <b>Filter by column value</b>
+            <button id="allClearFiltersBtn" class="secondary small">Clear all</button>
+          </div>
+          <div id="allFiltersList" class="filters-list"></div>
+        </div>
+      </div>
+      <div class="toolbar-group">
+        <label class="toolbar-label" for="allSortByField">Sort list by</label>
+        <select id="allSortByField"><option value="">None</option></select>
+        <select id="allSortByDirection">
+          <option value="1">Ascending</option>
+          <option value="-1">Descending</option>
+        </select>
+      </div>
+      <div class="toolbar-group">
+        <label class="toolbar-label" for="allColorByField">Color list by</label>
+        <select id="allColorByField"><option value="">None</option></select>
+        <select id="allColorByDirection">
+          <option value="higher">Higher = better</option>
+          <option value="lower">Lower = better</option>
+        </select>
+      </div>
+      <div class="toolbar-group">
+        <button id="allExportFilteredBtn" class="secondary">⬇ Export filtered (.zip)</button>
+      </div>
+      <div class="toolbar-group" id="allResultsCountWrap">
+        <span class="muted" id="allResultsCount"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="split-view">
+    <div class="list-pane">
+      <div id="allFinalPdbsList"><p class="muted">Add a job above to get started.</p></div>
+      <div id="allResultsListPager" class="pager-bar"></div>
+    </div>
+    <div class="viewer-pane">
+      <div class="viewer-color-toolbar">
+        <div class="viewer-color-row">
+          <label class="toolbar-label" for="allResultsStructColorMode">Color structure by</label>
+          <select id="allResultsStructColorMode">
+            <option value="chain">Chain</option>
+            <option value="provenance">RFdiffusion provenance</option>
+          </select>
+          <span id="allResultsChainPaletteWrap" class="chain-palette-wrap">
+            <label class="toolbar-label" for="allResultsChainPaletteSelect">Palette</label>
+            <select id="allResultsChainPaletteSelect" class="chain-palette-select">
+              <option value="vivid">Vivid</option>
+              <option value="pastel">Pastel</option>
+              <option value="cvd">Colorblind-safe</option>
+              <option value="bright">Bright</option>
+              <option value="sunset">Sunset</option>
+              <option value="ocean">Ocean</option>
+              <option value="custom" disabled>Custom</option>
+            </select>
+          </span>
+          <span class="bg-color-wrap">
+            <label class="toolbar-label" for="allResultsBgColorSelect">Background</label>
+            <select id="allResultsBgColorSelect" class="bg-color-select">
+              <option value="black">Black</option>
+              <option value="navy">Dark navy</option>
+              <option value="white">White</option>
+              <option value="light">Light gray</option>
+            </select>
+          </span>
+        </div>
+        <div class="viewer-color-row">
+          <div id="allResultsColorLegend" class="color-legend hidden"></div>
+          <div class="sidechain-mode-group">
+            <span class="toolbar-label">Show sidechains:</span>
+            <label class="sidechain-mode-option"><input type="radio" name="allResultsSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+            <label class="sidechain-mode-option"><input type="radio" name="allResultsSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+            <label class="sidechain-mode-option"><input type="radio" name="allResultsSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+            <label class="sidechain-mode-option"><input type="radio" name="allResultsSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+          </div>
+        </div>
+      </div>
+      <div id="allResultViewer" class="mol-viewer"></div>
+      <div id="allResultsSequenceContent" class="seq-panel"></div>
+    </div>
+  </div>
+
+  <div class="card" id="allCsvCard">
+    <h3>Metrics</h3>
+    <div id="allCsvTableWrap"><p class="muted">Add a job above to get started.</p></div>
+    <div id="allResultsTablePager" class="pager-bar"></div>
+  </div>
+
+  <div class="card" id="allResultsAlignCard">
+    <h3>Sequence alignment</h3>
+    <div id="allResultsAlignContent"><p class="muted">Not available yet.</p></div>
+  </div>
+</section>
+
+<div id="jobView">
+<div id="activeJobBanner" class="active-job-banner hidden"></div>
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="overview">Overview</button>
+  <button class="tab-btn" data-tab="backbones">Backbones</button>
+  <button class="tab-btn" data-tab="sequences">Sequences</button>
+  <button class="tab-btn" data-tab="models">Models</button>
+  <button class="tab-btn" data-tab="results">Results</button>
+  <button class="tab-btn" data-tab="error" id="errorTabBtn">Error log</button>
+  <button class="tab-btn" data-tab="outputlog">Output log</button>
+  <!-- Deliberately not a .tab-btn (no data-tab/panel of its own - it does
+       something rather than navigating somewhere) - pushed to the far
+       right of the bar via margin-left:auto in CSS. Opens #cancelJobModal;
+       see initCancelJobModal() in app.js. -->
+  <button id="cancelJobBtn" class="cancel-job-btn" title="Cancel this SLURM job">✕ Cancel job</button>
+</nav>
+
+  <section id="tab-overview" class="tab-panel active">
+    <div id="errorBanner" class="error-banner hidden"></div>
+    <!-- Shown when output_dir_exists is False (see get_status() in
+         parser.py) - the resolved path (translated via a target's mounts,
+         or used as-is for a local/no-target setup) simply isn't there from
+         this machine's point of view. Kept separate from crashBanner/
+         cancelBanner (log-content-driven, and still meaningful even when
+         this fires - stage detection needs only the log) since this is a
+         different, "can't even see the data" kind of problem. See
+         renderStatusBanners() in app.js. -->
+    <div id="outputDirBanner" class="alert-banner hidden"></div>
+    <div id="crashBanner" class="alert-banner hidden"></div>
+    <div id="cancelBanner" class="alert-banner hidden"></div>
+    <!-- Only populated (and shown) for a job with more than one SLURM
+         array task - see renderTaskSwitcher() in app.js. -->
+    <div class="task-switcher" id="taskSwitcher"></div>
+    <div class="stepper" id="stepper"></div>
+    <div class="card stage-card" id="stageCard"></div>
+
+    <div class="card" id="overviewCard">
+      <p class="muted">Enter the path to a Prosculpt job's output directory above and click <b>Add job</b> to get started.</p>
+    </div>
+
+    <div class="card hidden" id="timingCard">
+      <h3>Step timings</h3>
+      <div id="timingContent"></div>
+    </div>
+  </section>
+
+  <section id="tab-error" class="tab-panel">
+    <div id="errorTabContent"><p class="muted">Load a job first.</p></div>
+  </section>
+
+  <section id="tab-backbones" class="tab-panel">
+    <div class="split-view">
+      <div class="list-pane">
+        <label class="toggle-label"><input type="checkbox" id="showFilteredToggle" checked> Show filtered out</label>
+        <div id="backbonesFilterNote" class="cycle-note hidden"></div>
+        <div id="backbonesList"><p class="muted">Load a job first.</p></div>
+        <div id="backbonesListPager" class="pager-bar"></div>
+      </div>
+      <div class="viewer-pane">
+        <div class="viewer-color-toolbar">
+          <div class="viewer-color-row">
+            <label class="toolbar-label" for="backboneColorMode">Color residues by</label>
+            <select id="backboneColorMode">
+              <option value="chain">Chain</option>
+              <option value="provenance">RFdiffusion provenance</option>
+            </select>
+            <span id="backboneChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="backboneChainPaletteSelect">Palette</label>
+              <select id="backboneChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+                <option value="bright">Bright</option>
+                <option value="sunset">Sunset</option>
+                <option value="ocean">Ocean</option>
+                <option value="custom" disabled>Custom</option>
+              </select>
+            </span>
+            <span class="bg-color-wrap">
+              <label class="toolbar-label" for="backboneBgColorSelect">Background</label>
+              <select id="backboneBgColorSelect" class="bg-color-select">
+                <option value="black">Black</option>
+                <option value="navy">Dark navy</option>
+                <option value="white">White</option>
+                <option value="light">Light gray</option>
+              </select>
+            </span>
+          </div>
+          <div class="viewer-color-row">
+            <div id="backboneColorLegend" class="color-legend hidden"></div>
+            <div class="sidechain-mode-group hidden" title="RFdiffusion backbones have no sidechain atoms yet - nothing to show here">
+              <span class="toolbar-label">Show sidechains:</span>
+              <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+              <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+              <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+              <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+            </div>
+          </div>
+        </div>
+        <div id="backboneViewer" class="mol-viewer"></div>
+        <div id="backboneViewerLabel" class="viewer-label"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-sequences" class="tab-panel">
+    <div class="card" id="sequencesToolbar">
+      <label class="toggle-label"><input type="checkbox" id="conservationToggle"> Highlight conserved residues</label>
+      <label class="toolbar-label">Threshold <input type="number" id="conservationThreshold" min="1" max="100" value="90" style="width:56px"> %</label>
+    </div>
+    <div id="sequencesContent"><p class="muted">Load a job first.</p></div>
+  </section>
+
+  <section id="tab-models" class="tab-panel">
+    <div id="modelsCycleNote" class="cycle-note hidden"></div>
+    <div class="split-view">
+      <div class="list-pane">
+        <input id="modelsFilter" type="text" placeholder="filter by name…" />
+        <div id="modelsList"><p class="muted">Load a job first.</p></div>
+        <div id="modelsListPager" class="pager-bar"></div>
+      </div>
+      <div class="viewer-pane">
+        <div class="viewer-color-toolbar">
+          <div class="viewer-color-row">
+            <label class="toolbar-label" for="modelColorMode">Color residues by</label>
+            <select id="modelColorMode">
+              <option value="chain">Chain</option>
+              <option value="provenance">RFdiffusion provenance</option>
+            </select>
+            <span id="modelChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="modelChainPaletteSelect">Palette</label>
+              <select id="modelChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+                <option value="bright">Bright</option>
+                <option value="sunset">Sunset</option>
+                <option value="ocean">Ocean</option>
+                <option value="custom" disabled>Custom</option>
+              </select>
+            </span>
+            <span class="bg-color-wrap">
+              <label class="toolbar-label" for="modelBgColorSelect">Background</label>
+              <select id="modelBgColorSelect" class="bg-color-select">
+                <option value="black">Black</option>
+                <option value="navy">Dark navy</option>
+                <option value="white">White</option>
+                <option value="light">Light gray</option>
+              </select>
+            </span>
+          </div>
+          <div class="viewer-color-row">
+            <div id="modelColorLegend" class="color-legend hidden"></div>
+            <div class="sidechain-mode-group">
+              <span class="toolbar-label">Show sidechains:</span>
+              <label class="sidechain-mode-option"><input type="radio" name="modelSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+              <label class="sidechain-mode-option"><input type="radio" name="modelSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+              <label class="sidechain-mode-option"><input type="radio" name="modelSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+              <label class="sidechain-mode-option"><input type="radio" name="modelSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+            </div>
+          </div>
+        </div>
+        <div id="modelViewer" class="mol-viewer"></div>
+        <div id="modelsSequenceContent" class="seq-panel"></div>
+        <div id="modelViewerLabel" class="viewer-label"></div>
+        <div id="modelMetrics" class="metrics-table"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-results" class="tab-panel">
+    <div class="card" id="resultsToolbar">
+      <div class="toolbar-row">
+        <div class="toolbar-group">
+          <button id="filtersBtn" class="secondary">🔧 Filters <span id="filtersBadge" class="filters-badge hidden">0</span></button>
+          <div id="filtersPanel" class="filters-panel hidden">
+            <div class="filters-panel-header">
+              <b>Filter by column value</b>
+              <button id="clearFiltersBtn" class="secondary small">Clear all</button>
+            </div>
+            <div id="filtersList" class="filters-list"></div>
+          </div>
+        </div>
+        <div class="toolbar-group">
+          <label class="toolbar-label" for="sortByField">Sort list by</label>
+          <select id="sortByField"><option value="">None</option></select>
+          <select id="sortByDirection">
+            <option value="1">Ascending</option>
+            <option value="-1">Descending</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <label class="toolbar-label" for="colorByField">Color list by</label>
+          <select id="colorByField"><option value="">None</option></select>
+          <select id="colorByDirection">
+            <option value="higher">Higher = better</option>
+            <option value="lower">Lower = better</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <button id="exportFilteredBtn" class="secondary">⬇ Export filtered (.zip)</button>
+        </div>
+        <div class="toolbar-group" id="resultsCountWrap">
+          <span class="muted" id="resultsCount"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="split-view">
+      <div class="list-pane">
+        <div id="finalPdbsList"><p class="muted">Load a job first.</p></div>
+        <div id="resultsListPager" class="pager-bar"></div>
+      </div>
+      <div class="viewer-pane">
+        <div class="viewer-color-toolbar">
+          <div class="viewer-color-row">
+            <label class="toolbar-label" for="resultsStructColorMode">Color structure by</label>
+            <select id="resultsStructColorMode">
+              <option value="chain">Chain</option>
+              <option value="provenance">RFdiffusion provenance</option>
+            </select>
+            <span id="resultsChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="resultsChainPaletteSelect">Palette</label>
+              <select id="resultsChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+                <option value="bright">Bright</option>
+                <option value="sunset">Sunset</option>
+                <option value="ocean">Ocean</option>
+                <option value="custom" disabled>Custom</option>
+              </select>
+            </span>
+            <span class="bg-color-wrap">
+              <label class="toolbar-label" for="resultsBgColorSelect">Background</label>
+              <select id="resultsBgColorSelect" class="bg-color-select">
+                <option value="black">Black</option>
+                <option value="navy">Dark navy</option>
+                <option value="white">White</option>
+                <option value="light">Light gray</option>
+              </select>
+            </span>
+          </div>
+          <div class="viewer-color-row">
+            <div id="resultsColorLegend" class="color-legend hidden"></div>
+            <div class="sidechain-mode-group">
+              <span class="toolbar-label">Show sidechains:</span>
+              <label class="sidechain-mode-option"><input type="radio" name="resultsSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+              <label class="sidechain-mode-option"><input type="radio" name="resultsSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+              <label class="sidechain-mode-option"><input type="radio" name="resultsSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+              <label class="sidechain-mode-option"><input type="radio" name="resultsSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+            </div>
+          </div>
+        </div>
+        <div id="resultViewer" class="mol-viewer"></div>
+        <div id="resultsSequenceContent" class="seq-panel"></div>
+      </div>
+    </div>
+
+    <div class="card" id="csvCard">
+      <h3>Metrics</h3>
+      <div id="csvTableWrap"><p class="muted">Not available yet.</p></div>
+      <div id="resultsTablePager" class="pager-bar"></div>
+    </div>
+
+    <div class="card" id="resultsAlignCard">
+      <h3>Sequence alignment</h3>
+      <div id="resultsAlignContent"><p class="muted">Not available yet.</p></div>
+    </div>
+  </section>
+
+  <section id="tab-outputlog" class="tab-panel">
+    <div id="outputLogContent"><p class="muted">Load a job first.</p></div>
+  </section>
+</div>
+</main>
+
+<div id="browseModal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <span id="browsePath"></span>
+      <button id="browseCloseBtn">✕</button>
+    </div>
+    <div class="browse-nav-row">
+      <select id="browseRootSelect" class="browse-root-select" title="Jump to a configured cluster's root directory">
+        <option value="">Jump to…</option>
+      </select>
+      <input type="text" id="browseGoToPathInput" class="browse-goto-input" placeholder="…or paste a full path and press Enter">
+      <button type="button" id="browseGoToPathBtn" class="secondary">Go</button>
+    </div>
+    <input type="text" id="browseFilterInput" class="browse-filter-input" placeholder="Filter this folder by name…">
+    <div id="browseEntries" class="browse-entries"></div>
+    <div class="modal-footer">
+      <span id="browseSelectedCount" class="muted"></span>
+      <button id="browseAddSelectedBtn" class="secondary" disabled>Add current directory</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cancel job confirmation: asks which target/account the job's cluster is
+     on (the dashboard has no other way to know - a job just tracked by log
+     path was never necessarily submitted through this dashboard) and makes
+     the user explicitly confirm before an scancel is actually sent. See
+     openCancelJobModal()/doCancelJob() in app.js. -->
+<div id="cancelJobModal" class="modal hidden">
+  <div class="modal-content cancel-job-modal-content">
+    <div class="modal-header">
+      <span>Cancel job</span>
+      <button id="cancelJobCloseBtn">✕</button>
+    </div>
+    <div class="cancel-job-body">
+      <p id="cancelJobIntro"></p>
+      <label class="toolbar-label" for="cancelJobTargetSelect">Which account does this job belong to?</label>
+      <select id="cancelJobTargetSelect"></select>
+      <p id="cancelJobTargetsWarning" class="muted hidden"></p>
+      <label class="toggle-label" id="cancelJobConfirmLabel">
+        <input type="checkbox" id="cancelJobConfirmCheck">
+        I'm sure I want to cancel this job.
+      </label>
+      <p id="cancelJobResult" class="hidden"></p>
+    </div>
+    <div class="modal-footer">
+      <span id="cancelJobStatus" class="muted"></span>
+      <div class="cancel-job-actions">
+        <button id="cancelJobBackBtn" class="secondary">Never mind</button>
+        <button id="cancelJobConfirmBtn" class="danger" disabled>Cancel job</button>
+      </div>
+    </div>
+  </div>
+</div>
+</div> <!-- /trackJobRoot -->
+
+{% include "run_job.html" %}
+
+<script src="https://unpkg.com/js-yaml@4/dist/js-yaml.min.js"></script>
+<script src="{{ url_for('static', filename='js/run_job_schema.js') }}"></script>
+<script src="{{ url_for('static', filename='js/run_job.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>

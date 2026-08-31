@@ -1,0 +1,98 @@
+# Copy this file to dashboard_config.yaml (which is git-ignored - it's
+# specific to your machine/network) and fill in at least one target.
+#
+# No credentials of any kind go in this file. "ssh" targets rely entirely
+# on whatever SSH key/agent trust already works for that host from this
+# machine (i.e. `ssh <ssh_host>` with no password prompt already works) -
+# set that up once outside the dashboard (an entry in ~/.ssh/config plus a
+# key already added to your agent, or a key with no passphrase, is enough).
+#
+# `mounts` (ssh targets only, optional) is a list of {remote, local}
+# pairs, one per remote directory that's ALSO reachable as a normal
+# mounted filesystem path from this machine (like the Q: drive is for the
+# local cluster in this repo's own dev setup). `remote` is the absolute
+# path as it exists on the cluster this target runs jobs on; `local` is
+# wherever that same directory actually shows up here. Each mount you set
+# up lets the dashboard do two things for anything under that remote
+# directory, without any further SSH calls: tell once a submitted job's
+# log file has appeared and auto-promote it to the tracking tab, and
+# translate a path *as recorded inside a job's own log or output* (which
+# is always in terms of the remote filesystem the job actually ran on)
+# back into this local path, so the Track job tab's listings
+# (backbones/sequences/models/results) can actually find anything.
+#
+# A job's data isn't guaranteed to live under just one remote root, so
+# most ssh targets want (at least) two mounts - one for `projects_path`
+# (where the dashboard's own Run job tab stages new jobs) and one for
+# `slurm_runner_path` (the prosculpt installation itself, where a job
+# launched directly against it - `python slurm_runner.py some_config.yaml
+# ++output_dir=Examples/...` run by hand, or via run_tests.py, rather than
+# through this dashboard's Run job tab - ends up instead, since that's its
+# PWD at submission time). Leave `mounts` unset (or its list empty)
+# entirely if nothing here is mounted; submission still works, and a job
+# can still be tracked by pasting its log path by hand, but its listings
+# will come up empty unless this machine's mount happens to mirror the
+# remote's entire filesystem (uncommon, and not something to rely on) -
+# and add just the mounts you actually have, in any combination: a target
+# isn't required to mount everything, and can mount some other remote
+# directory too (e.g. shared scratch storage) if a job's data can land
+# there as well - it's just another entry in the same list.
+#
+# Each mount can optionally carry its own `label`, shown in the Track job
+# file browser's "Jump to..." dropdown as "<target label> (<mount
+# label>)" - if omitted, a mount covering projects_path is labeled with
+# just the target's own label, one covering slurm_runner_path gets
+# "(installation)" automatically, and anything else falls back to that
+# remote directory's own basename.
+#
+# `python_path` (optional, defaults to a bare "python") should be the
+# ABSOLUTE path to the interpreter inside prosculpt's own conda env - the
+# same value as this target's config/installation.yaml's own
+# prosculpt_python_path. Worth setting explicitly rather than leaving the
+# default: a bare "python" depends on whatever's first on $PATH, which is
+# usually NOT prosculpt's env - for a local target that's the dashboard
+# process's own environment, and for an ssh target it's whatever a
+# non-interactive SSH session resolves (which commonly skips the part of
+# .bashrc where `conda activate` becomes available at all, so it can fail
+# outright rather than just picking the wrong python). Pointing straight
+# at the env's own interpreter sidesteps shell activation entirely.
+
+targets:
+  local:
+    kind: local
+    label: "This machine"
+    # Absolute path to the prosculpt installation whose slurm_runner.py
+    # should be invoked (needs its own working config/installation.yaml,
+    # singularity images, etc. already set up - see the main README).
+    slurm_runner_path: /home/folivieri/prosculpt_dev
+    # Where new job directories get created.
+    projects_path: /home/folivieri/prosculpt_dev/Examples
+    # See the python_path note above - copy the value straight out of
+    # this installation's config/installation.yaml.
+    python_path: /home/folivieri/.conda/envs/prosculpt/bin/python
+    # No mounts needed here - both paths above are already local (this IS
+    # the machine the job runs on).
+
+  # example-cluster:
+  #   kind: ssh
+  #   label: "Example remote cluster"
+  #   ssh_host: example-cluster          # must resolve via ~/.ssh/config or be a bare user@host
+  #   slurm_runner_path: /home/youruser/prosculpt_dev
+  #   projects_path: /ceph/hpc/data/yourproject/prosculpt_projects
+  #   python_path: /home/youruser/.conda/envs/prosculpt/bin/python  # optional but strongly recommended, see note above
+  #   mounts:                                                       # optional, see note above - as many as you actually have mounted
+  #     - remote: /ceph/hpc/data/yourproject/prosculpt_projects      # must match projects_path above
+  #       local: Q:/hpc/data/yourproject/prosculpt_projects
+  #     - remote: /home/youruser/prosculpt_dev                       # must match slurm_runner_path above
+  #       local: R:/home/youruser/prosculpt_dev
+
+default_target: local
+
+# Dashboard-wide settings, independent of any one target - not required;
+# everything under here has a sensible built-in fallback if omitted. A
+# home for anything else dashboard-level (not per-target, not part of a
+# submitted job's own config) that comes up later.
+defaults:
+  # Preselects this in the Run Job GUI's "Prediction model" field.
+  # One of: Colabfold, AF3, Boltz2. Falls back to Colabfold if unset.
+  prediction_model: AF3

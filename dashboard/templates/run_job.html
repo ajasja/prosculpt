@@ -1,0 +1,95 @@
+<div id="runJobRoot" class="hidden">
+
+  <div class="card">
+    <div class="rj-mode-switch">
+      <button type="button" class="rj-mode-btn" data-mode="build">Build a new job</button>
+      <button type="button" class="rj-mode-btn" data-mode="existing">Submit an existing project directory</button>
+    </div>
+  </div>
+
+  <div id="runJobBuildPane">
+    <div class="split-view rj-build-split" id="runJobSplitView">
+      <div class="list-pane">
+        <div class="card">
+          <h3>Input structure</h3>
+          <p class="muted" style="margin-top:0">Optional - upload a PDB to view it here and read off residue numbers before writing the contig below. Contig/hotspot fields are typed manually; this viewer doesn't feed them.</p>
+          <input type="file" id="runJobPdbUpload" accept=".pdb">
+          <span id="runJobPdbFilename" class="muted"></span>
+          <button type="button" id="runJobPdbClear" class="secondary">Clear</button>
+        </div>
+
+        <div class="card">
+          <h3>Core settings</h3>
+          <div id="runJobCoreFields"></div>
+        </div>
+
+        <div class="card hidden" id="runJobA3mSection">
+          <h3>Alignment files (.a3m)</h3>
+          <p class="muted" style="margin-top:0">Each file's name must contain <code>Chain_&lt;letter&gt;</code>, e.g. <code>target_Chain_B.a3m</code>.</p>
+          <input type="file" id="runJobA3mUpload" multiple accept=".a3m">
+          <div id="runJobA3mList"></div>
+        </div>
+
+        <div class="card">
+          <h3>Modules</h3>
+          <p class="muted" style="margin-top:0">Independent, addable to any job in any combination.</p>
+          <div id="runJobModules"></div>
+        </div>
+      </div>
+
+      <div class="split-resizer" id="runJobSplitResizer" title="Drag to resize"></div>
+
+      <div class="viewer-pane">
+        <div id="runJobPdbViewer" class="mol-viewer"></div>
+        <div class="viewer-color-row">
+          <div id="runJobPdbColorLegend" class="color-legend hidden"></div>
+          <div class="sidechain-mode-group">
+            <span class="toolbar-label">Show sidechains:</span>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+            <label class="sidechain-mode-option"><input type="radio" name="runJobSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+          </div>
+        </div>
+        <div id="runJobPdbSequencePanel" class="seq-panel"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Raw config YAML</h3>
+      <p class="muted" style="margin-top:0">Kept in sync with the form above - edit either one; the GUI wins on conflicts unless you edit here, in which case this wins until you touch a form field again.</p>
+      <textarea id="runJobYamlEditor" rows="18" class="rj-yaml-editor" spellcheck="false"></textarea>
+      <div id="runJobYamlError" class="rj-yaml-error hidden"></div>
+    </div>
+  </div>
+
+  <div id="runJobExistingPane" class="card hidden">
+    <h3>Submit an existing project directory</h3>
+    <p class="muted">Point at a directory you've already prepared (your own config yaml plus anything it references, e.g. custom filter scripts) - it's copied/submitted exactly as-is; nothing inside it is rewritten.</p>
+    <label for="runJobExistingPath">Project directory path</label>
+    <input type="text" id="runJobExistingPath" placeholder="/path/to/your/project">
+    <label for="runJobExistingConfigFilename">Config filename (within that directory)</label>
+    <input type="text" id="runJobExistingConfigFilename" placeholder="config.yaml">
+  </div>
+
+  <div class="card">
+    <label for="runJobTarget">Run target</label>
+    <select id="runJobTarget"></select>
+    <p id="runJobTargetsWarning" class="rj-warn hidden"></p>
+    <div class="rj-submit-row">
+      <button type="button" id="runJobPreviewBtn" class="secondary rj-submit-btn">Preview (dry run)</button>
+      <button type="button" id="runJobSubmitBtn" class="rj-submit-btn">Submit</button>
+    </div>
+    <div id="runJobResult" class="hidden"></div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar-row">
+      <h3 style="margin:0">View my queue</h3>
+      <button type="button" id="runJobSqueueRefreshBtn" class="secondary">Refresh</button>
+    </div>
+    <pre id="runJobSqueueOutput" class="rj-squeue-output"></pre>
+  </div>
+
+  <div id="runJobToast" class="hidden"></div>
+</div>

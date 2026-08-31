@@ -97,6 +97,11 @@ To run Prosculpt on Slurm, use the `slurm_runner.py` passing it an input yaml fi
 python slurm_runner.py job_parameters.yaml
 ```
 
+By default, slurm's own output/error log files (sbatch's `-o`/`-e`) are forced into a `logs/` subdirectory of the job's `output_dir`, regardless of any `slurm.output`/`slurm.error` set in the job yaml or in `config/installation.yaml` - so a job's slurm log always ends up next to its own results instead of wherever a job/site config happened to point it. Pass `--allow-custom-log-path` to opt back into respecting `slurm.output`/`slurm.error` instead.
+```bash
+python slurm_runner.py job_parameters.yaml --allow-custom-log-path
+```
+
 If you want to run Prosculpt locally, it can be called as
 ```bash
 python prosculpt_run.py -cd config_directory -cn config_file_name

@@ -1,0 +1,1350 @@
+/* Dark theme (default). Light theme overrides these same tokens further
+   down - either automatically via prefers-color-scheme, or forced by
+   data-theme on <html> (see the theme toggle button in app.js). Two
+   things are deliberately theme-invariant:
+     - --surface-deep(-2) backs the sequence alignment viewer, the 3D
+       structure viewers, and the log/error <pre> blocks - specialized
+       visualization surfaces that read better staying dark regardless of
+       the app's chrome, the same way a code/terminal panel commonly does
+       in an otherwise-light editor theme.
+     - --text-on-deep / --muted-on-deep are for content that sits on those
+       always-dark surfaces (log text, alignment ruler/labels). They must
+       NOT track --text/--muted, which flip to dark in light theme -
+       putting dark text on the still-dark surface-deep would be
+       unreadable. Same reasoning for the "color by" tint on the Results
+       list/table: that tint is a fixed dark background regardless of
+       theme (see colorForRow() in app.js), so it's paired with a fixed
+       light text color rather than the ambient theme text there too. */
+:root {
+  --bg: #0f1420;
+  --panel: #161d2e;
+  --panel-2: #1d2740;
+  --panel-3: #26325099;
+  --border: #2a3550;
+  --text: #e6e9f0;
+  --muted: #8b93a7;
+  --accent: #5b8cff;
+  --accent-2: #35d0a8;
+  --warn: #f5a623;
+  --danger: #ef5a6f;
+  --radius: 10px;
+  --surface-deep: #05070c;
+  --surface-deep-2: #0b0f18;
+  --text-on-deep: #e6e9f0;
+  --muted-on-deep: #8b93a7;
+}
+
+/* Light theme: applied automatically when the OS prefers light and the
+   user hasn't explicitly overridden it, or forced via data-theme="light". */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f3f5fa;
+    --panel: #ffffff;
+    --panel-2: #eef1f8;
+    --panel-3: #dde3f0aa;
+    --border: #d8dde8;
+    --text: #1a2233;
+    --muted: #666f84;
+    --accent: #3f6fe0;
+    --accent-2: #189272;
+    --warn: #a5670a;
+    --danger: #cf3654;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f3f5fa;
+  --panel: #ffffff;
+  --panel-2: #eef1f8;
+  --panel-3: #dde3f0aa;
+  --border: #d8dde8;
+  --text: #1a2233;
+  --muted: #666f84;
+  --accent: #3f6fe0;
+  --accent-2: #189272;
+  --warn: #a5670a;
+  --danger: #cf3654;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.brand {
+  font-weight: 700;
+  font-size: 16px;
+  letter-spacing: 0.2px;
+  white-space: nowrap;
+}
+
+/* Now a standalone block inside #trackJobRoot (no longer a .topbar flex
+   child - the app-mode split moved into the header instead), so it needs
+   its own row padding. #jobDirInput's own flex/min-width still come from
+   its dedicated rule below. */
+.log-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+/* A <textarea> rather than <input type="text"> - a single-line text
+   input cannot hold an actual newline character even via paste, and
+   pasting several log paths at once (one per line) needs that. Styled
+   to look and behave like a single-line input regardless (fixed height,
+   no resize handle, no wrapping - a long/multi-line value just scrolls
+   horizontally like the old input did). */
+#jobDirInput {
+  flex: 1;
+  min-width: 200px;
+  height: 34px;
+  padding: 8px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  resize: none;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+button {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 8px 14px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+button:hover { filter: brightness(1.1); }
+button.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+button.small { padding: 4px 9px; font-size: 11.5px; }
+#themeToggleBtn { padding: 8px 11px; font-size: 15px; line-height: 1; }
+
+#autoRefreshLabel { color: var(--muted); font-size: 12.5px; display: flex; align-items: center; gap: 8px; }
+#autoRefreshLabel label { display: flex; align-items: center; gap: 5px; cursor: pointer; }
+
+/* Generic checkbox-with-label control, used above the Backbones/Sequences lists */
+.toggle-label { display: flex; align-items: center; gap: 6px; cursor: pointer; color: var(--muted); font-size: 12.5px; margin-bottom: 10px; }
+.toggle-label input { cursor: pointer; }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 10px 20px 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  /* This nav now sits inside <main> (needed so the two "All jobs ..."
+     sections can share main's padding too - see #jobView in
+     index.html), so main's own top padding lands above the nav instead
+     of between the nav and whichever tab's content follows it. Without
+     this, every tab's content sits flush against the nav's bottom
+     border. */
+  margin-bottom: 20px;
+}
+
+.tab-btn {
+  background: transparent;
+  color: var(--muted);
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 10px 16px;
+  font-weight: 600;
+}
+
+.tab-btn.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+/* Error log tab: hidden until a .err file is actually found next to the
+   log (regardless of whether anything has gone wrong yet); switches to a
+   red "alert" look once a crash or cancellation is actually detected. */
+.tab-btn#errorTabBtn { display: none; }
+.tab-btn#errorTabBtn.visible { display: inline-block; }
+.tab-btn#errorTabBtn.alert { color: var(--danger); }
+.tab-btn#errorTabBtn.alert.active { border-bottom-color: var(--danger); }
+.tab-btn#errorTabBtn.alert::before { content: "⚠ "; }
+
+/* Cancel job: the one button on the per-job tab bar that does something
+   rather than switching tabs, so it's deliberately not a .tab-btn (see
+   index.html) and gets its own look - a red outline rather than a filled
+   button, since it's a dangerous-but-not-yet-committed action, and pushed
+   to the far right of the bar via margin-left:auto (.tabs is a flex row). */
+.cancel-job-btn {
+  margin-left: auto;
+  align-self: center;
+  background: transparent;
+  color: var(--danger);
+  border: 1.5px solid var(--danger);
+  border-radius: var(--radius);
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.cancel-job-btn:hover { background: rgba(239, 90, 111, 0.12); }
+.cancel-job-btn:disabled { opacity: 0.4; cursor: not-allowed; background: transparent; filter: none; }
+
+/* Filled counterpart, for the modal's actual "commit" button - a solid red
+   fill reads as more final than the outline button that opened the modal,
+   which matters since this is the one that actually runs scancel. */
+button.danger { background: var(--danger); color: #fff; }
+button.danger:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+
+/* Top-level selector (multi-job tracking): the two "All jobs ..." tabs
+   plus one chip per tracked job, one level above the per-job .tabs bar
+   underneath it. Styled as pill buttons rather than underlined tabs so
+   the two navigation levels read as distinct rather than a continuation
+   of one flat tab strip. */
+.job-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.job-tab-btn, .job-chip {
+  background: var(--panel);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.job-tab-btn.active, .job-chip.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+/* Task switcher (Overview tab, num_tasks > 1 only) - same pill-button
+   look as .job-tab-btn/.job-chip above, but its own plain container
+   (not .job-tabs' full-width top-level-bar look - background/border/
+   generous padding meant for a bar spanning the whole page, cramped and
+   out of place sitting inside one tab's own card content instead). */
+.task-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 18px;
+}
+.job-chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-left: 6px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+/* Small status dot on each job chip - color mirrors the job's current
+   stage/terminal state, same palette as elsewhere (accent-2 for a good
+   terminal state, danger for crashed/cancelled, accent for still running). */
+.job-chip-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--muted); }
+.job-chip-dot.running { background: var(--accent); }
+.job-chip-dot.finished { background: var(--accent-2); }
+.job-chip-dot.crashed, .job-chip-dot.cancelled { background: var(--danger); }
+.job-chip-remove {
+  opacity: 0.6;
+  padding: 0 3px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.job-chip-remove:hover { opacity: 1; background: rgba(0, 0, 0, 0.15); }
+.job-chip.active .job-chip-remove:hover { background: rgba(255, 255, 255, 0.25); }
+
+/* Shown just above the per-job tab bar whenever a specific job (as
+   opposed to one of the "All jobs ..." tabs) is the active view - so
+   it's never ambiguous which job's Backbones/Models/Results/etc a
+   screen belongs to once more than one job is being tracked. */
+.active-job-banner {
+  padding: 8px 20px;
+  font-size: 12.5px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--border);
+}
+.active-job-banner b { color: var(--text); }
+
+main { padding: 20px; }
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  margin-bottom: 16px;
+}
+
+.muted { color: var(--muted); }
+
+.error-banner {
+  background: rgba(239, 90, 111, 0.12);
+  border: 1px solid var(--danger);
+  color: #ffb3bd;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+.hidden { display: none !important; }
+
+/* Alert banner (Overview + Error log tab) - shared by the crash banner and
+   the cancellation banner, since they're the same kind of "something went
+   wrong" notice with a different icon/message. */
+.alert-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(239, 90, 111, 0.14);
+  border: 1px solid var(--danger);
+  color: #ffd3da;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  margin-bottom: 16px;
+  font-size: 13.5px;
+}
+.alert-banner .crash-icon { font-size: 22px; flex-shrink: 0; }
+.alert-banner b { color: #fff; }
+.alert-banner a.crash-link { color: #fff; text-decoration: underline; cursor: pointer; }
+.alert-banner code { background: rgba(0,0,0,0.25); padding: 1px 5px; border-radius: 4px; }
+
+/* Shared by the Error log and Output log tabs' <pre> blocks. The error
+   tab tints its text red (it's crash/cancellation-adjacent content); the
+   plain output log keeps the normal text color. */
+.log-pre {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 75vh;
+  overflow-y: auto;
+  color: var(--text-on-deep);
+}
+#errorTabContent pre { color: #ffc9d1; }
+
+/* Stepper */
+.stepper {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+  overflow-x: auto;
+}
+.step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 12.5px;
+  white-space: nowrap;
+}
+.step.done { color: var(--accent-2); border-color: var(--accent-2); }
+.step.active { color: white; background: var(--accent); border-color: var(--accent); }
+.step-arrow { color: var(--border); padding: 0 6px; font-size: 16px; }
+
+/* Stage card: sits directly under the stepper and shows what's happening
+   right now - either a simple one-line status, or (for RFdiffusion /
+   Modeling) the fuller progress-bar block. */
+.stage-card {
+  border-left: 3px solid var(--accent);
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+.stage-card:empty { display: none; }
+.stage-message {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 14px;
+}
+.stage-message-icon { font-size: 26px; flex-shrink: 0; line-height: 1; }
+.stage-message p { margin: 0; }
+
+/* Overview */
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 14px;
+  margin-top: 10px;
+}
+.stat-box {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.stat-box .label { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;}
+.stat-box .value { font-size: 20px; font-weight: 700; }
+.stat-box .value.small { font-size: 14px; font-weight: 600; }
+
+.progress-bar-outer {
+  height: 10px;
+  background: var(--panel-2);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 10px 0;
+  border: 1px solid var(--border);
+}
+.progress-bar-inner {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 0.4s ease;
+}
+
+/* All jobs overview */
+#allOverviewList { display: flex; flex-direction: column; gap: 12px; }
+.job-overview-card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+}
+.job-overview-card:hover { border-color: var(--accent); }
+.job-overview-head { display: flex; align-items: center; gap: 10px; }
+.job-overview-name { font-weight: 600; font-size: 14.5px; }
+.job-overview-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); margin-top: 12px; gap: 10px; }
+
+.config-table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12.5px;}
+.config-table td { padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.config-table td:first-child { color: var(--muted); width: 220px; white-space: nowrap; }
+.config-table td.config-nested { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+
+/* Cycle pill */
+.cycle-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(91,140,255,0.15);
+  color: var(--accent);
+  border: 1px solid rgba(91,140,255,0.35);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.cycle-note {
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* Step timings */
+#timingContent table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+#timingContent td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+#timingContent td:first-child { color: var(--muted); }
+#timingContent td:last-child { text-align: right; font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+#timingContent tr.total-row td { border-top: 2px solid var(--border); border-bottom: none; font-weight: 700; color: var(--text); padding-top: 10px; }
+
+/* Split view (list + viewer) */
+.split-view {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 16px;
+  min-height: 520px;
+}
+/* Run Job's "Build a new job" pane is a data-entry form, not a pick-a-file
+   list like every other .split-view user (Backbone/Results/Models/All
+   results) - it needs real room for its own fields, contig textarea, and
+   module bodies, so its left column gets its own (much wider, and
+   user-resizable - see .split-resizer) track rather than widening
+   .list-pane for everyone. The 3rd track is the drag handle itself
+   (#runJobSplitResizer, a real grid item between .list-pane and
+   .viewer-pane in the markup, not an overlay) - its width here is only
+   ever the *default*; initRunJobSplitResizer() in run_job.js overwrites
+   this rule with an inline style once a stored/dragged width exists. */
+.rj-build-split { grid-template-columns: 680px 6px 1fr; }
+.split-resizer {
+  cursor: col-resize;
+  position: relative;
+  border-radius: 3px;
+  background: transparent;
+}
+.split-resizer::after {
+  /* A thin visible line inset within the wider draggable hit-area above -
+     the hit-area itself stays full width so the handle isn't fiddly to
+     grab, without needing a visibly thick divider at rest. */
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 2px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border);
+}
+.split-resizer:hover::after,
+.split-resizer.dragging::after {
+  background: var(--accent);
+}
+/* Set on <body> for the duration of a drag (see initRunJobSplitResizer())
+   so the cursor stays col-resize and nothing else on the page starts
+   text-selecting while the mouse crosses over it mid-drag. */
+body.rj-resizing { cursor: col-resize; user-select: none; }
+body.rj-resizing * { cursor: col-resize !important; user-select: none !important; }
+.list-pane {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  overflow-y: auto;
+  max-height: 75vh;
+}
+.list-pane input[type="text"] {
+  width: 100%;
+  padding: 8px 10px;
+  margin-bottom: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+}
+.viewer-pane {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  /* Grid items default to min-width: auto, which lets a child's real
+     intrinsic content size force the grid track wider than intended -
+     .split-view's second column is "1fr", but NGL's <canvas> inside here
+     has genuine pixel width/height (not just CSS sizing), so without
+     this it can push the column wider. That's only latent until the
+     .mol-viewer resize handle below is in the picture: dragging it
+     resizes the canvas via ensureResizeObserver() in app.js, which
+     re-measures the container - and without min-width: 0 breaking the
+     loop, "canvas pushes column wider" -> "wider column measured as the
+     container's new size" -> "canvas set even wider" runs away call
+     after call. */
+  min-width: 0;
+}
+.mol-viewer {
+  /* Not "flex: 1" (= flex-grow:1 flex-shrink:1 flex-basis:0%) - a
+     flex-basis of 0% makes the flex algorithm own the item's height
+     outright and ignore any explicit height entirely, which is exactly
+     what the resize handle below needs to set on drag. flex-basis:auto
+     defers to height instead (falling back to min-height/natural size
+     when none is set), so a drag actually sticks. */
+  flex: 0 1 auto;
+  min-height: 460px;
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  position: relative;
+  /* Native drag-to-resize handle in the bottom-right corner. Vertical
+     only - letting the viewer grow wider than its flex column would push
+     against the list-pane next to it, which is a much easier way to end
+     up with an awkward layout than a taller viewer ever is. `overflow`
+     has to be something other than the default `visible` for `resize` to
+     take effect at all; NGL's canvas already fills the container via its
+     own CSS regardless, so nothing is actually being clipped here - see
+     ensureResizeObserver() in app.js for the other half of this (telling
+     NGL to actually re-fit its canvas after a drag, which it doesn't do
+     on its own unless the browser *window* itself resizes). */
+  resize: vertical;
+  overflow: hidden;
+}
+.viewer-label { margin-top: 8px; color: var(--muted); font-size: 12.5px; }
+
+/* Color controls above a structure viewer (Backbones, Models, Results,
+   All jobs results): row 1 has a "color by" mode select where that tab
+   has one, the chain-palette select (chain mode only), and the
+   background select (always shown, pushed to the far right via
+   .bg-color-wrap's margin-left: auto); row 2 has the legend - either the
+   current chain-to-color mapping or, in RFdiffusion provenance mode,
+   editable swatches for each residue category, both using
+   .legend-color-input so every swatch (chain or provenance) is itself a
+   color picker - and the "Show sidechains" radio group, pushed right the
+   same way as the background select above it via .sidechain-mode-group's
+   own margin-left: auto (one flex item, not two - two separate
+   auto-margin siblings sharing one flex line can behave unpredictably
+   once the row is narrow enough to wrap, which is what briefly made one
+   of them seem to vanish before this became a single group). */
+.viewer-color-toolbar { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+.viewer-color-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bg-color-wrap, .chain-palette-wrap { display: flex; align-items: center; gap: 8px; }
+.bg-color-wrap, .sidechain-mode-group { margin-left: auto; }
+.sidechain-mode-group { display: flex; align-items: center; gap: 12px; font-size: 12.5px; color: var(--muted); flex-wrap: wrap; }
+.sidechain-mode-option { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; white-space: nowrap; }
+.sidechain-mode-radio { cursor: pointer; }
+.color-legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.legend-color-input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.legend-color-input::-webkit-color-swatch-wrapper { padding: 0; }
+.legend-color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
+.legend-color-input::-moz-color-swatch { border: none; border-radius: 2px; }
+
+/* Residue click info - a small overlay inside the mol-viewer itself
+   (which stays a fixed dark surface regardless of theme), so it needs the
+   theme-invariant on-deep text color, same reasoning as .log-pre. */
+.residue-info {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  max-width: calc(100% - 20px);
+  background: rgba(5, 7, 12, 0.85);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  color: var(--text-on-deep);
+  z-index: 5;
+}
+.residue-info .muted { color: var(--muted-on-deep); }
+.residue-info a.clear-link { color: var(--accent-2); cursor: pointer; text-decoration: underline; margin-left: 8px; white-space: nowrap; }
+
+/* Cursor-following hover tooltip - positioned per-frame from NGL's
+   pickingProxy.canvasPosition, so it's absolute within the NGL viewer's
+   own container (appended there directly, not .mol-viewer, in app.js). */
+.residue-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 6;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  padding: 3px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.list-item {
+  padding: 9px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  margin-bottom: 4px;
+  font-size: 13px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border-left: 4px solid transparent;
+}
+.list-item:hover { background: var(--panel-2); }
+.list-item.selected { background: var(--accent); color: white; }
+/* Results list items may set their own inline background (color-by, D4),
+   which wins over the rule above - fall back to an outline so the
+   selected state stays visible either way. */
+.list-item.selected { outline: 2px solid var(--accent); outline-offset: -2px; }
+.badge {
+  font-size: 10.5px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 700;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+.badge.passed { background: rgba(53,208,168,0.15); color: var(--accent-2); border-color: rgba(53,208,168,0.4); }
+.badge.failed_filter { background: rgba(239,90,111,0.15); color: var(--danger); border-color: rgba(239,90,111,0.4); }
+.badge.complex { background: rgba(91,140,255,0.15); color: var(--accent); border-color: rgba(91,140,255,0.4); }
+.badge.monomer { background: rgba(245,166,35,0.15); color: var(--warn); border-color: rgba(245,166,35,0.4); }
+/* Neutral - not a filter verdict either way, just "not evaluated yet". */
+.badge.pending { background: rgba(139,147,167,0.15); color: var(--muted); border-color: rgba(139,147,167,0.4); }
+/* A selected list-item's solid accent-blue background washes out the
+   badge's low-opacity tint, so give badges a darker, opaque-ish
+   background + a colored border instead of relying on the tint alone. */
+.list-item.selected .badge { background: rgba(0,0,0,0.3); border-color: currentColor; }
+.list-item.selected .badge.passed { color: #baffe0; }
+.list-item.selected .badge.failed_filter { color: #ffd0d6; }
+.list-item.selected .badge.complex { color: #d6e3ff; }
+.list-item.selected .badge.monomer { color: #ffe6b3; }
+.list-item.selected .badge.pending { color: #dfe3ea; }
+
+.metrics-table { margin-top: 10px; font-size: 12.5px; }
+.metrics-table table { width: 100%; border-collapse: collapse; }
+.metrics-table td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+.metrics-table td:first-child { color: var(--muted); }
+
+/* Results tab's interactive sequence panel - built from the currently
+   loaded structure itself (see buildStructureSequence() in app.js), not
+   a separate fetch, so residue numbers always match what's on screen.
+   :empty hides the wrapper before any row is selected. */
+.seq-panel { margin-top: 10px; }
+.seq-panel:empty { display: none; }
+.seq-chain { margin-bottom: 8px; }
+.seq-chain:last-child { margin-bottom: 0; }
+.seq-chain-label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+.seq-residues {
+  background: var(--surface-deep);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.9;
+}
+.seq-residue {
+  display: inline-block;
+  width: 1.6ch;
+  text-align: center;
+  border-radius: 3px;
+  cursor: pointer;
+  user-select: none; /* dragging selects residues, not the browser's own text selection */
+}
+.seq-residue:hover { outline: 1px solid var(--text-on-deep); }
+/* The "outline" the user asked for on multi-selected residues - kept
+   visually distinct from the single-residue highlight's licorice/element
+   coloring in the 3D view, so the two selection modes don't look like
+   the same thing. */
+.seq-residue.selected { outline: 2px solid #ffd60a; outline-offset: -1px; }
+
+/* Each chunk of SEQ_CHUNK_SIZE residues (see renderSequenceResidues() in
+   app.js) is its own inline-flex column, number on top - lets the browser
+   still wrap between chunks like plain inline content, while keeping each
+   chunk's own number pinned directly above its residues. */
+.seq-chunk { display: inline-flex; flex-direction: column; align-items: flex-start; vertical-align: top; margin-right: 6px; }
+.seq-chunk-num { font-size: 9px; color: var(--muted); line-height: 1.3; user-select: none; }
+.seq-chunk-residues { display: block; white-space: nowrap; }
+
+/* Sequences / alignment viewer (shared between Sequences tab and Results tab) */
+.backbone-block {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+#sequencesToolbar { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; padding: 12px 20px; }
+#sequencesToolbar .toggle-label { margin-bottom: 0; }
+#sequencesToolbar input[type="number"] {
+  width: 56px; padding: 5px 6px; margin-left: 4px;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; font-size: 12px;
+}
+.backbone-block h4 { margin: 0 0 10px; display: flex; gap: 10px; align-items: center; }
+
+/* Each row (ruler included) gets a fixed height so ALIGN_VISIBLE_ROWS in
+   app.js and this max-height agree exactly on "5 rows visible" - if row
+   height were left to font metrics, rounding could show a sliver of a
+   6th row before the scrollbar kicks in. Beyond that, overflow-y scrolls
+   vertically (the ruler stays pinned via its own position:sticky). */
+.align-scroll {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 156px; /* 1 ruler row + 5 sequence rows at 26px each */
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-deep);
+}
+.align-ruler {
+  display: flex;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  color: var(--muted-on-deep);
+  border-bottom: 1px solid var(--border);
+  padding: 3px 0;
+  height: 26px;
+  box-sizing: border-box;
+  position: sticky;
+  top: 0;
+  background: var(--surface-deep);
+  z-index: 3;
+}
+.align-ruler .align-label { flex-shrink: 0; }
+.align-ruler .tick { display: inline-block; width: 1ch; white-space: nowrap; }
+/* Position-number overlay for the ruler (see renderRulerRow() in app.js) -
+   position:relative anchor for the absolutely-positioned .tick-num labels,
+   which render their own natural width (2, 3, 4+ digits) starting at their
+   `left` offset instead of being squeezed into a single .tick's 1ch flow
+   box, where anything past a 1-digit number would overflow and visually
+   corrupt whatever sits next to it - the exact bug this replaced. */
+.align-ruler-track { position: relative; }
+.tick-num { position: absolute; top: 0; white-space: nowrap; }
+.align-row {
+  display: flex;
+  align-items: baseline;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: nowrap;
+  height: 26px;
+  box-sizing: border-box;
+}
+.align-row:not(:last-child) { border-bottom: 1px solid #1a2338; }
+.align-label {
+  position: sticky;
+  left: 0;
+  background: var(--surface-deep-2);
+  color: var(--muted-on-deep);
+  padding: 5px 10px;
+  min-width: 210px;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+  z-index: 2;
+}
+.align-label .swatch {
+  display: inline-block;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  margin-right: 6px;
+}
+.align-seq { padding: 5px 6px; }
+.aa { display: inline-block; width: 1ch; }
+/* Conserved residues get a solid (not tinted) background + a contrasting
+   text color instead of an outline - readable at 1-character width,
+   where an outline/glow effect just gets lost against the neighbors. */
+.aa.conserved { font-weight: 700; }
+.chain-sep { color: var(--muted-on-deep); padding: 0 3px; }
+
+/* Pagination footer - shared by the results list, the metrics table, and
+   each alignment-view sequence-length group's own pager
+   (.align-group-pager) - see renderPagerControls() in app.js. Renders
+   empty/collapsed when everything already fits on one page. */
+.pager-bar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 0;
+}
+.pager-bar:empty { padding: 0; }
+.pager-btn {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 5px 12px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.pager-btn:hover:not(:disabled) { border-color: var(--accent); }
+.pager-btn:disabled { opacity: 0.4; cursor: default; }
+.pager-info { font-size: 12px; color: var(--muted); white-space: nowrap; }
+
+/* Table (csv) */
+#csvTableWrap { max-height: 60vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+table.data-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+table.data-table th, table.data-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  white-space: nowrap;
+}
+table.data-table th { position: sticky; top: 0; background: var(--panel); cursor: pointer; color: var(--accent); z-index: 3; }
+/* Row striping + color-by tint are applied as inline styles per-row from
+   JS (see renderCsvTable) so the two never fight over the same cells;
+   the sticky id column gets its own explicit inline background too, since
+   a sticky cell needs an opaque cover for the cells scrolling under it. */
+table.data-table tbody tr:hover td { filter: brightness(1.12); cursor: pointer; }
+table.data-table th.id-col, table.data-table td.id-col {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  border-right: 1px solid var(--border);
+}
+table.data-table th.id-col { z-index: 4; background: var(--panel); }
+table.data-table td.path-col { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+/* Highlights the row matching the model currently shown in the viewer
+   (results.selectedRowId) - via per-cell borders, not background/outline:
+   background is already spoken for by the color-by tint (an inline style
+   that would just win over a CSS background here), and outline on a
+   <tr> renders inconsistently across browsers once border-collapse is in
+   play. Every cell in the row gets a top/bottom border (collapsing into
+   one continuous line the same way any adjacent-cell border does), and
+   the first/last cell close off the left/right sides, so the whole row
+   reads as one outlined rectangle regardless of what background color
+   (if any) sits underneath it. */
+table.data-table tbody tr.selected td { border-top: 2px solid var(--accent); border-bottom: 2px solid var(--accent); }
+table.data-table tbody tr.selected td:first-child { border-left: 2px solid var(--accent); }
+table.data-table tbody tr.selected td:last-child { border-right: 2px solid var(--accent); }
+
+/* Results toolbar / filters / color-by */
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  position: relative;
+}
+.toolbar-group { display: flex; align-items: center; gap: 8px; position: relative; }
+.toolbar-label { color: var(--muted); font-size: 12.5px; }
+#resultsCountWrap { margin-left: auto; font-size: 12.5px; }
+
+select {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  font-size: 12.5px;
+}
+
+.filters-badge {
+  background: var(--accent);
+  color: white;
+  border-radius: 999px;
+  font-size: 10.5px;
+  padding: 1px 7px;
+  margin-left: 6px;
+}
+
+.filters-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(480px, 90vw);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+  z-index: 20;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.filters-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.filters-list { display: flex; flex-direction: column; gap: 8px; }
+
+.filter-row { display: grid; grid-template-columns: 1fr 74px 12px 74px; align-items: center; gap: 6px; }
+.filter-row .filter-col-name {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.filter-row input[type="number"] {
+  width: 100%;
+  padding: 5px 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.filter-row .filter-dash { text-align: center; color: var(--muted); }
+.filter-row.filter-active .filter-col-name { color: var(--accent); font-weight: 600; }
+
+/* Modal (browse) */
+.modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.55);
+  display: flex; align-items: center; justify-content: center; z-index: 50;
+}
+.modal-content {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  width: min(640px, 90vw); max-height: 70vh; display: flex; flex-direction: column;
+}
+.modal-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+  font-family: ui-monospace, monospace; font-size: 12.5px; color: var(--muted);
+}
+.modal-header button { background: transparent; color: var(--muted); padding: 2px 8px; }
+.browse-nav-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 8px 0;
+}
+.browse-root-select {
+  flex: 0 0 auto;
+  max-width: 40%;
+  padding: 7px 8px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.browse-goto-input {
+  /* min-width:0 overrides a flex item's default min-width:auto, which
+     would otherwise refuse to shrink this input below its unconstrained
+     content width and push .browse-root-select/the Go button out of the
+     modal instead of actually sharing the row. */
+  flex: 1 1 auto;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.browse-filter-input {
+  /* display:block (an <input> defaults to inline-block) so width:auto
+     fills the available space minus its own margin, the normal block-box
+     behavior - matches .browse-entries' own 8px inset without needing a
+     calc() tied to that margin. */
+  display: block;
+  box-sizing: border-box;
+  margin: 8px 8px 0;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+.browse-entries { overflow-y: auto; padding: 8px; }
+.browse-entry {
+  padding: 8px 10px; border-radius: 8px; cursor: pointer; font-size: 13px;
+  display: flex; align-items: center; gap: 8px;
+}
+.browse-entry:hover { background: var(--panel-2); }
+/* File rows (not directories) get a checkbox so several jobs can be
+   picked in one visit to the browser before committing with "Add
+   selected jobs" - see openBrowse()/toggleBrowseSelection() in app.js. */
+.browse-entry input[type="checkbox"] { flex-shrink: 0; }
+.modal-footer {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; border-top: 1px solid var(--border);
+}
+
+/* Cancel job modal - shares .modal/.modal-content/.modal-header/.modal-footer
+   with the browse modal above; only the body in between is bespoke. */
+.cancel-job-modal-content { width: min(420px, 90vw); max-height: none; }
+.cancel-job-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; }
+.cancel-job-body #cancelJobIntro { margin: 0; font-size: 13px; color: var(--text); }
+.cancel-job-body select {
+  padding: 7px 10px; background: var(--panel-2); border: 1px solid var(--border);
+  color: var(--text); border-radius: var(--radius); font-size: 13px;
+}
+.cancel-job-body .toggle-label { margin-bottom: 0; }
+#cancelJobResult { margin: 0; font-size: 12.5px; white-space: pre-wrap; }
+#cancelJobResult.ok { color: var(--accent-2); }
+#cancelJobResult.err { color: var(--danger); }
+.cancel-job-actions { display: flex; gap: 8px; }
+
+/* Spinner */
+.spinner {
+  display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite; vertical-align: middle; margin-right: 6px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 800px) {
+  .split-view { grid-template-columns: 1fr; }
+  .list-pane { max-height: 260px; }
+  #resultsCountWrap { margin-left: 0; }
+}
+
+@media (max-width: 560px) {
+  .status-grid { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; }
+  .stat-box { padding: 10px 12px; }
+  .stat-box .value { font-size: 17px; }
+  .stage-message { flex-direction: column; align-items: flex-start; gap: 8px; }
+}
+
+/* ---------------------------------------------------------------------
+   Run job
+   --------------------------------------------------------------------- */
+
+.app-mode-tabs { display: flex; gap: 6px; }
+.app-mode-btn {
+  background: var(--panel-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 7px 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.app-mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+#runJobRoot { padding: 16px 20px; }
+
+.rj-mode-switch { display: flex; gap: 8px; }
+.rj-mode-btn { background: var(--panel-2); color: var(--muted); border: 1px solid var(--border); }
+.rj-mode-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+.rj-field { margin-bottom: 12px; }
+.rj-field label {
+  display: block;
+  font-size: 12.5px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.rj-field input[type="text"],
+.rj-field input[type="number"],
+.rj-field select,
+.rj-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-family: inherit;
+}
+.rj-field textarea { resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.rj-field .toggle-label { margin-bottom: 0; }
+.rj-field-help { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+
+.rj-module {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--panel-2);
+}
+.rj-module-enabled { border-color: var(--accent); }
+.rj-module-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.rj-module-body { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.rj-module-body.hidden { display: none; }
+
+.rj-repeat-item {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 10px;
+  margin: 8px 0;
+  background: var(--panel);
+}
+.rj-repeat-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+.rj-remove-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  padding: 2px 8px;
+  font-size: 11px;
+  border-radius: 999px;
+}
+.rj-small-filename { display: block; margin-top: 4px; font-size: 11.5px; }
+
+.rj-a3m-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 4px 0; }
+.rj-warn { color: var(--warn); font-size: 11.5px; }
+.rj-rename-warning {
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  background: rgba(245, 166, 35, 0.12);
+  border: 1px solid rgba(245, 166, 35, 0.4);
+  border-radius: 6px;
+}
+
+/* Field-level "?" hover/focus tooltip - see infoTip() in run_job.js.
+   .info-tip-section is only used inside the contig field's tooltip, which
+   bundles several titled examples (one per CONTIG_HELP entry) into one
+   bubble rather than needing several separate icons. */
+.info-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  font-family: inherit;
+  line-height: 1;
+  cursor: help;
+  position: relative;
+  vertical-align: middle;
+  user-select: none;
+}
+.info-tip-bubble {
+  display: none;
+  /* position: fixed (not absolute) + top/left set in px by
+     positionInfoTipBubble() in run_job.js, not by this rule - a static
+     CSS anchor (e.g. "bottom: 130%") is computed relative to .info-tip's
+     own box, which .list-pane (overflow-y: auto) then clips against
+     *its* scrolled viewport, not the browser's - that's what silently cut
+     the top off the contig tooltip (the tallest one, closest to the top
+     of that scrolling pane) before. Fixed positioning is computed against
+     the browser viewport instead, immune to any ancestor's scroll/overflow
+     state; visibility is driven by the .visible class (see
+     showInfoTip()/hideInfoTip()), not :hover/:focus, so JS can position it
+     before it's ever actually shown. */
+  position: fixed;
+  width: max-content;
+  max-width: 420px;
+  max-height: 70vh;
+  overflow-y: auto; /* last-resort safety net if content is ever taller than that */
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  z-index: 200;
+}
+.info-tip-bubble.visible {
+  display: block;
+}
+.info-tip-bubble code {
+  display: inline-block;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin-top: 4px;
+  font-size: 11.5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.info-tip-section { margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+.info-tip-section:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+.info-tip-section b { font-size: 12.5px; }
+.info-tip-section p { margin: 4px 0; }
+
+.rj-yaml-editor {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--radius);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+}
+.rj-yaml-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  background: rgba(239, 90, 111, 0.12);
+  border: 1px solid rgba(239, 90, 111, 0.4);
+  color: var(--danger);
+  border-radius: var(--radius);
+  font-size: 12.5px;
+}
+
+.rj-submit-row { display: flex; gap: 10px; margin-top: 10px; }
+#runJobResult { margin-top: 14px; padding: 12px 14px; border-radius: var(--radius); border: 1px solid var(--border); }
+#runJobResult.rj-result-ok { border-color: var(--accent-2); background: rgba(53, 208, 168, 0.08); }
+#runJobResult.rj-result-error { border-color: var(--danger); background: rgba(239, 90, 111, 0.08); }
+#runJobResult.rj-result-waiting { border-color: var(--accent); background: rgba(63, 111, 224, 0.08); }
+#runJobResult.rj-result-waiting h4::after {
+  /* A plain CSS spinner next to "Submitting…"/"Running preview…" - the
+     one piece of motion on the page for the whole duration of the
+     request, since there's nothing else here that changes until the
+     response actually lands. */
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-left: 8px;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  vertical-align: middle;
+  animation: rj-spin 0.8s linear infinite;
+}
+@keyframes rj-spin { to { transform: rotate(360deg); } }
+.rj-pending-countdown { font-size: 11.5px; font-weight: 400; }
+#runJobResult h4 { margin: 0 0 8px; }
+#runJobResult pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  background: var(--panel-2);
+  border-radius: 6px;
+  padding: 8px 10px;
+  margin: 8px 0 0;
+  max-height: 240px;
+  overflow: auto;
+}
+
+.rj-pending-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.rj-pending-row:last-child { border-bottom: none; }
+
+.rj-squeue-output {
+  white-space: pre-wrap;
+  font-size: 12px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 10px 12px;
+  min-height: 60px;
+  max-height: 320px;
+  overflow: auto;
+  margin: 10px 0 0;
+}
+
+#runJobToast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--accent);
+  color: #fff;
+  padding: 12px 18px;
+  border-radius: var(--radius);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  z-index: 60;
+}

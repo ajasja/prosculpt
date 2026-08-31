@@ -56,9 +56,9 @@ for test_file in test_file_list:
             command, shell=True, capture_output=True, text=True
         )
         for line in process_output.stdout.split("\n"):
-            if "Submitted batch job" in line:
+            if "submitted to slurm with id" in line:
                 print(line)
-                slurm_job_list.append(line.split("job ")[1])
+                slurm_job_list.append(line.split("with id ")[1].split(" and code")[0])
         if process_output.returncode != 0:
             print(f"ERROR {test_file}:")
             for line in process_output.stderr.split("\n"):
@@ -73,8 +73,9 @@ for id, job in enumerate(slurm_job_list):
 
 # subprocess.run(command)
 if not args.dry_run:
+    dep_flag = f" -d afterany{jobs_string}" if slurm_job_list else ""
     os.system(
-        f"sbatch -d afterany{jobs_string} -J test_check slurm_verify_tests.sh Examples/{out_folder}"
+        f"sbatch{dep_flag} -J test_check slurm_verify_tests.sh Examples/{out_folder}"
     )
     with open(
         f"Examples/{out_folder}/test_verification_output.txt", "w+"
