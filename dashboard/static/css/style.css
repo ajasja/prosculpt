@@ -95,7 +95,7 @@ body {
 
 /* Now a standalone block inside #trackJobRoot (no longer a .topbar flex
    child - the app-mode split moved into the header instead), so it needs
-   its own row padding. #logPathInput's own flex/min-width still come from
+   its own row padding. #jobDirInput's own flex/min-width still come from
    its dedicated rule below. */
 .log-picker {
   display: flex;
@@ -113,7 +113,7 @@ body {
    to look and behave like a single-line input regardless (fixed height,
    no resize handle, no wrapping - a long/multi-line value just scrolls
    horizontally like the old input did). */
-#logPathInput {
+#jobDirInput {
   flex: 1;
   min-width: 200px;
   height: 34px;
@@ -248,6 +248,18 @@ button.danger:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
+}
+/* Task switcher (Overview tab, num_tasks > 1 only) - same pill-button
+   look as .job-tab-btn/.job-chip above, but its own plain container
+   (not .job-tabs' full-width top-level-bar look - background/border/
+   generous padding meant for a bar spanning the whole page, cramped and
+   out of place sitting inside one tab's own card content instead). */
+.task-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 4px 0 18px;
 }
 .job-chips {
   display: flex;
@@ -788,6 +800,14 @@ body.rj-resizing * { cursor: col-resize !important; user-select: none !important
 }
 .align-ruler .align-label { flex-shrink: 0; }
 .align-ruler .tick { display: inline-block; width: 1ch; white-space: nowrap; }
+/* Position-number overlay for the ruler (see renderRulerRow() in app.js) -
+   position:relative anchor for the absolutely-positioned .tick-num labels,
+   which render their own natural width (2, 3, 4+ digits) starting at their
+   `left` offset instead of being squeezed into a single .tick's 1ch flow
+   box, where anything past a 1-digit number would overflow and visually
+   corrupt whatever sits next to it - the exact bug this replaced. */
+.align-ruler-track { position: relative; }
+.tick-num { position: absolute; top: 0; white-space: nowrap; }
 .align-row {
   display: flex;
   align-items: baseline;

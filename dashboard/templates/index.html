@@ -25,7 +25,7 @@
 
 <div id="trackJobRoot">
 <div class="log-picker">
-  <textarea id="logPathInput" rows="1" placeholder="/path/to/run.out (paste several, one per line, to add them all at once)"></textarea>
+  <textarea id="jobDirInput" rows="1" placeholder="/path/to/output_dir (paste several, one per line, to add them all at once)"></textarea>
   <button id="loadBtn">Add job</button>
   <button id="browseBtn" title="Browse filesystem">Browse…</button>
   <span id="autoRefreshLabel">
@@ -180,11 +180,14 @@
     <div id="outputDirBanner" class="alert-banner hidden"></div>
     <div id="crashBanner" class="alert-banner hidden"></div>
     <div id="cancelBanner" class="alert-banner hidden"></div>
+    <!-- Only populated (and shown) for a job with more than one SLURM
+         array task - see renderTaskSwitcher() in app.js. -->
+    <div class="task-switcher" id="taskSwitcher"></div>
     <div class="stepper" id="stepper"></div>
     <div class="card stage-card" id="stageCard"></div>
 
     <div class="card" id="overviewCard">
-      <p class="muted">Enter the path to a Prosculpt log file above and click <b>Add job</b> to get started.</p>
+      <p class="muted">Enter the path to a Prosculpt job's output directory above and click <b>Add job</b> to get started.</p>
     </div>
 
     <div class="card hidden" id="timingCard">
@@ -203,6 +206,7 @@
         <label class="toggle-label"><input type="checkbox" id="showFilteredToggle" checked> Show filtered out</label>
         <div id="backbonesFilterNote" class="cycle-note hidden"></div>
         <div id="backbonesList"><p class="muted">Load a job first.</p></div>
+        <div id="backbonesListPager" class="pager-bar"></div>
       </div>
       <div class="viewer-pane">
         <div class="viewer-color-toolbar">
@@ -236,7 +240,7 @@
           </div>
           <div class="viewer-color-row">
             <div id="backboneColorLegend" class="color-legend hidden"></div>
-            <div class="sidechain-mode-group">
+            <div class="sidechain-mode-group hidden" title="RFdiffusion backbones have no sidechain atoms yet - nothing to show here">
               <span class="toolbar-label">Show sidechains:</span>
               <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
               <label class="sidechain-mode-option"><input type="radio" name="backboneSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
@@ -265,6 +269,7 @@
       <div class="list-pane">
         <input id="modelsFilter" type="text" placeholder="filter by name…" />
         <div id="modelsList"><p class="muted">Load a job first.</p></div>
+        <div id="modelsListPager" class="pager-bar"></div>
       </div>
       <div class="viewer-pane">
         <div class="viewer-color-toolbar">
@@ -439,7 +444,7 @@
     <div id="browseEntries" class="browse-entries"></div>
     <div class="modal-footer">
       <span id="browseSelectedCount" class="muted"></span>
-      <button id="browseAddSelectedBtn" class="secondary" disabled>Add selected jobs</button>
+      <button id="browseAddSelectedBtn" class="secondary" disabled>Add current directory</button>
     </div>
   </div>
 </div>

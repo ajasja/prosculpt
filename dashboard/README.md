@@ -12,15 +12,26 @@ Prosculpt jobs. Two top-level tabs:
   job is at, progress/ETA for RFdiffusion and modeling, plus browsable
   views of the backbones, designed sequences, individual models, and final
   results. A job submitted from the Run job tab is added here
-  automatically once its log file appears on disk.
+  automatically as soon as submission succeeds - its own directory already
+  exists by then, so there's nothing to wait for.
 
-Tracking works by reading a job's log file and output directory directly
-off disk, so **the dashboard needs filesystem access to both** — typically
-because it's running on the same machine (e.g. a cluster login node) the
-job runs on, or that filesystem is otherwise mounted where the dashboard
-runs. Submitting a job additionally needs either local shell access to
-`slurm_runner.py` (same-machine case) or a working `ssh`/`scp` client with
-already-trusted key/agent access to the target cluster (remote case) - see
+A job is tracked by pointing directly at its own **output directory** (the
+folder holding `logs/` and one numbered subdirectory - `01/`, `02/`, ... -
+per SLURM array task), not by a log path. Each numbered subdirectory is
+read directly off disk for what's actually been produced so far
+(backbones/sequences/models/results) and for its own `input.yaml` (the
+planned run configuration); its own SLURM log under `logs/`, if one is
+found, adds job id/node/timings/ETA and lets a crash or cancellation be
+told apart from a job that's just stalled - but isn't required. A task
+tracked with no log still shows real progress from disk, just with a
+banner explaining that "still healthy" vs. "stalled/crashed" can't be told
+apart without one. Either way, **the dashboard needs filesystem access to
+the job's output directory** — typically because it's running on the same
+machine (e.g. a cluster login node) the job runs on, or that filesystem is
+otherwise mounted where the dashboard runs. Submitting a job additionally
+needs either local shell access to `slurm_runner.py` (same-machine case) or
+a working `ssh`/`scp` client with already-trusted key/agent access to the
+target cluster (remote case) - see
 [dashboard_config.yaml.example](dashboard_config.yaml.example).
 
 ## 1. Install
@@ -192,30 +203,36 @@ range fields) have a small **?** next to their label - hover or focus it
 for syntax examples and other guidance too long to leave always-visible
 under the field itself.
 
-**Pending submissions**: after a real (non-dry-run) submit, the dashboard
-watches for that job's log file to appear (`logs/slurm-<job id>_*.out`
-under the job's directory) and, once it does, adds it to the Track job tab
-automatically - the exact same `addJobs()` a manually-pasted log path
+**Added to Track job automatically**: after a real (non-dry-run) submit
+succeeds, the dashboard adds the job's own directory to the Track job tab
+right away - the exact same `addJobs()` a manually-pasted directory path
 would go through, so there's nothing job-submission-specific about how a
-promoted job is tracked afterward. This only works for a `local` target,
-or an `ssh` target with a `mounts` entry covering `projects_path` (see above); without
-that, a pending entry says so and you add it to Track job by hand once you
-know its log path.
+just-submitted job is tracked afterward. There's no waiting involved (the
+directory already exists by the time submission succeeds - `stage_job()`
+creates it before `sbatch` is even called), and no log file needs to exist
+yet either. This only works for a `local` target, or an `ssh` target with a
+`mounts` entry covering `projects_path` (see above); without that, a toast
+says so and you add it to Track job by hand once you know its directory.
 
 ## 4. Point it at a job
 
-In the top bar, paste the full path to the job's log file (the `.out`/`.log`
-file Slurm or your scheduler wrote), or click **Browse…** to navigate the
-filesystem from the dashboard itself. Click **Add job**.
+In the top bar, paste the full path to the job's own **output directory**
+(the folder containing `logs/` and one numbered subdirectory - `01/`,
+`02/`, ... - per SLURM array task), or click **Browse…** to navigate the
+filesystem from the dashboard itself and select one or more directories.
+Click **Add job**.
 
-The dashboard reconstructs the job's output directory the same way you
-described: it reads the `PWD:` line (working directory at launch) and the
-`output_dir:` line from the log, and joins them if `output_dir` is relative.
+Task subdirectories (`01/`, `02/`, ...) are discovered directly by listing
+the directory - no log needs to exist, or be parsed, to find them. For
+`num_tasks > 1`, a small task switcher appears on the Overview tab: pick one
+task for its own full detail, or **All tasks** for a compact per-task
+progress grid (the same idea as the All jobs overview tab, one level down).
 
 The page polls every 5 seconds for updates (toggle off with the
-"auto-refresh" checkbox next to the log path field). It's safe to point it
-at a log file for a job that's still running — everything is computed fresh
-from the log + output directory on every refresh. Auto-refresh stops itself
+"auto-refresh" checkbox next to the directory field). It's safe to point it
+at a directory for a job that's still running — everything is computed
+fresh from disk (and each task's own log, if found) on every refresh.
+Auto-refresh stops itself
 (and unchecks the box, with a small note explaining why) once the job
 reaches a terminal state — finished, crashed, or cancelled — since there's
 nothing left to watch for; loading a different job (or the same one again)
@@ -371,15 +388,15 @@ explanation in place of the legend rather than failing silently.
 ## 5. Track multiple jobs at once
 
 The **Add job** field (and the **Browse…** button, which now lets you tick
-several files before committing with "Add selected jobs") aren't limited
-to one job - paste several log paths at once (one per line - it's a
-`<textarea>` styled to look like a single-line field, since a real
-`<input type="text">` can't actually hold a pasted newline) to track them
-all. A pill bar appears above the usual tab strip once you do: **All jobs
-overview** and **All jobs results** on the left, then one chip per
-tracked job - its short label (the log's filename, extension stripped),
-a colored status dot (blue = running, green = finished, red = crashed or
-cancelled), and a **✕** to stop tracking it. Clicking a chip shows that
+several directories before committing with "Add selected jobs") aren't
+limited to one job - paste several output directory paths at once (one per
+line - it's a `<textarea>` styled to look like a single-line field, since a
+real `<input type="text">` can't actually hold a pasted newline) to track
+them all. A pill bar appears above the usual tab strip once you do: **All
+jobs overview** and **All jobs results** on the left, then one chip per
+tracked job - its short label (the directory's own name), a colored status
+dot (blue = running, green = finished, red = crashed or cancelled), and a
+**✕** to stop tracking it. Clicking a chip shows that
 job's familiar Overview/Backbones/Sequences/Models/Results/Error
 log/Output log tabs - exactly the single-job experience described above,
 now with a banner above the tab strip naming which job you're looking at
@@ -401,8 +418,9 @@ ETA), how many backbones passed filtering (blank/"pending" until
 filtering has actually finished), and a "Total designs" count (accepted
 backbones × sequences/backbone, same math as the single job Overview's
 "Final designs" box). A job the dashboard can't resolve at all
-(e.g. a log with no `output_dir:`/`PWD:` line) shows a short error message
-in place of the metrics instead of a broken card.
+(e.g. a directory that doesn't exist, or exists but has no numbered task
+subdirectory yet) shows a short message in place of the metrics instead of
+a broken card.
 
 **All jobs results** is the Results tab, unioned across every tracked
 job: one combined list/table/alignment view/structure viewer, with a
@@ -556,8 +574,8 @@ be running (disabled once it's finished, crashed, or already been
 cancelled). It runs `scancel` against the job's own Slurm job ID (the same
 one shown on the Overview tab, parsed from the log's "Hello from job ..."
 line). Since Track job has no other way to know which configured target a
-tracked job's cluster actually is - a job just added by pasting a log path
-was never necessarily submitted through the Run job tab - clicking it opens
+tracked job's cluster actually is - a job just added by pasting a directory
+path was never necessarily submitted through the Run job tab - clicking it opens
 a small dialog asking which target owns the job, and requires an explicit
 "I'm sure I want to cancel this job" confirmation before anything is
 actually sent.
@@ -578,12 +596,13 @@ actually sent.
   `realpath()` resolves symlinks first, so both aliases compare equal.
 - **`final_output.csv` is returned exactly as written; paths inside it are
   translated only at the point something actually opens a file, not
-  baked into the data itself.** `output_dir` itself is translated in
-  `resolve_output_dir()` (see `mounts`
-  in §3) - everything the Backbones/Sequences/Models tabs and the Results
-  table list is built from that already-local `output_dir` server-side, so
-  none of it needs any further translation. `final_output.csv` is
-  different: `load_final_csv()` in `parser.py` returns it completely
+  baked into the data itself.** A job's own directory needs no translation
+  at all now - it's whatever local path you pointed Track job at directly
+  (typed, pasted, or picked via Browse…), so everything the Backbones/
+  Sequences/Models tabs and the Results table list is already built from a
+  genuinely-local task directory server-side. `final_output.csv` is
+  different (see `mounts` in §3): `load_final_csv()` in `parser.py` returns
+  it completely
   as-is, including any path-like column (`model_path`, `path_rfdiff`, and
   whichever others a given prediction backend adds), because Prosculpt
   itself records those as paths *on the cluster the job ran on*, and nothing
@@ -656,7 +675,7 @@ run_targets.py       Run-target config + dashboard-wide defaults (both read
                     from dashboard_config.yaml) + the shared local/ssh
                     execution primitive
 job_staging.py       Assembles a new job's directory on disk (pdb,
-                    alignments/, logs/, config yaml) for the "build a new
+                    alignments/, config yaml) for the "build a new
                     job" flow
 dashboard_config.yaml.example   Copy to dashboard_config.yaml and fill in -
                     git-ignored
@@ -679,38 +698,23 @@ start_dashboard.ps1  Windows: launch at logon via Task Scheduler/Startup -
 
 ## Troubleshooting
 
-- **"Could not find PWD: and/or output_dir: in the log file"** — the
-  dashboard expects the exact log format Prosculpt writes (a `PWD:` line
-  followed by the working directory on the next line, and a bare
-  `output_dir: <path>` line from the printed config). If your log format
-  differs, check `resolve_output_dir()` in `parser.py`.
-- **A tab shows "No X generated yet" for something you know exists** —
-  two different causes, depending on whether this is a remote (`ssh`)
-  target:
-  - The dashboard looks for very specific file patterns (e.g. `_*.pdb` in
-    `1_rfdiff/`, `*summary_confidences.json` / `confidence_*.json` under
-    `3_models/`). If Prosculpt's output layout has changed, these glob
-    patterns in `parser.py` are the place to update.
-  - For an `ssh` target: this is the expected result of an *unmapped*
-    remote path, not a bug - it means the dashboard resolved the job's
-    output_dir correctly (as a path on the remote cluster's own
-    filesystem) but has no `mounts` entry to translate it into a path
-    actually reachable from here, so every listing comes up empty while
-    the log itself still loads fine (the log's own path needs no
-    translation - only the paths *printed inside* it do). Check that this
-    job's output_dir actually falls under one of this target's `mounts`
-    (each entry's `remote` needs to be an exact prefix of it) - typically
-    one entry covering `projects_path` (jobs the Run job tab itself
-    staged) and another covering `slurm_runner_path` (jobs launched
-    directly against the installation, e.g. via `run_tests.py` or a
-    hand-run `slurm_runner.py` call), though a target can have as many
-    mounts as it actually needs - see the `mounts` notes in
-    `dashboard_config.yaml.example` and §3 above. A job whose output_dir
-    falls under none of them (e.g. one that predates any target being
-    configured, or one run somewhere unrelated to all of them) can't be
-    translated no matter what's configured - `translate_remote_path()` in
-    `run_targets.py` is the place to look if you need something more
-    involved than a list of mount prefixes already covers.
+- **"This job directory exists, but no task (01/02/...) has started
+  writing output yet"** — `discover_tasks()` in `parser.py` looks for
+  immediate subdirectories of the directory you pointed at whose name is
+  purely digits. If Prosculpt hasn't actually started running yet (or
+  you're a directory level off - pointed at a task's own `01/` instead of
+  its parent, or vice versa), this is expected, not a bug; it'll pick up
+  the task automatically once one appears.
+- **A tab shows "No X generated yet" for something you know exists** — the
+  dashboard looks for very specific file patterns per task (e.g. `_*.pdb`
+  in `1_rfdiff/`, `*summary_confidences.json` / `confidence_*.json` under
+  `3_models/`). If Prosculpt's output layout has changed, these glob
+  patterns in `parser.py` are the place to update. Unlike before, this
+  is *not* a remote-path-translation problem - a job's own directory is
+  whatever local path you pointed Track job at, with no translation step
+  involved at all; `mounts` (see §3) only matters for `final_output.csv`'s
+  own path columns (`model_path`, `path_rfdiff`) once results exist, not
+  for finding a job's directory or its backbones/sequences/models.
 - **Error log tab doesn't appear** — it's only shown once a `.err` file is
   actually found next to the log (same basename, `.err` extension); the
   Overview card's "Error log" stat says "not found" in that case. A job

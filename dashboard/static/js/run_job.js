@@ -9,9 +9,6 @@
 // module system, matching the rest of this app).
 // ---------------------------------------------------------------------
 
-const PENDING_RUNS_KEY = "prosculpt_dashboard_pending_runs";
-const PENDING_POLL_MS = 15000;
-
 let runJob = {
   submitMode: "build", // "build" | "existing"
   core: {},
@@ -447,7 +444,13 @@ function buildConfigObject() {
   const mods = runJob.modules;
   const cfg = {};
   cfg.task_name = (core.task_name || core.job_name || "").trim();
-  cfg.slurm = { output: "logs/slurm-%A_%a_%x.out", error: "logs/slurm-%A_%a_%x.err" };
+  // Empty, not omitted - slurm_runner.py does yaml_data["slurm"] directly
+  // (no .get() fallback), so the key has to exist even with nothing under
+  // it. Deliberately not setting output/error here: slurm_runner.py forces
+  // sbatch's own -o/-e under output_dir/logs/ by default now regardless of
+  // what this says, so writing a value here would just be misleading -
+  // looks like it's choosing where the log goes when it no longer is.
+  cfg.slurm = {};
   cfg.num_tasks = core.num_tasks || 1;
   if (runJob.pdbUpload) cfg.pdb_path = "input.pdb";
   cfg.output_dir = "output";
@@ -741,7 +744,7 @@ async function submitRunJob(dryRun) {
     const data = await res.json().catch(() => ({ ok: false, stderr: `HTTP ${res.status}` }));
     showRunJobResult(data, dryRun);
     if (data.ok && !dryRun && data.job_id) {
-      registerPendingRun(data);
+      addSubmittedJobToTracking(data);
     }
   } catch (e) {
     showRunJobResult({ ok: false, stderr: String(e) }, dryRun);
@@ -801,34 +804,21 @@ function showRunJobResult(data, dryRun) {
   el.innerHTML = `<h4>${title}</h4>${renameWarning}${lines.map((l) => `<div>${l}</div>`).join("")}<pre>${escapeHtml(body)}</pre>`;
 }
 
-// ---------------------------------------------------------------------
-// Pending runs: localStorage registry + polling + hand-off to tracking
-// ---------------------------------------------------------------------
-function loadPendingRuns() {
-  try {
-    return JSON.parse(localStorage.getItem(PENDING_RUNS_KEY) || "[]");
-  } catch (e) {
-    return [];
-  }
-}
-function savePendingRuns(list) {
-  localStorage.setItem(PENDING_RUNS_KEY, JSON.stringify(list));
-}
 // For a "local" target, the job dir the server just reported IS a path
-// this same server (and its filesystem-glob endpoint) can watch directly.
-// For an "ssh" target, only a *remote* path is known - translatable to a
-// locally-pollable path only if that target configured local_mount_path
-// (see dashboard_config.yaml.example); if not, there's nothing to watch and
-// the job stays "submitted" until removed or added to tracking by hand
-// once its log path is known.
+// this same server can read directly. For an "ssh" target, only a
+// *remote* path is known - translatable to a locally-reachable path only
+// if that target configured local_mount_path (see
+// dashboard_config.yaml.example); if not, there's nothing to add
+// automatically and the user is told to add it to Track job by hand once
+// they know its path.
 //
 // remote_job_dir is checked FIRST, not local_job_dir - the backend only
 // ever sets both at once as a historical accident to guard against (it
 // shouldn't, post-fix, but checking remote first means this function is
 // correct even if that ever regresses): whenever a job actually ran on an
-// ssh target, remote_job_dir is where its logs really land, never
+// ssh target, remote_job_dir is where its output really lands, never
 // whatever local_job_dir happens to say.
-function computeWatchDir(data) {
+function computeLocalJobDir(data) {
   if (data.remote_job_dir) {
     const target = runJob.targets.find((t) => t.name === qs("#runJobTarget").value);
     if (!target || !target.local_mount_path || !target.projects_path) return null;
@@ -838,167 +828,25 @@ function computeWatchDir(data) {
   return data.local_job_dir || null;
 }
 
-function registerPendingRun(data) {
-  const list = loadPendingRuns();
-  const watchDir = computeWatchDir(data);
-  // Prefer the name the directory actually landed under (data.final_name,
-  // set whenever dir_renamed kicked in) over what was typed, so the
-  // pending list never shows a name that doesn't match what's really there.
+// Track job now tracks a job by its own output directory directly (see
+// get_job_status() in parser.py) rather than by discovering a log file
+// that might not exist yet - stage_job() already creates the job
+// directory synchronously before sbatch ever runs, so there's nothing to
+// wait for: a successful submission can be added to Track job right away.
+// This replaces the old poll-for-the-log-file-to-appear "pending runs"
+// mechanism entirely - a genuine simplification this whole change enabled,
+// not just new complexity to replace old complexity with.
+function addSubmittedJobToTracking(data) {
+  const jobDir = computeLocalJobDir(data);
   const jobName = data.final_name || (runJob.core.job_name || "").trim() || "(unnamed)";
-  // How many SLURM array tasks to expect - num_tasks > 1 submits one
-  // array job whose tasks each get their own log file
-  // (slurm-<id>_<taskid>_<name>.out), not one shared log, so
-  // pollPendingRuns() needs to know how many to wait for before it's
-  // safe to stop checking. Known precisely in "build" mode (the field
-  // the generated config came from); "existing" mode submits a
-  // hand-written config the GUI never parsed, so there's no reliable way
-  // to know it there - defaulting to 1 keeps the original single-task
-  // promote-on-first-match behavior for that case instead of guessing
-  // wrong and polling forever.
-  const numTasks = runJob.submitMode === "build" ? Math.max(1, parseInt(runJob.core.num_tasks, 10) || 1) : 1;
-  list.push({
-    job_name: jobName,
-    target: qs("#runJobTarget").value,
-    job_id: data.job_id,
-    watch_glob: watchDir ? `${watchDir}/logs/slurm-${data.job_id}_*.out` : null,
-    num_tasks: numTasks,
-    found_paths: [], // log paths already added to Track job so far, across however many poll ticks it took
-    submitted_at: Date.now(),
-    status: "submitted",
-  });
-  savePendingRuns(list);
-  renderPendingRuns();
-}
-
-// "submitted" (still being polled) and "error" (poll gave up - see
-// pollPendingRuns()) both stay visible, with "error" rows explaining why
-// and offering the same Remove button; "promoted" ones are done and drop
-// out of this list entirely. Shared between renderPendingRuns() and its
-// own remove-button handler so the two never filter differently and end
-// up with mismatched row/index pairs.
-function isVisiblePendingRun(p) {
-  return p.status === "submitted" || p.status === "error";
-}
-
-function renderPendingRuns() {
-  const el = qs("#runJobPendingList");
-  renderPendingCountdown();
-  if (!el) return;
-  const list = loadPendingRuns().filter(isVisiblePendingRun);
-  if (!list.length) {
-    el.innerHTML = `<p class="muted">No pending submissions.</p>`;
+  if (!jobDir) {
+    showRunJobToast(`"${jobName}" submitted (job ${data.job_id}) - this target has no local_mount_path configured, so it can't be added to Track job automatically; add it by hand once you know its directory.`);
     return;
   }
-  el.innerHTML = list
-    .map((p, i) => {
-      let note = "";
-      if (p.status === "error") {
-        note = ` <span class="rj-warn">— gave up checking for this job's log file (${escapeHtml(p.error_message || "request failed")}); add it to Track job by hand once you know its log path.</span>`;
-      } else if (!p.watch_glob) {
-        note = ` <span class="rj-warn">— this target has no local_mount_path configured, so it can't be auto-added; add it to Track job by hand once you know its log path.</span>`;
-      }
-      // num_tasks > 1 submits a SLURM array job - each task's log appears
-      // separately (sometimes across several poll ticks, see
-      // pollPendingRuns()), so this shows how many of the expected tasks
-      // have been found/added so far rather than just a flat job id.
-      const taskProgress = p.num_tasks > 1 ? ` <span class="muted">(${(p.found_paths || []).length}/${p.num_tasks} tasks started)</span>` : "";
-      return `<div class="rj-pending-row">
-        <span>${escapeHtml(p.job_name)} <span class="muted">(job ${escapeHtml(String(p.job_id))}, ${escapeHtml(p.target)})</span>${taskProgress}${note}</span>
-        <button type="button" class="secondary rj-pending-remove" data-i="${i}">Remove</button>
-      </div>`;
-    })
-    .join("");
-  qsa(".rj-pending-remove", el).forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const all = loadPendingRuns();
-      const visible = all.filter(isVisiblePendingRun);
-      const target = visible[parseInt(btn.dataset.i, 10)];
-      const idx = all.indexOf(target);
-      if (idx !== -1) all.splice(idx, 1);
-      savePendingRuns(all);
-      renderPendingRuns();
-    });
-  });
-}
-
-// Ticks down once a second between actual poll cycles (PENDING_POLL_MS
-// apart) so "still waiting" has visible, live feedback instead of the
-// pending list just sitting there looking inert between checks - reset to
-// a full cycle inside pollPendingRuns() itself, right after each real poll
-// runs, not on a separate timer of its own (so it can never drift out of
-// sync with when the next poll actually happens).
-let pendingCountdownSecs = PENDING_POLL_MS / 1000;
-
-function renderPendingCountdown() {
-  const el = qs("#runJobPendingCountdown");
-  if (!el) return;
-  const hasPending = loadPendingRuns().some((p) => p.status === "submitted");
-  el.textContent = hasPending ? `— next check in ${pendingCountdownSecs}s` : "";
-}
-
-async function pollPendingRuns() {
-  const list = loadPendingRuns();
-  let changed = false;
-  for (const p of list) {
-    if (p.status !== "submitted" || !p.watch_glob) continue;
-    try {
-      const res = await apiGet("/api/run/check_pending", { glob: p.watch_glob });
-      // watch_glob already has a wildcard where the array task id goes
-      // (slurm-<jobid>_*.out), so a num_tasks > 1 job can match more than
-      // one path here - found_paths tracks which ones this pending entry
-      // has already added, so a re-poll only acts on genuinely new ones
-      // instead of re-adding (or re-toasting) the same task repeatedly.
-      const found = p.found_paths || (p.found_paths = []);
-      const newPaths = (res.paths || []).filter((path) => !found.includes(path));
-      if (newPaths.length) {
-        newPaths.forEach((path) => {
-          // switchToLast: false - this is a background auto-promotion,
-          // not something the user just asked to see, and (for a
-          // multi-task job) can fire several times in quick succession as
-          // each task's log appears - see addJobs()'s own comment in
-          // app.js for why calling switchToJob() that repeatedly corrupts
-          // per-job view state instead of just being a UX annoyance.
-          addJobs(path, false);
-          found.push(path);
-        });
-        changed = true;
-        const label = p.num_tasks > 1 ? `${found.length}/${p.num_tasks} tasks started` : "started";
-        showRunJobToast(`"${p.job_name}" ${label} - added to Track job.`);
-      }
-      // Only stop polling once every expected task's log has actually
-      // shown up - a SLURM array's tasks don't necessarily all start at
-      // once, so finding *a* match doesn't mean the rest won't still
-      // appear on a later tick.
-      if (found.length >= p.num_tasks) {
-        p.status = "promoted";
-        changed = true;
-      }
-    } catch (e) {
-      // A 400 means the glob itself was rejected outright (e.g. it points
-      // at a staging directory that's since been deleted, or otherwise
-      // isn't under any configured target's projects_path/local_mount_path
-      // - see /api/run/check_pending in run_api.py) and will never succeed
-      // no matter how many more times it's retried - give up on it now
-      // rather than hammering the server with the same failing request
-      // every 15s forever. Anything else (a network hiccup, a 5xx) is
-      // assumed transient and just tries again next tick, same as before.
-      if (e.status === 400) {
-        p.status = "error";
-        p.error_message = e.message;
-        changed = true;
-      }
-    }
-  }
-  // Reset unconditionally (not just when something changed) - a poll
-  // cycle just genuinely ran either way, so "time until the next one" is
-  // the same regardless of whether it happened to find anything new.
-  pendingCountdownSecs = PENDING_POLL_MS / 1000;
-  if (changed) {
-    savePendingRuns(list);
-    renderPendingRuns(); // also re-renders the countdown text
-  } else {
-    renderPendingCountdown();
-  }
+  // false: this is an automatic hand-off, not something the user just
+  // asked to see - don't yank them over to the Track job tab.
+  addJobs(jobDir, false);
+  showRunJobToast(`"${jobName}" submitted (job ${data.job_id}) - added to Track job.`);
 }
 
 function showRunJobToast(message) {
@@ -1132,7 +980,6 @@ function initRunJobTab() {
   renderCoreFields();
   renderModules();
   renderA3mList();
-  renderPendingRuns();
   syncFormToYaml();
   initRunJobSplitResizer();
 
@@ -1159,10 +1006,4 @@ function initRunJobTab() {
   qs("#runJobSqueueRefreshBtn").addEventListener("click", refreshSqueue);
 
   loadRunTargets();
-  setInterval(pollPendingRuns, PENDING_POLL_MS);
-  pollPendingRuns();
-  setInterval(() => {
-    pendingCountdownSecs = Math.max(0, pendingCountdownSecs - 1);
-    renderPendingCountdown();
-  }, 1000);
 }

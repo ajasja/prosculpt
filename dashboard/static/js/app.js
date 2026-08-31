@@ -1,7 +1,7 @@
 // Prosculpt Dashboard frontend
 // Vanilla JS, no build step. Talks to the Flask API in app.py.
 
-const STORAGE_KEY = "prosculpt_dashboard_log_path";
+const STORAGE_KEY = "prosculpt_dashboard_log_path"; // name kept for localStorage compat - holds a job DIRECTORY now, not a log path (see state.jobDir below)
 const THEME_KEY = "prosculpt_dashboard_theme";
 const APP_MODE_KEY = "prosculpt_dashboard_app_mode";
 const POLL_MS = 5000;
@@ -31,9 +31,17 @@ const AA_COLORS = {
 // middle of the table, so they get pushed to the end (see D1 in the spec).
 const PATH_COLUMNS = ["model_path", "af3_json", "af3_pdb", "path_rfdiff"];
 
-// state.logPath is "the currently active job" - the one the per-job tabs
-// (Overview/Backbones/.../Output log) show. Multi-job tracking adds a
-// layer above that: state.jobs is every job being watched, and
+// state.jobDir is "the currently active job" - the one the per-job tabs
+// (Overview/Backbones/.../Output log) show. A job is identified by its own
+// base output directory now (the one containing logs/ and one numbered
+// 01/02/... subdirectory per SLURM array task - see get_job_status() in
+// parser.py), not a log path - the log, if one is even found, is now just
+// one more thing read *from* that directory, per task.
+// selectedTaskNum picks which task's own detail the Overview/Backbones/
+// Sequences/Models tabs' single-task views are showing, for a job with
+// more than one (num_tasks > 1) - null before a status is loaded, at which
+// point it defaults to the first task. Multi-job tracking adds a layer
+// above all of this: state.jobs is every job being watched, and
 // state.topView picks between showing the active job's tabs ("job") or
 // one of the two aggregate tabs ("all-overview"/"all-results") - see
 // switchTopView()/switchToJob() further down. The Results-tab-shaped
@@ -47,14 +55,15 @@ let state = {
   // tabs), unchanged; Run job is a wholly separate sibling. See
   // showAppMode()/initAppModeTabs().
   appMode: localStorage.getItem(APP_MODE_KEY) || "track",
-  logPath: localStorage.getItem(STORAGE_KEY) || "",
+  jobDir: localStorage.getItem(STORAGE_KEY) || "",
   activeTab: "overview",
   lastStatus: null,
+  selectedTaskNum: null,
   pollTimer: null,
   browsePath: null,
 
-  jobs: [], // ordered list of tracked log paths
-  jobStatuses: {}, // logPath -> { status, terminal }
+  jobs: [], // ordered list of tracked job directories
+  jobStatuses: {}, // jobDir -> { status, terminal }
   topView: "job", // "job" | "all-overview" | "all-results"
 
   backbonesCache: [],
@@ -79,12 +88,12 @@ let state = {
 function qs(sel, root = document) { return root.querySelector(sel); }
 function qsa(sel, root = document) { return Array.from(root.querySelectorAll(sel)); }
 
-// params.log lets a caller target a specific job's API explicitly (the
+// params.job_dir lets a caller target a specific job's API explicitly (the
 // All jobs tabs, where a row/job isn't necessarily the active one) -
 // otherwise this defaults to whichever job is currently active.
 async function apiGet(path, params = {}) {
   const url = new URL(path, window.location.origin);
-  params.log = params.log || state.logPath;
+  params.job_dir = params.job_dir || state.jobDir;
   Object.entries(params).forEach(([k, v]) => { if (v !== undefined && v !== null) url.searchParams.set(k, v); });
   const res = await fetch(url);
   if (!res.ok) {
@@ -94,7 +103,7 @@ async function apiGet(path, params = {}) {
     // Lets a caller tell "this exact request is malformed/invalid and will
     // never succeed no matter how many times it's retried" (4xx) apart
     // from "probably transient, worth trying again" (network failure, a
-    // 5xx) - see pollPendingRuns() in run_job.js for the caller that
+    // 5xx) - callers that
     // actually needs this distinction.
     err.status = res.status;
     throw err;
@@ -141,6 +150,15 @@ function basename(p) {
   return String(p || "").split(/[\\/]/).pop();
 }
 
+// Shared "fetch in flight" placeholder - shown synchronously the instant a
+// tab starts loading (before its await resolves), so switching jobs or
+// tabs never leaves a *previous* job's stale list/table sitting on screen
+// looking indistinguishable from "the app is frozen" while the new data is
+// still in flight.
+function loadingPlaceholder(label) {
+  return `<p class="muted"><span class="spinner"></span>Loading ${escapeHtml(label)}…</p>`;
+}
+
 // Rebuild a scrollable container's contents while keeping its scroll
 // position - a plain innerHTML replace resets scrollTop to 0, which is
 // disruptive on every 5s poll if the user is mid-scroll through a list.
@@ -176,7 +194,7 @@ function initTheme() {
 // ---------------------------------------------------------------------
 
 function initTopbar() {
-  const input = qs("#logPathInput");
+  const input = qs("#jobDirInput");
 
   qs("#loadBtn").addEventListener("click", () => {
     addJobs(input.value);
@@ -206,7 +224,17 @@ function initTopbar() {
   qs("#browseBtn").addEventListener("click", () => openBrowse(state.browsePath));
   qs("#browseCloseBtn").addEventListener("click", () => qs("#browseModal").classList.add("hidden"));
   qs("#browseAddSelectedBtn").addEventListener("click", () => {
-    if (!browseSelectedPaths.size) return;
+    // Nothing ticked - add whichever directory is currently being
+    // looked at, rather than requiring a tick on it too (you're
+    // already looking right at it). One or more ticked - add exactly
+    // those instead, ignoring the current directory unless it's also
+    // ticked. See updateBrowseSelectedCount() for the matching label.
+    if (!browseSelectedPaths.size) {
+      if (!state.browsePath) return;
+      addJobs(state.browsePath);
+      qs("#browseModal").classList.add("hidden");
+      return;
+    }
     addJobs(Array.from(browseSelectedPaths).join("\n"));
     qs("#browseModal").classList.add("hidden");
   });
@@ -292,14 +320,47 @@ function resetPerJobViewState() {
 
   // Clear anything already drawn immediately, rather than leaving the
   // previous job's structure on screen until the next tab visit's fetch
-  // happens to overwrite it.
-  ["#backboneViewer", "#modelViewer", "#resultViewer"].forEach((sel) => {
-    const el = qs(sel);
-    if (el) el.innerHTML = "";
-  });
+  // happens to overwrite it. Disposing the NGL Stage (not just wiping the
+  // DOM) matters: innerHTML="" only detaches the canvas, it doesn't stop
+  // the Stage's own render loop or release its WebGL context - left
+  // alone, every job switch would silently leak one more live context
+  // that runs forever, which is exactly the kind of thing that eventually
+  // makes an *unrelated* viewer's rotation stutter after a long session
+  // (WebGL contexts are a small, browser-capped resource; once that cap
+  // is hit the browser starts evicting/thrashing them).
+  ["#backboneViewer", "#modelViewer", "#resultViewer"].forEach(disposeViewer);
   const backboneLabel = qs("#backboneViewerLabel"); if (backboneLabel) backboneLabel.textContent = "";
   const modelLabel = qs("#modelViewerLabel"); if (modelLabel) modelLabel.textContent = "";
   const resultsSeq = qs("#resultsSequenceContent"); if (resultsSeq) resultsSeq.innerHTML = "";
+}
+
+// Which tab owns which of the job's own 3D viewers, and how to make that
+// tab reload its structure from scratch next time it's opened (clearing
+// just the "already loaded" key, not the whole tab's data/filters/etc -
+// unlike resetPerJobViewState() above, this runs on every plain tab
+// click, not just a job switch, so it has to be cheap and non-destructive
+// of anything other than the viewer itself).
+const JOB_TAB_VIEWER = {
+  backbones: { selector: "#backboneViewer", onDispose: () => { state.loadedBackboneKey = null; } },
+  models: { selector: "#modelViewer", onDispose: () => { state.loadedModelStructureKey = null; state.loadedModelConfKey = null; } },
+  results: { selector: "#resultViewer", onDispose: () => resultsView.dropLoadedKey() },
+};
+
+// Only one of the job's own 3D viewers is ever live at a time now - each
+// one is a real WebGL context, and a browser session that's visited every
+// tab at least once (an ordinary session, over time) would otherwise keep
+// 3 of them running simultaneously in the background even though at most
+// one is ever visible. Trades instant switch-back (the tab you're
+// returning to re-fetches and re-renders instead of being already there)
+// for a real, direct cut to how much GPU work is competing with whichever
+// viewer you're actually looking at.
+function disposeInactiveJobTabViewers(exceptTab) {
+  Object.entries(JOB_TAB_VIEWER).forEach(([tab, v]) => {
+    if (tab === exceptTab) return;
+    if (!viewerRegistry[v.selector]) return; // nothing loaded there - nothing to do
+    disposeViewer(v.selector);
+    v.onDispose();
+  });
 }
 
 // The current directory's raw listing (from the last successful
@@ -316,9 +377,13 @@ let browseListing = { parent: null, entries: [] };
 // before this.
 let browseSelectedPaths = new Set();
 
-// File rows get a checkbox instead of loading immediately on click, so
-// several jobs can be picked in one visit before committing with "Add
-// selected jobs" (directories still navigate on click, same as before).
+// A job is tracked by directory now, so directory rows get the checkbox
+// (several jobs can be picked in one visit before committing with "Add
+// selected jobs") - clicking the checkbox selects without navigating,
+// clicking anywhere else on the row still navigates into it, same
+// threading trick this used for file rows before. /api/browse only
+// returns directories now (see its own docstring in app.py) - there's
+// nothing else in this listing to interact with.
 async function openBrowse(path) {
   qs("#browseModal").classList.remove("hidden");
   qs("#browseFilterInput").value = "";
@@ -335,7 +400,6 @@ async function openBrowse(path) {
     state.browsePath = data.path;
     qs("#browsePath").textContent = data.path;
     browseListing = { parent: data.parent, entries: data.entries };
-    if (data.preselect) browseSelectedPaths.add(data.preselect);
     renderBrowseEntries("");
     updateBrowseSelectedCount();
   } catch (err) {
@@ -369,19 +433,21 @@ function renderBrowseEntries(filterText) {
   filtered.forEach((e) => {
     const div = document.createElement("div");
     div.className = "browse-entry";
-    if (e.is_dir) {
-      div.innerHTML = `📁 ${escapeHtml(e.name)}`;
-      div.addEventListener("click", () => openBrowse(e.path));
-    } else {
-      const checked = browseSelectedPaths.has(e.path) ? "checked" : "";
-      div.innerHTML = `<input type="checkbox" data-path="${escapeHtml(e.path)}" ${checked}> 📄 ${escapeHtml(e.name)}`;
-      const cb = div.querySelector("input");
-      cb.addEventListener("change", () => {
-        if (cb.checked) browseSelectedPaths.add(e.path); else browseSelectedPaths.delete(e.path);
-        updateBrowseSelectedCount();
-      });
-      div.addEventListener("click", (ev) => { if (ev.target.tagName !== "INPUT") cb.click(); });
-    }
+    const checked = browseSelectedPaths.has(e.path) ? "checked" : "";
+    div.innerHTML = `<input type="checkbox" data-path="${escapeHtml(e.path)}" ${checked}> 📁 ${escapeHtml(e.name)}`;
+    const cb = div.querySelector("input");
+    cb.addEventListener("change", () => {
+      if (cb.checked) browseSelectedPaths.add(e.path); else browseSelectedPaths.delete(e.path);
+      updateBrowseSelectedCount();
+    });
+    // Checking/unchecking the box selects it as a job to add; clicking
+    // anywhere else on the row still navigates into it, same as a plain
+    // file manager - the two aren't mutually exclusive (you can select a
+    // job directory to add *and* still look inside it).
+    div.addEventListener("click", (ev) => {
+      if (ev.target === cb) return;
+      openBrowse(e.path);
+    });
     wrap.appendChild(div);
   });
 }
@@ -389,7 +455,14 @@ function renderBrowseEntries(filterText) {
 function updateBrowseSelectedCount() {
   const n = browseSelectedPaths.size;
   qs("#browseSelectedCount").textContent = n ? `${n} selected` : "";
-  qs("#browseAddSelectedBtn").disabled = n === 0;
+  const btn = qs("#browseAddSelectedBtn");
+  // Nothing ticked - the button falls back to adding whichever directory
+  // is currently open (see its click handler), so it says that instead
+  // and is never disabled for having zero selections; only actually
+  // disabled if there's nowhere to even fall back to (no directory
+  // successfully opened yet).
+  btn.textContent = n ? "Add selected jobs" : "Add current directory";
+  btn.disabled = n === 0 && !state.browsePath;
 }
 
 // ---------------------------------------------------------------------
@@ -399,9 +472,9 @@ function updateBrowseSelectedCount() {
 
 const JOBS_STORAGE_KEY = "prosculpt_dashboard_jobs";
 
-function jobLabel(logPath) {
-  const base = basename(logPath);
-  return base.replace(/\.[^.]+$/, "") || logPath;
+function jobLabel(jobDir) {
+  const base = basename(jobDir);
+  return base.replace(/\.[^.]+$/, "") || jobDir;
 }
 
 function persistJobs() {
@@ -416,7 +489,7 @@ function loadJobsFromStorage() {
   // Backward compatibility: a pre-multi-job session only ever persisted a
   // single active log path (STORAGE_KEY) - fold that in as a tracked job
   // too so upgrading doesn't silently drop what was already loaded.
-  if (state.logPath && !state.jobs.includes(state.logPath)) state.jobs.unshift(state.logPath);
+  if (state.jobDir && !state.jobs.includes(state.jobDir)) state.jobs.unshift(state.jobDir);
 }
 
 // Splits on newlines or commas so pasting several paths at once (or the
@@ -425,7 +498,7 @@ function loadJobsFromStorage() {
 //
 // switchToLast defaults to true (a human explicitly adding job(s) clearly
 // wants to see the last one) but is passed false by Run Job's background
-// auto-promotion (see pollPendingRuns() in run_job.js) - that call site
+// auto-promotion (see addSubmittedJobToTracking() in run_job.js) - that call site
 // can fire repeatedly in quick succession as a multi-task array job's
 // tasks are discovered one at a time, and switchToJob() is not idempotent
 // enough to call back-to-back like that: it resets per-job view state
@@ -454,17 +527,17 @@ function addJobs(rawInput, switchToLast = true) {
   else if (state.topView === "all-overview") renderAllOverview(); // reflect the new card even without switching to it
 }
 
-function removeJob(logPath) {
-  const idx = state.jobs.indexOf(logPath);
+function removeJob(jobDir) {
+  const idx = state.jobs.indexOf(jobDir);
   if (idx === -1) return;
   state.jobs.splice(idx, 1);
-  delete state.jobStatuses[logPath];
+  delete state.jobStatuses[jobDir];
   persistJobs();
-  if (state.logPath === logPath && state.topView === "job") {
+  if (state.jobDir === jobDir && state.topView === "job") {
     if (state.jobs.length) {
       switchToJob(state.jobs[0]);
     } else {
-      state.logPath = "";
+      state.jobDir = "";
       localStorage.removeItem(STORAGE_KEY);
       stopPolling();
       showTopView("all-overview");
@@ -475,9 +548,9 @@ function removeJob(logPath) {
   }
 }
 
-function switchToJob(logPath) {
-  state.logPath = logPath;
-  localStorage.setItem(STORAGE_KEY, logPath);
+function switchToJob(jobDir) {
+  state.jobDir = jobDir;
+  localStorage.setItem(STORAGE_KEY, jobDir);
   prepareForNewJob();
   refreshAll(true);
   // Jump back to the Overview tab for the newly-active job, rather than
@@ -489,6 +562,7 @@ function switchToJob(logPath) {
 }
 
 function showTopView(view) {
+  const prevView = state.topView;
   state.topView = view;
   qs("#jobView").classList.toggle("hidden", view !== "job");
   qs("#tab-all-overview").classList.toggle("hidden", view !== "all-overview");
@@ -496,28 +570,53 @@ function showTopView(view) {
   renderJobTabsBar();
   renderActiveJobBanner();
   if (view === "all-overview") renderAllOverview();
-  else if (view === "all-results") allResultsView.load();
+  else if (view === "all-results") allResultsView.load(true);
+  // Only one 3D viewer stays live at a time overall, not just within the
+  // job view's own tabs (see disposeInactiveJobTabViewers()) - leaving
+  // "job" entirely, or leaving "all-results", drops whichever viewer(s)
+  // that view owned, since none of them can still be visible from here.
+  if (prevView !== view) {
+    if (prevView === "job") disposeInactiveJobTabViewers(null);
+    else if (prevView === "all-results") {
+      disposeViewer("#allResultViewer");
+      allResultsView.dropLoadedKey();
+    }
+  }
 }
 
-function statusClassFor(logPath) {
-  const entry = state.jobStatuses[logPath];
+// Like activeTaskView(), but always the first task - used for the job
+// chips / All jobs overview cards, which show one glance-at-a-time summary
+// per *job*, not per selected task (that's what opening the job's own
+// Overview tab, with its task switcher, is for).
+function firstTaskView(status) {
+  if (!status || status.error || !status.tasks || !status.tasks.length) return null;
+  const task = status.tasks[0];
+  return { ...task, job_dir: status.job_dir, num_tasks: status.num_tasks };
+}
+
+function statusClassFor(jobDir) {
+  const entry = state.jobStatuses[jobDir];
   if (!entry || !entry.status || entry.status.error) return "";
   const status = entry.status;
-  if (status.cancelled) return "cancelled";
-  if (status.crash && status.crash.crashed) return "crashed";
-  if (status.stage === "finished") return "finished";
+  if (isTerminalStatus(status)) {
+    if (status.cancelled) return "cancelled";
+    if (status.crashed) return "crashed";
+    return "finished";
+  }
   return "running";
 }
 
-function statusTextFor(logPath) {
-  const entry = state.jobStatuses[logPath];
+function statusTextFor(jobDir) {
+  const entry = state.jobStatuses[jobDir];
   if (!entry || !entry.status) return "loading…";
   const status = entry.status;
   if (status.error) return "error";
   if (status.cancelled) return "cancelled";
-  if (status.crash && status.crash.crashed) return "crashed";
-  if (status.stage === "finished") return "finished";
-  return STAGE_LABEL[status.stage] || status.stage || "running";
+  if (status.crashed) return "crashed";
+  if (status.finished) return "finished";
+  const task = firstTaskView(status);
+  if (!task) return "pending";
+  return STAGE_LABEL[task.stage] || task.stage || "running";
 }
 
 function renderJobTabsBar() {
@@ -526,15 +625,15 @@ function renderJobTabsBar() {
   });
   const wrap = qs("#jobChips");
   wrap.innerHTML = "";
-  state.jobs.forEach((logPath) => {
+  state.jobs.forEach((jobDir) => {
     const chip = document.createElement("button");
-    chip.className = "job-chip" + (state.topView === "job" && state.logPath === logPath ? " active" : "");
-    chip.innerHTML = `<span class="job-chip-dot ${statusClassFor(logPath)}"></span>` +
-      `<span title="${escapeHtml(logPath)}">${escapeHtml(jobLabel(logPath))}</span>` +
+    chip.className = "job-chip" + (state.topView === "job" && state.jobDir === jobDir ? " active" : "");
+    chip.innerHTML = `<span class="job-chip-dot ${statusClassFor(jobDir)}"></span>` +
+      `<span title="${escapeHtml(jobDir)}">${escapeHtml(jobLabel(jobDir))}</span>` +
       `<span class="job-chip-remove" title="Stop tracking this job">✕</span>`;
     chip.addEventListener("click", (e) => {
-      if (e.target.closest(".job-chip-remove")) { removeJob(logPath); return; }
-      switchToJob(logPath);
+      if (e.target.closest(".job-chip-remove")) { removeJob(jobDir); return; }
+      switchToJob(jobDir);
     });
     wrap.appendChild(chip);
   });
@@ -542,10 +641,10 @@ function renderJobTabsBar() {
 
 function renderActiveJobBanner() {
   const el = qs("#activeJobBanner");
-  if (state.topView !== "job" || !state.logPath) { el.classList.add("hidden"); return; }
+  if (state.topView !== "job" || !state.jobDir) { el.classList.add("hidden"); return; }
   el.classList.remove("hidden");
-  el.innerHTML = `Viewing job: <b>${escapeHtml(jobLabel(state.logPath))}</b> ` +
-    `<span class="muted" title="${escapeHtml(state.logPath)}">(${escapeHtml(state.logPath)})</span>`;
+  el.innerHTML = `Viewing job: <b>${escapeHtml(jobLabel(state.jobDir))}</b> ` +
+    `<span class="muted" title="${escapeHtml(state.jobDir)}">(${escapeHtml(state.jobDir)})</span>`;
 }
 
 // Picks which of RFdiffusion's or the modeling stage's own progress
@@ -583,28 +682,29 @@ function jobOverviewProgress(status) {
 // backbones × sequences/backbone" planned-designs math) - so switching
 // to a job's own Overview tab never shows different math than this
 // glanced-at-from-the-list version did.
-function renderJobOverviewCard(logPath) {
-  const cls = statusClassFor(logPath);
+function renderJobOverviewCard(jobDir) {
+  const cls = statusClassFor(jobDir);
   const badgeClass = cls === "finished" ? "passed" : (cls === "crashed" || cls === "cancelled") ? "failed_filter" : "pending";
-  const label = jobLabel(logPath);
+  const label = jobLabel(jobDir);
   const head = `
     <div class="job-overview-head">
       <span class="job-chip-dot ${cls}"></span>
-      <span class="job-overview-name" title="${escapeHtml(logPath)}">${escapeHtml(label)}</span>
-      <span class="badge ${badgeClass}">${escapeHtml(statusTextFor(logPath))}</span>
+      <span class="job-overview-name" title="${escapeHtml(jobDir)}">${escapeHtml(label)}</span>
+      <span class="badge ${badgeClass}">${escapeHtml(statusTextFor(jobDir))}</span>
     </div>`;
 
-  const entry = state.jobStatuses[logPath];
+  const entry = state.jobStatuses[jobDir];
   const status = entry && entry.status;
-  if (!status || status.error) {
-    const msg = status && status.error ? status.error : "Loading…";
-    return `<div class="job-overview-card" data-log="${escapeHtml(logPath)}">${head}<p class="muted" style="margin:8px 0 0">${escapeHtml(msg)}</p></div>`;
+  const task = status ? firstTaskView(status) : null;
+  if (!status || status.error || !task) {
+    const msg = status && status.error ? status.error : (status ? "No task has started writing output yet." : "Loading…");
+    return `<div class="job-overview-card" data-log="${escapeHtml(jobDir)}">${head}<p class="muted" style="margin:8px 0 0">${escapeHtml(msg)}</p></div>`;
   }
 
-  const progress = jobOverviewProgress(status);
-  const backboneSummary = status.backbones_summary || {};
+  const progress = jobOverviewProgress(task);
+  const backboneSummary = task.backbones_summary || {};
   const accepted = backboneSummary.accepted; // null until filtering has finished
-  const perBackbone = status.config ? status.config.num_seq_per_target_mpnn : null;
+  const perBackbone = task.config ? task.config.num_seq_per_target_mpnn : null;
   const finalDesigns = (typeof accepted === "number" && typeof perBackbone === "number") ? accepted * perBackbone : null;
 
   const boxes = [
@@ -616,7 +716,7 @@ function renderJobOverviewCard(logPath) {
   const boxesHtml = boxes.map((b) => `<div class="stat-box"><div class="label">${escapeHtml(b.label)}</div><div class="value small">${escapeHtml(String(b.value))}</div></div>`).join("");
   const bar = progress ? `<div class="progress-bar-outer" style="margin:10px 0 0"><div class="progress-bar-inner" style="width:${progress.pct}%"></div></div>` : "";
 
-  return `<div class="job-overview-card" data-log="${escapeHtml(logPath)}">${head}${bar}<div class="status-grid job-overview-grid">${boxesHtml}</div></div>`;
+  return `<div class="job-overview-card" data-log="${escapeHtml(jobDir)}">${head}${bar}<div class="status-grid job-overview-grid">${boxesHtml}</div></div>`;
 }
 
 function renderAllOverview() {
@@ -625,7 +725,7 @@ function renderAllOverview() {
     el.innerHTML = `<p class="muted">Add a job above to get started.</p>`;
     return;
   }
-  el.innerHTML = state.jobs.map((logPath) => renderJobOverviewCard(logPath)).join("");
+  el.innerHTML = state.jobs.map((jobDir) => renderJobOverviewCard(jobDir)).join("");
   qsa(".job-overview-card", el).forEach((card) => {
     card.addEventListener("click", () => switchToJob(card.dataset.log));
   });
@@ -678,22 +778,22 @@ function initAppModeTabs() {
 // job once it's reached a terminal state, same reasoning as
 // stopPollingForTerminalState() for the active job's own polling: no
 // point re-fetching something that can't change anymore.
-async function fetchJobStatus(logPath) {
+async function fetchJobStatus(jobDir) {
   try {
-    const status = await apiGet("/api/status", { log: logPath });
-    state.jobStatuses[logPath] = { status, terminal: !status.error && isTerminalStatus(status) };
+    const status = await apiGet("/api/status", { job_dir: jobDir });
+    state.jobStatuses[jobDir] = { status, terminal: !status.error && isTerminalStatus(status) };
   } catch (e) {
-    state.jobStatuses[logPath] = { status: { error: e.message }, terminal: false };
+    state.jobStatuses[jobDir] = { status: { error: e.message }, terminal: false };
   }
   renderJobTabsBar();
   if (state.topView === "all-overview") renderAllOverview();
 }
 
 function refreshAllJobStatuses() {
-  state.jobs.forEach((logPath) => {
-    const entry = state.jobStatuses[logPath];
+  state.jobs.forEach((jobDir) => {
+    const entry = state.jobStatuses[jobDir];
     if (entry && entry.terminal) return;
-    fetchJobStatus(logPath);
+    fetchJobStatus(jobDir);
   });
 }
 
@@ -714,17 +814,18 @@ function initTabs() {
       btn.classList.add("active");
       qs(`#tab-${btn.dataset.tab}`).classList.add("active");
       state.activeTab = btn.dataset.tab;
-      refreshActiveTabData();
+      disposeInactiveJobTabViewers(state.activeTab);
+      refreshActiveTabData(true);
     });
   });
 }
 
-function refreshActiveTabData() {
-  if (!state.logPath) return;
-  if (state.activeTab === "backbones") loadBackbones();
-  else if (state.activeTab === "sequences") loadSequences();
-  else if (state.activeTab === "models") loadModels();
-  else if (state.activeTab === "results") resultsView.load();
+function refreshActiveTabData(showLoadingState) {
+  if (!state.jobDir) return;
+  if (state.activeTab === "backbones") loadBackbones(showLoadingState);
+  else if (state.activeTab === "sequences") loadSequences(showLoadingState);
+  else if (state.activeTab === "models") loadModels(showLoadingState);
+  else if (state.activeTab === "results") resultsView.load(showLoadingState);
   else if (state.activeTab === "error") loadErrorTab();
   else if (state.activeTab === "outputlog") loadOutputLog();
 }
@@ -738,11 +839,11 @@ function refreshActiveTabData() {
 // way to know - a job just added by pasting a log path was never
 // necessarily submitted through the Run job tab, so there's no target on
 // record for it) and requires an explicit "I'm sure" confirmation before
-// the request is ever sent. jobId/logPath are captured once when the modal
+// the request is ever sent. jobId/jobDir are captured once when the modal
 // opens (rather than re-read from state.lastStatus at submit time) so a
 // poll tick landing mid-dialog can't quietly swap out which job the button
 // is about to cancel.
-let cancelJobCtx = { jobId: null, logPath: null };
+let cancelJobCtx = { jobId: null, jobDir: null };
 
 function initCancelJobModal() {
   qs("#cancelJobBtn").addEventListener("click", openCancelJobModal);
@@ -754,9 +855,13 @@ function initCancelJobModal() {
 }
 
 async function openCancelJobModal() {
-  if (!state.logPath) return;
-  const job = (state.lastStatus && state.lastStatus.job_info) || {};
-  cancelJobCtx = { jobId: job.job_id || null, logPath: state.logPath };
+  if (!state.jobDir) return;
+  // job_id comes from the *selected task's* own log now (job_info is
+  // per-task) - cancelling only ever affects that one task's SLURM job
+  // anyway, never the whole array, so this is exactly the right scope.
+  const task = activeTaskView(state.lastStatus);
+  const job = (task && task.job_info) || {};
+  cancelJobCtx = { jobId: job.job_id || null, jobDir: state.jobDir };
 
   const resultEl = qs("#cancelJobResult");
   resultEl.classList.add("hidden");
@@ -768,10 +873,11 @@ async function openCancelJobModal() {
   qs("#cancelJobBackBtn").disabled = false;
 
   const intro = qs("#cancelJobIntro");
+  const taskLabel = task ? ` (task ${task.task_num})` : "";
   if (cancelJobCtx.jobId) {
-    intro.innerHTML = `Cancel SLURM job <b>#${escapeHtml(cancelJobCtx.jobId)}</b> for <b>${escapeHtml(jobLabel(state.logPath))}</b>? This runs <code>scancel</code> on the cluster right away - it cannot be undone.`;
+    intro.innerHTML = `Cancel SLURM job <b>#${escapeHtml(cancelJobCtx.jobId)}</b> for <b>${escapeHtml(jobLabel(state.jobDir))}${taskLabel}</b>? This runs <code>scancel</code> on the cluster right away - it cannot be undone.`;
   } else {
-    intro.innerHTML = `This job's SLURM job ID hasn't been found in its log yet (it may not have started running), so it can't be cancelled from here yet. Try again once the <b>Overview</b> tab shows a "Slurm job" number.`;
+    intro.innerHTML = `This task's SLURM job ID hasn't been found (no log found for it, or it may not have started running yet), so it can't be cancelled from here. Try again once the <b>Overview</b> tab shows a "Slurm job" number, or select a different task above if this job has more than one.`;
   }
   checkbox.disabled = !cancelJobCtx.jobId;
 
@@ -842,7 +948,7 @@ async function doCancelJob() {
     if (data.ok) {
       resultEl.className = "ok";
       resultEl.textContent = `Sent scancel for job #${jobId}. It may take a few seconds for the cluster to actually stop the job - the status banners here will update on the next refresh.`;
-      if (state.logPath === cancelJobCtx.logPath) refreshAll(false);
+      if (state.jobDir === cancelJobCtx.jobDir) refreshAll(false);
     } else {
       resultEl.className = "err";
       resultEl.textContent = data.error || data.stderr || data.stdout || "scancel failed for an unknown reason.";
@@ -873,13 +979,20 @@ function stopPolling() {
   state.pollTimer = null;
 }
 
+// Accepts either shape: a raw job-level payload (top-level finished/
+// crashed booleans, aggregated across every task - see get_job_status() in
+// parser.py, and jobStatuses' own use for the job chips/All-jobs cards) or
+// a single flattened task view (activeTaskView() below - stage/crash.crashed,
+// matching what the rest of the Overview tab's rendering already expects).
 function isTerminalStatus(status) {
+  if (!status) return false;
+  if (status.finished || status.crashed) return true;
   return status.stage === "finished" || !!(status.crash && status.crash.crashed) || !!status.cancelled;
 }
 
 function terminalReason(status) {
   if (status.cancelled) return "job was cancelled";
-  if (status.crash && status.crash.crashed) return "job crashed";
+  if (status.crashed || (status.crash && status.crash.crashed)) return "job crashed";
   return "job finished";
 }
 
@@ -893,17 +1006,56 @@ function stopPollingForTerminalState(status) {
 }
 
 async function refreshAll(showLoadingState) {
-  if (!state.logPath) return;
+  if (!state.jobDir) return;
   await loadStatus(showLoadingState);
-  refreshActiveTabData();
+  refreshActiveTabData(showLoadingState);
 }
 
 // ---------------------------------------------------------------------
 // Overview / status
 // ---------------------------------------------------------------------
 
+// Picks which task's own detail the single-task-shaped Overview rendering
+// (renderStepper/renderOverview/etc., unchanged since before this job was
+// tracked by directory instead of log path) actually shows, and reshapes
+// it to look like the old single-job status payload those functions
+// already expect - job-level fields (job_dir, num_tasks, any_log_found)
+// merged on top of the selected task's own (stage, job_info, timing, ...).
+// state.selectedTaskNum defaults to the first task and is changed by the
+// task-switcher (renderTaskSwitcher()) for a num_tasks > 1 job. Returns
+// null if the job has no tasks at all yet (freshly staged, nothing
+// written yet - not an error, just nothing to show a single task's worth
+// of detail for).
+function activeTaskView(status) {
+  if (!status || status.error || !status.tasks || !status.tasks.length) return null;
+  let task = status.tasks.find((t) => t.task_num === state.selectedTaskNum);
+  if (!task) {
+    task = status.tasks[0];
+    state.selectedTaskNum = task.task_num;
+  }
+  return {
+    ...task,
+    job_dir: status.job_dir,
+    num_tasks: status.num_tasks,
+    all_tasks: status.tasks,
+    any_log_found: status.any_log_found,
+    all_logs_found: status.all_logs_found,
+    location: { output_dir: task.task_dir },
+  };
+}
+
 async function loadStatus(showLoadingState) {
   const errBanner = qs("#errorBanner");
+  // Only on an actual job switch / explicit Load (not routine poll ticks,
+  // which would otherwise flash a spinner over perfectly fine content every
+  // few seconds) - clear the previous job's Overview content immediately
+  // rather than leaving it on screen for the entire fetch.
+  if (showLoadingState) {
+    qs("#stepper").innerHTML = "";
+    qs("#stageCard").innerHTML = "";
+    qs("#overviewCard").innerHTML = loadingPlaceholder("job status");
+    qs("#taskSwitcher").innerHTML = "";
+  }
   try {
     const status = await apiGet("/api/status");
     state.lastStatus = status;
@@ -912,19 +1064,116 @@ async function loadStatus(showLoadingState) {
       errBanner.classList.remove("hidden");
       qs("#stepper").innerHTML = "";
       qs("#stageCard").innerHTML = "";
-      qs("#overviewCard").innerHTML = `<p class="muted">Fix the log path above and click Load again.</p>`;
+      qs("#overviewCard").innerHTML = `<p class="muted">Fix the directory path above and click Load again.</p>`;
       qs("#timingCard").classList.add("hidden");
+      qs("#taskSwitcher").innerHTML = "";
       return;
     }
     errBanner.classList.add("hidden");
-    renderStepper(status);
-    renderOverview(status);
-    renderModelsCycleNote(status);
-    if (isTerminalStatus(status)) stopPollingForTerminalState(status);
+    renderTaskSwitcher(status);
+    if (state.selectedTaskNum === "all" && status.tasks && status.tasks.length > 1) {
+      renderAllTasksOverview(status);
+      if (isTerminalStatus(status)) stopPollingForTerminalState(status);
+      return;
+    }
+    const task = activeTaskView(status);
+    if (!task) {
+      qs("#stepper").innerHTML = "";
+      qs("#stageCard").innerHTML = "";
+      qs("#overviewCard").innerHTML = `<p class="muted">This job directory exists, but no task (01/02/...) has started writing output yet.</p>`;
+      qs("#timingCard").classList.add("hidden");
+      return;
+    }
+    renderStepper(task);
+    renderOverview(task);
+    renderModelsCycleNote(task);
+    if (isTerminalStatus(status)) stopPollingForTerminalState(task);
   } catch (err) {
     errBanner.textContent = err.message;
     errBanner.classList.remove("hidden");
   }
+}
+
+// Only visible for num_tasks > 1 - a row of small buttons, one per task
+// plus "All tasks", switching what the rest of the Overview tab shows:
+// either one task's full single-task detail (the same view every job
+// always showed before this - stepper, stage card, plan summary, ...) or,
+// for "All tasks", a grid of small per-task summary cards (see
+// renderAllTasksOverview()) mirroring the All jobs overview tab's own
+// per-job cards, one level down. state.selectedTaskNum holds either a
+// task number or the string "all".
+function renderTaskSwitcher(status) {
+  const el = qs("#taskSwitcher");
+  if (!status.tasks || status.tasks.length <= 1) {
+    el.innerHTML = "";
+    return;
+  }
+  const allCls = "job-tab-btn special" + (state.selectedTaskNum === "all" ? " active" : "");
+  const allBtn = `<button type="button" class="${allCls}" data-task="all">All tasks</button>`;
+  const taskBtns = status.tasks
+    .map((t) => {
+      const cls = "job-tab-btn" + (t.task_num === state.selectedTaskNum ? " active" : "");
+      const dot = isTerminalStatus(t) ? (t.crash?.crashed || t.cancelled ? "crashed" : "finished") : "running";
+      return `<button type="button" class="${cls}" data-task="${t.task_num}"><span class="job-chip-dot ${dot}"></span>Task ${t.task_num}</button>`;
+    })
+    .join("");
+  el.innerHTML = allBtn + taskBtns;
+  qsa("button[data-task]", el).forEach((btn) => {
+    btn.addEventListener("click", () => {
+      state.selectedTaskNum = btn.dataset.task === "all" ? "all" : parseInt(btn.dataset.task, 10);
+      loadStatus(false);
+    });
+  });
+}
+
+// One card per task, summarizing the same numbers a single task's own
+// Overview tab computes (reusing jobOverviewProgress(), which only reads
+// generic stage/rfdiffusion/modeling fields - already present on a task
+// object the same way they are on a job's firstTaskView()). Mirrors
+// renderJobOverviewCard()'s look one level down (tasks within a job,
+// rather than jobs within all-jobs).
+function renderTaskOverviewCard(task) {
+  const terminal = isTerminalStatus(task);
+  const cls = !terminal ? "running" : task.cancelled ? "cancelled" : (task.crash && task.crash.crashed) ? "crashed" : "finished";
+  const badgeClass = cls === "finished" ? "passed" : (cls === "crashed" || cls === "cancelled") ? "failed_filter" : "pending";
+  const statusText = cls === "running" ? (STAGE_LABEL[task.stage] || task.stage || "running") : cls;
+  const head = `
+    <div class="job-overview-head">
+      <span class="job-chip-dot ${cls}"></span>
+      <span class="job-overview-name">Task ${task.task_num}</span>
+      <span class="badge ${badgeClass}">${escapeHtml(statusText)}</span>
+    </div>`;
+
+  const progress = jobOverviewProgress(task);
+  const backboneSummary = task.backbones_summary || {};
+  const accepted = backboneSummary.accepted;
+  const perBackbone = task.config ? task.config.num_seq_per_target_mpnn : null;
+  const finalDesigns = (typeof accepted === "number" && typeof perBackbone === "number") ? accepted * perBackbone : null;
+
+  const boxes = [
+    progress ? { label: progress.label, value: progress.value } : { label: "Progress", value: "—" },
+    { label: "ETA (current stage)", value: progress && progress.eta != null ? fmtSeconds(progress.eta) : "—" },
+    { label: "Accepted backbones", value: accepted != null ? `${accepted} / ${backboneSummary.total ?? "?"}` : "pending" },
+    { label: "Total designs", value: finalDesigns != null ? finalDesigns.toLocaleString() : "—" },
+  ];
+  const boxesHtml = boxes.map((b) => `<div class="stat-box"><div class="label">${escapeHtml(b.label)}</div><div class="value small">${escapeHtml(String(b.value))}</div></div>`).join("");
+  const bar = progress ? `<div class="progress-bar-outer" style="margin:10px 0 0"><div class="progress-bar-inner" style="width:${progress.pct}%"></div></div>` : "";
+
+  return `<div class="job-overview-card" data-task="${task.task_num}">${head}${bar}<div class="status-grid job-overview-grid">${boxesHtml}</div></div>`;
+}
+
+function renderAllTasksOverview(status) {
+  qs("#stepper").innerHTML = "";
+  qs("#stageCard").innerHTML = "";
+  qs("#timingCard").classList.add("hidden");
+  const card = qs("#overviewCard");
+  card.innerHTML = status.tasks.map(renderTaskOverviewCard).join("");
+  qsa(".job-overview-card", card).forEach((el) => {
+    el.addEventListener("click", () => {
+      state.selectedTaskNum = parseInt(el.dataset.task, 10);
+      loadStatus(false);
+    });
+  });
 }
 
 function renderStepper(status) {
@@ -1095,15 +1344,16 @@ function renderStatusBanners(status) {
   const crash = status.crash || {};
   const errFile = status.err_file || {};
 
-  // output_dir_exists is only False once the log itself has told us where
-  // output_dir is - a job that's still in "setup" and hasn't reached that
-  // config-dump line yet has output_dir_exists === undefined here, not
-  // false, so this deliberately checks `=== false` rather than `!`.
+  // A task can now be tracked with no log at all found for it (never
+  // captured, or the job was submitted outside this dashboard) - progress
+  // counts still come straight from disk either way (see
+  // detect_stage_from_files() in parser.py), but whether it's actually
+  // still healthy vs. stalled/crashed can't be told apart without one, so
+  // this says so plainly rather than letting every tab just look "stuck".
   const outputDirBanner = qs("#outputDirBanner");
-  if (status.output_dir_exists === false) {
+  if (status.log_found === false) {
     outputDirBanner.classList.remove("hidden");
-    const resolvedPath = (status.location && status.location.output_dir) || "(unknown)";
-    outputDirBanner.innerHTML = `<span class="crash-icon">📁</span><div><b>Output directory not reachable from this machine.</b> The resolved path is <code>${escapeHtml(resolvedPath)}</code>, but it doesn't exist here, so Backbones/Sequences/Models/Results will stay empty until it does. If that same path opens fine when you paste it directly into File Explorer, the process running this dashboard likely can't see it even though you can: a mapped network drive is only visible within the Windows session it was connected in, so a dashboard started via Task Scheduler/as a background service may not see a drive mapped in your own interactive login.</div>`;
+    outputDirBanner.innerHTML = `<span class="crash-icon">📁</span><div><b>No log file found for this task.</b> Progress (backbones/sequences/models generated so far, and once it happens, "finished") is still tracked directly from files on disk - but whether this task is actually still healthy, stalled, or crashed can't be told apart without a log, and job id/node/timings/ETA aren't available either.</div>`;
   } else {
     outputDirBanner.classList.add("hidden");
   }
@@ -1191,25 +1441,25 @@ function renderModelingStage(m, cycleSuffix) {
 
 async function loadErrorTab() {
   const el = qs("#errorTabContent");
-  const status = state.lastStatus;
-  const errFile = status && status.err_file;
-  if (!errFile || !errFile.err_exists) {
+  const task = activeTaskView(state.lastStatus);
+  const errFile = task && task.err_file;
+  if (!task || !errFile || !errFile.err_exists) {
     el.innerHTML = `<p class="muted">No slurm error file found${errFile && errFile.err_path ? ` (looked for <code>${escapeHtml(errFile.err_path)}</code>)` : ""}.</p>`;
     return;
   }
   el.innerHTML = `<p class="muted">Loading…</p>`;
   try {
-    const data = await apiGet("/api/error_log");
+    const data = await apiGet("/api/error_log", { task: task.task_num });
     if (!data.err_exists) {
       el.innerHTML = `<p class="muted">No slurm error file found at <code>${escapeHtml(data.err_path || "?")}</code>.</p>`;
       return;
     }
     let banners = "";
-    if (status.crash && status.crash.crashed) {
+    if (task.crash && task.crash.crashed) {
       banners += `<div class="alert-banner"><span class="crash-icon">⚠</span><div><b>This job crashed.</b> The log contains "There was an error running the command."</div></div>`;
     }
-    if (status.cancelled) {
-      banners += `<div class="alert-banner"><span class="crash-icon">🛑</span><div><b>This job was cancelled.</b>${status.cancelled_line ? ` <code>${escapeHtml(status.cancelled_line)}</code>` : ""}</div></div>`;
+    if (task.cancelled) {
+      banners += `<div class="alert-banner"><span class="crash-icon">🛑</span><div><b>This job was cancelled.</b>${task.cancelled_line ? ` <code>${escapeHtml(task.cancelled_line)}</code>` : ""}</div></div>`;
     }
     const trunc = data.truncated
       ? `<p class="muted">(truncated — showing the first ${data.content.length.toLocaleString()} of ${data.size.toLocaleString()} bytes)</p>`
@@ -1238,14 +1488,20 @@ async function loadOutputLog() {
   // stops auto-scrolling once you scroll up to read something.
   const wasAtBottom = !prevPre || (prevPre.scrollTop + prevPre.clientHeight >= prevPre.scrollHeight - 20);
   const prevScrollTop = prevPre ? prevPre.scrollTop : 0;
+  const task = activeTaskView(state.lastStatus);
+  if (!task) { el.innerHTML = `<p class="muted">Load a job first.</p>`; return; }
   try {
-    const data = await apiGet("/api/output_log");
+    const data = await apiGet("/api/output_log", { task: task.task_num });
     if (data.error) throw new Error(data.error);
+    if (!data.log_found) {
+      el.innerHTML = `<p class="muted">No log file found for task ${task.task_num}.</p>`;
+      return;
+    }
     const trunc = data.truncated
       ? `<p class="muted">(truncated — showing the first ${data.content.length.toLocaleString()} of ${data.size.toLocaleString()} bytes)</p>`
       : "";
     el.innerHTML = `
-      <p class="muted">Contents of <code>${escapeHtml(state.logPath)}</code>:</p>
+      <p class="muted">Contents of <code>${escapeHtml(task.log_path || "")}</code>:</p>
       ${trunc}
       <pre class="log-pre" id="outputLogPre">${escapeHtml(data.content)}</pre>
     `;
@@ -1277,40 +1533,72 @@ function renderBackbonesFilterNote() {
   }
 }
 
+// Set by renderBackbonesList() to whatever it last actually drew, so the
+// next call (every poll tick, every 5s - see POLL_MS) can tell whether
+// the list's *contents* genuinely changed at all before paying for a
+// full DOM rebuild. This turned out to be the real cause of "viewer gets
+// stuttery with a big list": rebuilding hundreds/thousands of list items
+// (new elements + listeners, every one of them) on a fixed timer, on the
+// same single JS thread that also drives the 3D viewer's render loop, is
+// a real, size-proportional cost that has nothing to do with the 3D
+// view's own rendering complexity - it just happens often enough (and,
+// with a big list, takes long enough) to periodically steal the thread
+// out from under whatever's being rotated at that moment.
+let lastBackbonesListFingerprint = null;
+
 function renderBackbonesList() {
   const listEl = qs("#backbonesList");
+  const pagerEl = qs("#backbonesListPager");
   renderBackbonesFilterNote();
-  rerenderPreservingScroll(listEl, () => {
-    const all = state.backbonesCache || [];
-    const backbones = state.showFilteredBackbones ? all : all.filter((b) => b.status !== "failed_filter");
-    if (!backbones.length) {
-      listEl.innerHTML = all.length
-        ? `<p class="muted">All backbones were filtered out — toggle "Show filtered out" to see them.</p>`
-        : `<p class="muted">No backbones generated yet.</p>`;
-      return;
-    }
-    listEl.innerHTML = "";
-    backbones.forEach((b) => {
-      // A backbone only ever lives in one place at a time (1_rfdiff/ or
-      // 1_rfdiff/failed_filters/), so its name alone is a stable key -
-      // deliberately *not* including status, since status can legitimately
-      // change (pending -> passed) for the same backbone between polls,
-      // and that shouldn't look like a different backbone got selected.
-      const key = b.name;
-      const div = document.createElement("div");
-      div.className = "list-item" + (state.selectedBackboneKey === key ? " selected" : "");
-      div.dataset.key = key;
-      div.innerHTML = `<span>${escapeHtml(b.name)}</span><span class="badge ${b.status}">${BACKBONE_BADGE_LABEL[b.status] || b.status}</span>`;
-      div.addEventListener("click", () => selectBackbone(b));
-      listEl.appendChild(div);
+  const all = state.backbonesCache || [];
+  const backbones = state.showFilteredBackbones ? all : all.filter((b) => b.status !== "failed_filter");
+  if (!backbones.length) {
+    listEl.innerHTML = all.length
+      ? `<p class="muted">All backbones were filtered out — toggle "Show filtered out" to see them.</p>`
+      : `<p class="muted">No backbones generated yet.</p>`;
+    if (pagerEl) pagerEl.innerHTML = "";
+    lastBackbonesListFingerprint = null;
+    return;
+  }
+  const { pageRows, clamped } = pageOf(backbones, backbonesListPage, RESULTS_PAGE_SIZE);
+  backbonesListPage = clamped;
+  if (pagerEl) {
+    renderPagerControls(pagerEl, clamped, RESULTS_PAGE_SIZE, backbones.length, (newPage) => {
+      backbonesListPage = newPage;
+      renderBackbonesList();
     });
-    const current = backbones.find((b) => b.name === state.selectedBackboneKey) || backbones[0];
-    if (current) selectBackbone(current);
-  });
+  }
+  // Status is deliberately part of this (unlike the selection key below) -
+  // pending -> passed genuinely needs to redraw that row's badge. Only
+  // the current page's rows need fingerprinting - a change on some other,
+  // currently-unshown page gets picked up whenever that page is actually
+  // paged to (renderBackbonesList() re-slices fresh data every call).
+  const fingerprint = pageRows.map((b) => `${b.task_num}:${b.name}:${b.status}`).join("");
+  if (fingerprint !== lastBackbonesListFingerprint) {
+    lastBackbonesListFingerprint = fingerprint;
+    rerenderPreservingScroll(listEl, () => {
+      listEl.innerHTML = "";
+      pageRows.forEach((b) => {
+        const key = `${b.task_num}:${b.name}`;
+        const div = document.createElement("div");
+        div.className = "list-item" + (state.selectedBackboneKey === key ? " selected" : "");
+        div.dataset.key = key;
+        const taskLabel = `<span class="muted" style="margin-right:6px">T${b.task_num}</span>`;
+        div.innerHTML = `${taskLabel}<span>${escapeHtml(b.name)}</span><span class="badge ${b.status}">${BACKBONE_BADGE_LABEL[b.status] || b.status}</span>`;
+        div.addEventListener("click", () => selectBackbone(b));
+        listEl.appendChild(div);
+      });
+    });
+  }
+  // Selection lookup stays against the *full* filtered set (not just this
+  // page) - the selected backbone should keep loading in the viewer even
+  // if you've since paged away from where it's listed.
+  const current = backbones.find((b) => `${b.task_num}:${b.name}` === state.selectedBackboneKey) || backbones[0];
+  if (current) selectBackbone(current);
 }
-
-async function loadBackbones() {
+async function loadBackbones(showLoadingState) {
   const listEl = qs("#backbonesList");
+  if (showLoadingState) listEl.innerHTML = loadingPlaceholder("backbones");
   try {
     state.backbonesCache = await apiGet("/api/backbones");
     renderBackbonesList();
@@ -1320,7 +1608,10 @@ async function loadBackbones() {
 }
 
 async function selectBackbone(b) {
-  const key = b.name;
+  // Keyed by task too, not just name - the same backbone name ("_3") can
+  // exist under more than one task now that Backbones aggregates across
+  // all of a job's tasks (see /api/backbones in app.py).
+  const key = `${b.task_num}:${b.name}`;
   state.selectedBackboneKey = key;
   applyBackboneSelectionHighlight();
   // Same structure already showing - don't recreate the 3D viewer (that
@@ -1328,15 +1619,15 @@ async function selectBackbone(b) {
   // tick re-rendered the list.
   if (state.loadedBackboneKey === key) return;
   state.loadedBackboneKey = key;
-  qs("#backboneViewerLabel").textContent = `${b.name} (${b.status})`;
-  const url = `/api/backbone_pdb?log=${encodeURIComponent(state.logPath)}&name=${encodeURIComponent(b.name)}&status=${b.status}`;
+  qs("#backboneViewerLabel").textContent = `Task ${b.task_num} - ${b.name} (${b.status})`;
+  const url = `/api/backbone_pdb?job_dir=${encodeURIComponent(state.jobDir)}&task=${b.task_num}&name=${encodeURIComponent(b.name)}&status=${b.status}`;
   try {
     const res = await fetch(url);
     if (!res.ok) throw new Error(await fetchErrorMessage(res));
     const pdbText = await res.text();
     await renderMol("#backboneViewer", pdbText);
     if (state.backboneColorMode === "provenance") {
-      await applyProvenanceColoring("#backboneViewer", b.trb_path, qs("#backboneColorLegend"));
+      await applyProvenanceColoring("#backboneViewer", b.trb_path, qs("#backboneColorLegend"), { taskNum: b.task_num });
     }
   } catch (e) {
     qs("#backboneViewer").innerHTML = `<p class="muted" style="padding:20px">Could not load structure: ${escapeHtml(e.message)}</p>`;
@@ -1626,6 +1917,43 @@ function wireProvenanceLegendColorInputs(legendEl) {
 // that's deliberately showing provenance coloring.
 const viewerRegistry = {};
 
+
+// Properly tears down one viewer's NGL Stage (WebGL context + render
+// loop), not just its DOM - see resetPerJobViewState()'s own comment for
+// why innerHTML="" alone isn't enough. Shared by the per-job-switch reset
+// and by disposeInactiveJobTabViewers() below (only one of the job's own
+// 3D viewers stays alive at a time now, whichever tab is actually open).
+function disposeViewer(selector) {
+  const entry = viewerRegistry[selector];
+  if (entry && entry.stage) entry.stage.dispose();
+  delete viewerRegistry[selector];
+  const el = qs(selector);
+  if (el) el.innerHTML = "";
+}
+
+// Requests the high-performance GPU for NGL's WebGL context, on a
+// hybrid-graphics laptop that has one - NGL never sets powerPreference
+// itself (defaults to "default", which commonly means "prefer the
+// low-power GPU"). Not an image-quality tradeoff at all, just asking for
+// better hardware when it's available - kept even though it turned out
+// not to do anything on the machine this was diagnosed against (that
+// system doesn't support GPU switching for Chrome at all - no Optimus),
+// since other machines running this dashboard may support it.
+function createStageWithHighPerformanceGpu(el, params) {
+  const origGetContext = HTMLCanvasElement.prototype.getContext;
+  HTMLCanvasElement.prototype.getContext = function (type, attrs) {
+    if (typeof type === "string" && type.indexOf("webgl") !== -1) {
+      attrs = Object.assign({}, attrs, { powerPreference: "high-performance" });
+    }
+    return origGetContext.call(this, type, attrs);
+  };
+  try {
+    return new NGL.Stage(el, params);
+  } finally {
+    HTMLCanvasElement.prototype.getContext = origGetContext;
+  }
+}
+
 async function renderMol(selector, structureText, format = "pdb") {
   const el = qs(selector);
   if (!viewerRegistry[selector]) viewerRegistry[selector] = { stage: null, generation: 0 };
@@ -1638,7 +1966,9 @@ async function renderMol(selector, structureText, format = "pdb") {
   }
   el.innerHTML = "";
 
-  const stage = new NGL.Stage(el, { backgroundColor: BACKGROUND_PRESETS[viewerSettings.background] || BACKGROUND_PRESETS.black });
+  const stage = createStageWithHighPerformanceGpu(el, {
+    backgroundColor: BACKGROUND_PRESETS[viewerSettings.background] || BACKGROUND_PRESETS.black,
+  });
   // NGL wraps its canvas in a plain position:relative div sized with
   // literal pixel width/height (not percentages) - as an ordinary in-flow
   // child, that div's own size normally feeds right back into el's size
@@ -1701,15 +2031,23 @@ async function renderMol(selector, structureText, format = "pdb") {
 // NGL only re-fits its canvas on the browser *window* resizing, not on
 // its own container being resized some other way - without this, a
 // manually-resized viewer would keep rendering at its old size, stretched
-// or clipped to fill the new box. Attached once per selector (not once
-// per renderMol() call, which would happen every time a new structure
-// loads) since the callback always looks up the *current* stage by
-// selector rather than closing over one particular Stage instance, so it
-// keeps working across every structure that selector ever loads.
+// or clipped to fill the new box. Attached once per *container element*
+// (not once per renderMol() call, which would happen every time a new
+// structure loads, and not tracked on the viewerRegistry entry either -
+// that entry gets discarded and rebuilt on every job switch now (see
+// resetPerJobViewState()'s dispose fix), but el itself is the same static
+// container from the page's own HTML for the whole session, so tracking
+// "already observed" against the ephemeral entry would silently attach a
+// second, third, ... ResizeObserver to the same el after every job
+// switch, each one calling handleResize() on every future resize forever
+// - a slow-growing leak of its own). The callback always looks up the
+// *current* stage by selector rather than closing over one particular
+// Stage instance, so it keeps working across every structure (and every
+// job) that selector ever loads.
+const resizeObservedElements = new WeakSet();
 function ensureResizeObserver(selector, el) {
-  const entry = viewerRegistry[selector];
-  if (entry.resizeObserverAttached) return;
-  entry.resizeObserverAttached = true;
+  if (resizeObservedElements.has(el)) return;
+  resizeObservedElements.add(el);
   // ResizeObserver always fires once immediately after observe() starts,
   // reporting the element's *current* size even though nothing has
   // actually changed yet - reacting to that first call would run
@@ -1878,7 +2216,7 @@ function initColorControls() {
 // explanatory note in the legend slot) if there's no .trb path or the
 // fetch fails. Shared by the Backbones and Results tabs' "color residues
 // by" controls.
-async function applyProvenanceColoring(selector, trbPath, legendEl, logOverride) {
+async function applyProvenanceColoring(selector, trbPath, legendEl, opts) {
   const entry = viewerRegistry[selector];
   if (!entry) return;
   if (!trbPath) {
@@ -1889,7 +2227,12 @@ async function applyProvenanceColoring(selector, trbPath, legendEl, logOverride)
     return;
   }
   try {
-    const data = await apiGet("/api/trb", { path: trbPath, log: logOverride });
+    // opts: { jobDir, taskNum } - jobDir overrides the active job (the All
+    // jobs tabs, where a row/model/backbone isn't necessarily from the
+    // active job); taskNum is required now (/api/trb needs to know which
+    // task's own copy of a same-named .trb to read).
+    const { jobDir, taskNum } = opts || {};
+    const data = await apiGet("/api/trb", { path: trbPath, job_dir: jobDir, task: taskNum });
     if (data.error) throw new Error(data.error);
     const schemeId = makeProvenanceColorScheme(data.categories || []);
     entry.colorMode = "provenance";
@@ -2100,17 +2443,33 @@ function coloredSeq(seq, conservedChain) {
 }
 
 function renderRulerRow(chains) {
-  let out = '<div class="align-ruler"><div class="align-label"></div><div class="align-seq">';
+  // Every tick is a plain, always-blank flow box (exactly 1ch, matching
+  // the sequence rows' own .aa/.chain-sep grid character-for-character) -
+  // the position numbers themselves are rendered separately as absolutely
+  // positioned overlays on top, each placed at `left: Nch`. That's
+  // deliberate, not decorative: a 3+ digit residue number ("100", "1000",
+  // ...) does not fit inside a plain inline-block box declared exactly
+  // 1ch wide with white-space:nowrap - it overflows the box and visually
+  // smears across whatever sits next to it, which is exactly what "long
+  // sequences" (the ones that actually reach 3+ digit residue numbers)
+  // were doing before this. An absolutely positioned label has no box of
+  // its own to overflow - it just renders its natural width starting at
+  // its anchor point, so it can never disturb the tick grid or any other
+  // label no matter how many digits it has.
+  let flow = "";
+  let overlay = "";
   let pos = 0;
   chains.forEach((chain, ci) => {
     for (let i = 0; i < chain.length; i++) {
       pos++;
-      out += pos % 10 === 0 ? `<span class="tick">${pos}</span>` : `<span class="tick"></span>`;
+      flow += '<span class="tick"></span>';
+      if (pos % 10 === 0) {
+        overlay += `<span class="tick-num" style="left:${pos - 1}ch">${pos}</span>`;
+      }
     }
-    if (ci < chains.length - 1) out += '<span class="chain-sep"> </span>';
+    if (ci < chains.length - 1) flow += '<span class="chain-sep"> </span>';
   });
-  out += "</div></div>";
-  return out;
+  return `<div class="align-ruler"><div class="align-label"></div><div class="align-seq align-ruler-track">${flow}${overlay}</div></div>`;
 }
 
 function renderAlignmentBlock(rows, options = {}) {
@@ -2197,8 +2556,9 @@ function renderSequencesContent() {
   el.innerHTML = renderSeqGroup("Designed sequences", data.backbones) + renderSeqGroup("Monomer sequences", data.monomers);
 }
 
-async function loadSequences() {
+async function loadSequences(showLoadingState) {
   const el = qs("#sequencesContent");
+  if (showLoadingState) el.innerHTML = loadingPlaceholder("sequences");
   try {
     state.sequencesCache = await apiGet("/api/sequences");
     renderSequencesContent();
@@ -2223,7 +2583,9 @@ function renderModelsCycleNote(status) {
 }
 
 function modelKey(m) {
-  return `${m.model}|${m.sequence_name}|${m.model_index}|${m.variant || ""}`;
+  // task_num included - Models now aggregates every task in the job, and
+  // "model_1"/sequence names repeat per task.
+  return `${m.task_num}|${m.model}|${m.sequence_name}|${m.model_index}|${m.variant || ""}`;
 }
 
 function applyModelsSelectionHighlight() {
@@ -2232,37 +2594,66 @@ function applyModelsSelectionHighlight() {
   });
 }
 
+// See lastBackbonesListFingerprint's comment - same reasoning, and this
+// is the more important of the two in practice: Models aggregates every
+// task's every sequence's every sample, so it's routinely the largest
+// list in the whole dashboard, and was therefore the biggest single
+// contributor to "big list -> stuttery viewer" on a 5s poll timer.
+let lastModelsListFingerprint = null;
+
 function renderModelsList() {
   const listEl = qs("#modelsList");
+  const pagerEl = qs("#modelsListPager");
   const filterVal = (qs("#modelsFilter").value || "").toLowerCase();
   const models = state.modelsCache;
   if (!models.length) {
     listEl.innerHTML = `<p class="muted">No models generated yet.</p>`;
+    if (pagerEl) pagerEl.innerHTML = "";
+    lastModelsListFingerprint = null;
     return;
   }
-  rerenderPreservingScroll(listEl, () => {
-    listEl.innerHTML = "";
-    const visible = [];
-    models.forEach((m) => {
-      const label = `${m.model} / ${m.sequence_name}` + (m.model_index !== null && m.model_index !== undefined ? ` (model ${m.model_index})` : "");
-      if (filterVal && !label.toLowerCase().includes(filterVal)) return;
-      visible.push(m);
-      const key = modelKey(m);
-      const div = document.createElement("div");
-      div.className = "list-item" + (state.selectedModelKey === key ? " selected" : "");
-      div.dataset.key = key;
-      const badge = m.variant ? `<span class="badge ${m.variant}">${m.variant}</span>` : "";
-      div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span>${badge}`;
-      div.addEventListener("click", () => selectModel(m));
-      listEl.appendChild(div);
-    });
-    const current = visible.find((m) => modelKey(m) === state.selectedModelKey) || visible[0];
-    if (current) selectModel(current);
+  const visible = [];
+  models.forEach((m) => {
+    const label = `${m.model} / ${m.sequence_name}` + (m.model_index !== null && m.model_index !== undefined ? ` (model ${m.model_index})` : "");
+    if (filterVal && !label.toLowerCase().includes(filterVal)) return;
+    visible.push({ m, label });
   });
+  const { pageRows, clamped } = pageOf(visible, modelsListPage, RESULTS_PAGE_SIZE);
+  modelsListPage = clamped;
+  if (pagerEl) {
+    renderPagerControls(pagerEl, clamped, RESULTS_PAGE_SIZE, visible.length, (newPage) => {
+      modelsListPage = newPage;
+      renderModelsList();
+    });
+  }
+  // Only the current page's rows need fingerprinting - see
+  // renderBackbonesList()'s identical comment on this.
+  const fingerprint = pageRows.map(({ m, label }) => `${modelKey(m)}:${m.variant || ""}:${label}`).join("");
+  if (fingerprint !== lastModelsListFingerprint) {
+    lastModelsListFingerprint = fingerprint;
+    rerenderPreservingScroll(listEl, () => {
+      listEl.innerHTML = "";
+      pageRows.forEach(({ m, label }) => {
+        const key = modelKey(m);
+        const div = document.createElement("div");
+        div.className = "list-item" + (state.selectedModelKey === key ? " selected" : "");
+        div.dataset.key = key;
+        const badge = m.variant ? `<span class="badge ${m.variant}">${m.variant}</span>` : "";
+        div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span>${badge}`;
+        div.addEventListener("click", () => selectModel(m));
+        listEl.appendChild(div);
+      });
+    });
+  }
+  // Selection lookup stays against the *full* filtered set, same reasoning
+  // as renderBackbonesList().
+  const current = visible.find(({ m }) => modelKey(m) === state.selectedModelKey);
+  if (current) selectModel(current.m);
+  else if (visible.length) selectModel(visible[0].m);
 }
-
-async function loadModels() {
+async function loadModels(showLoadingState) {
   const listEl = qs("#modelsList");
+  if (showLoadingState) listEl.innerHTML = loadingPlaceholder("models");
   try {
     state.modelsCache = await apiGet("/api/models");
     renderModelsList();
@@ -2286,7 +2677,7 @@ async function selectModel(m) {
     state.loadedModelStructureKey = structureKey;
     const label = qs("#modelViewerLabel");
     if (structureKey) {
-      const url = `/api/model_pdb?log=${encodeURIComponent(state.logPath)}&path=${encodeURIComponent(m.structure_path)}`;
+      const url = `/api/model_pdb?job_dir=${encodeURIComponent(state.jobDir)}&task=${m.task_num}&path=${encodeURIComponent(m.structure_path)}`;
       try {
         const res = await fetch(url);
         if (!res.ok) throw new Error(await fetchErrorMessage(res));
@@ -2294,7 +2685,7 @@ async function selectModel(m) {
         await renderMol("#modelViewer", text, m.structure_format || "pdb");
         label.textContent = m.structure_format === "cif" ? "Preview from .cif — final .pdb not written yet" : "";
         if (state.modelsColorMode === "provenance") {
-          await applyProvenanceColoring("#modelViewer", m.trb_path, qs("#modelColorLegend"));
+          await applyProvenanceColoring("#modelViewer", m.trb_path, qs("#modelColorLegend"), { taskNum: m.task_num });
         }
         renderModelsSequencePanel();
       } catch (e) {
@@ -2314,7 +2705,7 @@ async function selectModel(m) {
     state.loadedModelConfKey = confKey;
     const metricsEl = qs("#modelMetrics");
     if (confKey) {
-      const url = `/api/model_confidence?log=${encodeURIComponent(state.logPath)}&path=${encodeURIComponent(confKey)}`;
+      const url = `/api/model_confidence?job_dir=${encodeURIComponent(state.jobDir)}&task=${m.task_num}&path=${encodeURIComponent(confKey)}`;
       const metrics = await fetch(url).then((r) => r.json());
       const rows = Object.entries(metrics).map(([k, v]) => `<tr><td>${escapeHtml(k)}</td><td>${escapeHtml(String(v))}</td></tr>`).join("");
       metricsEl.innerHTML = `<table>${rows}</table>`;
@@ -2496,6 +2887,26 @@ const RESULTS_PAGE_SIZE = 200;
 // Per sequence-length group in the alignment view - see renderAlignment().
 const ALIGN_GROUP_ROW_CAP = 100;
 
+// Same idea, same RESULTS_PAGE_SIZE cap, as the results list/table above
+// (see that comment) - applied to the Backbones and Models lists too.
+// Unlike Results, these two had *no* bound on DOM size at all before this
+// - a job with hundreds/thousands of models (very ordinary: backbones x
+// sequences x samples) meant every poll tick, and even just having the
+// tab open at all, kept that many live list-item elements (each with its
+// own click listener) sitting in the DOM permanently. That's not just an
+// NGL/WebGL problem - a DOM that large measurably slows down the whole
+// page (style/layout work, GC pressure from all those listeners), which
+// matches "the entire webapp feels sluggish, not just the viewer" - a
+// symptom pure rendering-quality or WebGL tuning was never going to fix.
+function pageOf(rows, page, pageSize) {
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const clamped = Math.max(0, Math.min(page, totalPages - 1));
+  const start = clamped * pageSize;
+  return { pageRows: rows.slice(start, start + pageSize), clamped, totalPages, start };
+}
+let backbonesListPage = 0;
+let modelsListPage = 0;
+
 // Small "‹ Prev  1–200 of 15,000  Next ›" footer, shared by the results
 // list and the metrics table. Renders nothing when everything already
 // fits on one page, so it's a no-op for the (very common) small-job case.
@@ -2529,6 +2940,15 @@ function createResultsView(cfg) {
     listPage: 0, tablePage: 0,
   };
   let loadedPdbKey = null;
+  // Set to a fingerprint of the last data load() actually processed - see
+  // load()'s own comment. Guards the *whole* ingest+render pipeline
+  // (ingestCsv + renderList/renderAlignment/renderCsvTableFn), not just
+  // one of the three - pagination bounds each of them to a fixed number
+  // of rows already, but "fixed and fairly large" (RESULTS_PAGE_SIZE
+  // rows x every column, or one <span> per residue in the alignment view)
+  // is still real, non-trivial work to redo from scratch every 5s poll
+  // tick for no reason when nothing on disk actually changed.
+  let lastDataFingerprint = null;
   let colorMode = "chain"; // "chain" | "provenance"
   // Per sequence-length group in the alignment view (keyed by the group's
   // length) - which ALIGN_GROUP_ROW_CAP-sized page is currently shown.
@@ -2539,7 +2959,7 @@ function createResultsView(cfg) {
     const objRows = rows.map((r, i) => {
       const obj = { __rowId: i };
       columns.forEach((c, ci) => { obj[c] = r[ci]; });
-      if (rowMeta && rowMeta[i]) { obj.__jobLogPath = rowMeta[i].log; obj.__origRowId = rowMeta[i].origRowId; }
+      if (rowMeta && rowMeta[i]) { obj.__jobDir = rowMeta[i].jobDir; obj.__origRowId = rowMeta[i].origRowId; }
       return obj;
     });
 
@@ -2631,10 +3051,34 @@ function createResultsView(cfg) {
     return { bg: `hsl(${hue}, 42%, 21%)`, accent: `hsl(${hue}, 70%, 52%)`, text: "#eef1f8" };
   }
 
-  async function load() {
+  async function load(showLoadingState) {
     const listEl = qs(cfg.ids.list);
+    if (showLoadingState) {
+      listEl.innerHTML = loadingPlaceholder("results");
+      qs(cfg.ids.csvWrap).innerHTML = loadingPlaceholder("results");
+      qs(cfg.ids.count).textContent = "";
+    }
     try {
       const data = await cfg.fetchData();
+      // The list/table/alignment views are each individually paginated
+      // (see pageOf()) so they're bounded, but "bounded" still means
+      // real, non-trivial DOM work (escaped/styled table cells, one
+      // <span> per residue in the alignment view, ...) - redoing all of
+      // that from scratch on every 5s poll tick regardless of whether
+      // anything on disk actually changed is exactly what was making the
+      // Results tab's viewer stutter on a job with a lot of models, the
+      // same root cause as the Backbones/Models lists (see
+      // lastBackbonesListFingerprint's comment) just one level up, since
+      // here it's cheaper to fingerprint the *fetched data* once than to
+      // fingerprint what each of the three views individually renders
+      // from it. showLoadingState skips this - a genuine tab switch (the
+      // placeholder set above needs to actually be replaced) always
+      // re-renders even if the data happens to be identical to last time.
+      const fingerprint = JSON.stringify(data);
+      if (!showLoadingState && fingerprint === lastDataFingerprint) {
+        return;
+      }
+      lastDataFingerprint = fingerprint;
       if (!data.csv_exists) {
         results.rows = [];
         if (!data.final_pdbs.length) {
@@ -2643,14 +3087,15 @@ function createResultsView(cfg) {
           // Fallback (no csv yet, e.g. mid-scoring): plain filename list.
           listEl.innerHTML = "";
           data.final_pdbs.forEach((entry) => {
-            const label = entry.jobLabel ? `${entry.jobLabel} / ${entry.name}` : entry.name;
+            const prefix = entry.jobLabel ? `${entry.jobLabel} / ` : "";
+            const label = `${prefix}T${entry.task_num} / ${entry.name}`;
             const div = document.createElement("div");
             div.className = "list-item";
             div.innerHTML = `<span style="overflow:hidden;text-overflow:ellipsis">${escapeHtml(label)}</span>`;
             div.addEventListener("click", async () => {
               qsa(".list-item", listEl).forEach((i) => i.classList.remove("selected"));
               div.classList.add("selected");
-              const url = `/api/final_pdb?log=${encodeURIComponent(entry.log)}&name=${encodeURIComponent(entry.name)}`;
+              const url = `/api/final_pdb?job_dir=${encodeURIComponent(entry.jobDir)}&task=${entry.task_num}&name=${encodeURIComponent(entry.name)}`;
               const pdbText = await fetch(url).then((r) => r.text());
               await renderMol(cfg.viewerSelector, pdbText);
             });
@@ -2761,23 +3206,29 @@ function createResultsView(cfg) {
     renderListSelectionOnly();
     renderTableSelectionOnly();
     const pdbName = basename(row.model_path);
-    const rowLog = cfg.getLog(row);
+    const rowJobDir = cfg.getJobDir(row);
+    // "task" is a column _load_merged_final_csv() (app.py) always puts
+    // first in every final_output.csv row now, since a task-less job
+    // directory isn't possible - which task this particular row's own
+    // model_path lives under.
+    const rowTaskNum = row.task;
     // Same structure already showing - skip refetching so the viewer's
     // camera (zoom/rotation) isn't reset on every poll tick. Keyed by job
-    // too, not just the pdb name - two different jobs can both have a
-    // model literally named "model_0.pdb".
-    const pdbKey = `${rowLog}|${pdbName}`;
+    // and task too, not just the pdb name - two different jobs (or two
+    // tasks of the same job) can both have a model literally named
+    // "model_0.pdb".
+    const pdbKey = `${rowJobDir}|${rowTaskNum}|${pdbName}`;
     if (loadedPdbKey === pdbKey) return;
     loadedPdbKey = pdbKey;
     if (!pdbName) return;
-    const url = `/api/final_pdb?log=${encodeURIComponent(rowLog)}&name=${encodeURIComponent(pdbName)}`;
+    const url = `/api/final_pdb?job_dir=${encodeURIComponent(rowJobDir)}&task=${encodeURIComponent(rowTaskNum)}&name=${encodeURIComponent(pdbName)}`;
     try {
       const res = await fetch(url);
       if (!res.ok) throw new Error(await fetchErrorMessage(res));
       const pdbText = await res.text();
       const stage = await renderMol(cfg.viewerSelector, pdbText);
       if (colorMode === "provenance") {
-        await applyProvenanceColoring(cfg.viewerSelector, trbPathForResultRow(row), qs(cfg.ids.viewerLegend), rowLog);
+        await applyProvenanceColoring(cfg.viewerSelector, trbPathForResultRow(row), qs(cfg.ids.viewerLegend), { jobDir: rowJobDir, taskNum: rowTaskNum });
       }
       // renderMol() returns null (without throwing) both on a genuine load
       // failure and when a newer selection raced past this one, so only
@@ -3083,7 +3534,7 @@ function createResultsView(cfg) {
       if (colorMode === "provenance") {
         paletteWrap.classList.add("hidden");
         const row = results.rows.find((r) => r.__rowId === results.selectedRowId);
-        await applyProvenanceColoring(cfg.viewerSelector, row ? trbPathForResultRow(row) : null, legendEl, row ? cfg.getLog(row) : undefined);
+        await applyProvenanceColoring(cfg.viewerSelector, row ? trbPathForResultRow(row) : null, legendEl, row ? { jobDir: cfg.getJobDir(row), taskNum: row.task } : undefined);
       } else {
         paletteWrap.classList.remove("hidden");
         setCartoonColor(cfg.viewerSelector, chainColorScheme());
@@ -3096,18 +3547,18 @@ function createResultsView(cfg) {
 
   // --- Export filtered (F) ---
 
-  // Rows are tagged with which job they came from (getLog) - for a
+  // Rows are tagged with which job they came from (getJobDir) - for a
   // multi-job export that means grouping by job and sending each job its
   // own row indices, since a merged row's __rowId is an index into the
   // *combined* list, not that job's own final_output.csv.
   function groupRowsByJob(rows) {
     const byJob = new Map();
     rows.forEach((r) => {
-      const log = cfg.getLog(r);
-      if (!byJob.has(log)) byJob.set(log, []);
-      byJob.get(log).push(r.__origRowId);
+      const jobDir = cfg.getJobDir(r);
+      if (!byJob.has(jobDir)) byJob.set(jobDir, []);
+      byJob.get(jobDir).push(r.__origRowId);
     });
-    return Array.from(byJob, ([log, row_ids]) => ({ log, row_ids }));
+    return Array.from(byJob, ([jobDir, row_ids]) => ({ job_dir: jobDir, row_ids }));
   }
 
   async function doExport() {
@@ -3124,7 +3575,7 @@ function createResultsView(cfg) {
     try {
       const body = cfg.isMulti
         ? { jobs: groupRowsByJob(rows) }
-        : { log: state.logPath, row_ids: rows.map((r) => r.__rowId) };
+        : { job_dir: state.jobDir, row_ids: rows.map((r) => r.__rowId) };
       const res = await fetch(cfg.exportUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -3191,10 +3642,20 @@ function createResultsView(cfg) {
     };
     expandedAlignGroups = new Map();
     loadedPdbKey = null;
+    lastDataFingerprint = null;
     colorMode = "chain";
   }
 
-  return { load, renderAll, selectRow, initAll, reset };
+  // Lighter than reset() - just forces the next selectRow() to actually
+  // re-fetch/re-render its structure, without losing filters/sort/rows.
+  // Used when the viewer itself gets disposed out from under this view
+  // (tab switched away) but the rest of the Results tab's state should
+  // still be exactly as the user left it.
+  function dropLoadedKey() {
+    loadedPdbKey = null;
+  }
+
+  return { load, renderAll, selectRow, initAll, reset, dropLoadedKey };
 }
 
 // Single-job fetch: what the per-job Results tab's createResultsView()
@@ -3203,7 +3664,10 @@ function createResultsView(cfg) {
 async function fetchSingleJobResults() {
   const res = await apiGet("/api/results");
   if (!res.csv_exists) {
-    return { csv_exists: false, final_pdbs: (res.final_pdbs || []).map((name) => ({ name, log: state.logPath })) };
+    // res.final_pdbs is already [{name, task_num}, ...] (see /api/results
+    // in app.py) - jobDir tagged on here so downstream code has a uniform
+    // shape whether it came from the single-job or all-jobs fetch below.
+    return { csv_exists: false, final_pdbs: (res.final_pdbs || []).map((p) => ({ ...p, jobDir: state.jobDir })) };
   }
   const csv = await apiGet("/api/final_csv");
   return { csv_exists: true, columns: csv.columns, rows: csv.rows };
@@ -3219,14 +3683,14 @@ async function fetchSingleJobResults() {
 // to resolve a row back to the right job's own API/export calls.
 async function fetchAllJobsResults() {
   const jobs = state.jobs.slice();
-  const perJob = await Promise.all(jobs.map(async (log) => {
+  const perJob = await Promise.all(jobs.map(async (jobDir) => {
     try {
-      const res = await apiGet("/api/results", { log });
-      if (!res.csv_exists) return { log, csv_exists: false, final_pdbs: res.final_pdbs || [] };
-      const csv = await apiGet("/api/final_csv", { log });
-      return { log, csv_exists: true, columns: csv.columns, rows: csv.rows };
+      const res = await apiGet("/api/results", { job_dir: jobDir });
+      if (!res.csv_exists) return { jobDir, csv_exists: false, final_pdbs: res.final_pdbs || [] };
+      const csv = await apiGet("/api/final_csv", { job_dir: jobDir });
+      return { jobDir, csv_exists: true, columns: csv.columns, rows: csv.rows };
     } catch (e) {
-      return { log, csv_exists: false, final_pdbs: [] };
+      return { jobDir, csv_exists: false, final_pdbs: [] };
     }
   }));
 
@@ -3234,7 +3698,7 @@ async function fetchAllJobsResults() {
   if (!withCsv.length) {
     return {
       csv_exists: false,
-      final_pdbs: perJob.flatMap((j) => (j.final_pdbs || []).map((name) => ({ name, log: j.log, jobLabel: jobLabel(j.log) }))),
+      final_pdbs: perJob.flatMap((j) => (j.final_pdbs || []).map((p) => ({ ...p, jobDir: j.jobDir, jobLabel: jobLabel(j.jobDir) }))),
     };
   }
 
@@ -3247,10 +3711,10 @@ async function fetchAllJobsResults() {
     const colIndex = {};
     j.columns.forEach((c, i) => { colIndex[c] = i; });
     j.rows.forEach((r, origIdx) => {
-      const row = [jobLabel(j.log)];
+      const row = [jobLabel(j.jobDir)];
       unionColumns.forEach((c) => { row.push(c in colIndex ? (r[colIndex[c]] ?? "") : ""); });
       rows.push(row);
-      rowMeta.push({ log: j.log, origRowId: origIdx });
+      rowMeta.push({ jobDir: j.jobDir, origRowId: origIdx });
     });
   });
   return { csv_exists: true, columns, rows, rowMeta };
@@ -3269,7 +3733,7 @@ const resultsView = createResultsView({
   },
   viewerSelector: "#resultViewer",
   isMulti: false,
-  getLog: () => state.logPath,
+  getJobDir: () => state.jobDir,
   fetchData: fetchSingleJobResults,
   exportUrl: "/api/export_filtered",
   exportFilename: "prosculpt_filtered_export.zip",
@@ -3290,7 +3754,7 @@ const allResultsView = createResultsView({
   },
   viewerSelector: "#allResultViewer",
   isMulti: true,
-  getLog: (row) => row.__jobLogPath,
+  getJobDir: (row) => row.__jobDir,
   fetchData: fetchAllJobsResults,
   exportUrl: "/api/export_filtered_multi",
   exportFilename: "prosculpt_all_jobs_filtered_export.zip",
@@ -3314,9 +3778,13 @@ document.addEventListener("DOMContentLoaded", () => {
   initCancelJobModal();
   resultsView.initAll();
   allResultsView.initAll();
-  qs("#modelsFilter").addEventListener("input", renderModelsList);
+  qs("#modelsFilter").addEventListener("input", () => {
+    modelsListPage = 0; // a new filter text means "page 3" means something different now
+    renderModelsList();
+  });
   qs("#showFilteredToggle").addEventListener("change", (e) => {
     state.showFilteredBackbones = e.target.checked;
+    backbonesListPage = 0;
     renderBackbonesList();
   });
   qs("#backboneColorMode").addEventListener("change", async (e) => {
@@ -3325,8 +3793,8 @@ document.addEventListener("DOMContentLoaded", () => {
     const paletteWrap = qs("#backboneChainPaletteWrap");
     if (state.backboneColorMode === "provenance") {
       paletteWrap.classList.add("hidden");
-      const b = (state.backbonesCache || []).find((x) => x.name === state.selectedBackboneKey);
-      await applyProvenanceColoring("#backboneViewer", b ? b.trb_path : null, legendEl);
+      const b = (state.backbonesCache || []).find((x) => `${x.task_num}:${x.name}` === state.selectedBackboneKey);
+      await applyProvenanceColoring("#backboneViewer", b ? b.trb_path : null, legendEl, b ? { taskNum: b.task_num } : undefined);
     } else {
       paletteWrap.classList.remove("hidden");
       setCartoonColor("#backboneViewer", chainColorScheme());
@@ -3342,7 +3810,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (state.modelsColorMode === "provenance") {
       paletteWrap.classList.add("hidden");
       const m = (state.modelsCache || []).find((x) => modelKey(x) === state.selectedModelKey);
-      await applyProvenanceColoring("#modelViewer", m ? m.trb_path : null, legendEl);
+      await applyProvenanceColoring("#modelViewer", m ? m.trb_path : null, legendEl, m ? { taskNum: m.task_num } : undefined);
     } else {
       paletteWrap.classList.remove("hidden");
       setCartoonColor("#modelViewer", chainColorScheme());
@@ -3357,7 +3825,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 
   startJobStatusPolling();
-  if (state.logPath && state.jobs.includes(state.logPath)) {
+  if (state.jobDir && state.jobs.includes(state.jobDir)) {
     showTopView("job");
     refreshAll(true);
     startPolling();

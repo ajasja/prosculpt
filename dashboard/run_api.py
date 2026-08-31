@@ -205,7 +205,9 @@ def api_run_submit():
             abort(400, description="existing_project_path and config_filename are required")
         if not os.path.isdir(existing_path):
             abort(400, description=f"Not a directory (or not reachable from this machine): {existing_path}")
-        JS.ensure_logs_dir(existing_path)
+        # No ensure_logs_dir() call here anymore - slurm_runner.py creates
+        # <output_dir>/logs/ itself before it needs it, so nothing here has
+        # to pre-create a logs/ directory (nor guess where one should go).
         job_dir = existing_path
         reported_local_job_dir = job_dir
         if target["kind"] == "local":
@@ -246,6 +248,14 @@ def api_run_submit():
     argv = [target["python_path"], f"{target['slurm_runner_path']}/slurm_runner.py", config_filename]
     if dry_run:
         argv.append("--dry-run")
+    # No --allow-custom-log-path here - this dashboard's own submissions get
+    # slurm_runner.py's new default too (logs forced under output_dir/logs/,
+    # not wherever slurm.output/slurm.error say), same as every other
+    # caller. api_run_check_pending()'s glob (built in registerPendingRun()
+    # in run_job.js) searches for logs/ at any depth under the job
+    # directory to match, rather than assuming a fixed depth - see its own
+    # comment for why a fixed "<job_dir>/logs/" or "<job_dir>/output/logs/"
+    # guess isn't reliable for "existing project" submissions.
     try:
         result = RT.run_remote_or_local(target, argv, cwd=submit_from)
     except RT.RunTargetError as e:
@@ -296,7 +306,18 @@ def api_run_check_pending():
     keep polling and add whichever ones are new each time rather than
     stopping at the first. `roots` (repeated query param) restricts the
     search to configured target projects_path/local_mount_path values only
-    - never an arbitrary filesystem glob from the client."""
+    - never an arbitrary filesystem glob from the client.
+
+    recursive=True: the caller's pattern (see registerPendingRun() in
+    run_job.js) uses a "**" segment for the directory between the job dir
+    and logs/, since slurm_runner.py forces sbatch's own -o/-e under
+    output_dir/logs/ by default now - and output_dir is "output" for a
+    "build"-mode submission (known), but genuinely unknown here for an
+    "existing project" one (a hand-written config this dashboard never
+    parsed, per api_run_submit()'s own "existing" branch), so a fixed
+    single-directory guess isn't reliable for that case. glob.glob()
+    requires this flag for "**" to actually mean "zero or more directories"
+    rather than matching literally nothing."""
     pattern = request.args.get("glob", "")
     if not pattern:
         abort(400, description="glob is required")
@@ -312,5 +333,5 @@ def api_run_check_pending():
     pattern_norm = os.path.normpath(pattern)
     if not any(pattern_norm.startswith(os.path.normpath(root) + os.sep) for root in allowed_roots if root):
         abort(400, description="glob must be under a configured target's projects_path")
-    matches = sorted(glob.glob(pattern))
+    matches = sorted(glob.glob(pattern, recursive=True))
     return jsonify({"found": bool(matches), "paths": matches})

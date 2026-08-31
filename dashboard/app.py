@@ -84,20 +84,36 @@ def handle_os_error(e):
     response.status_code = 502
     return response
 
-# Simple in-memory cache of the last resolved output_dir per log path, so
-# helper endpoints (pdb/json fetchers) don't need to re-parse the whole log
-# on every click.
-_output_dir_cache: dict[str, str] = {}
+def _require_job_dir() -> str:
+    """A tracked job is identified directly by its own base output
+    directory now (the one containing logs/ and one numbered 01/02/...
+    subdirectory per SLURM array task) - no more resolving it by parsing a
+    log file (see get_job_status()/discover_tasks() in parser.py). This
+    just reads the ?job_dir= param every route needs; it does not require
+    the directory to exist yet (a freshly-staged job that hasn't started
+    writing output is a valid, if empty, thing to track - get_job_status()
+    itself reports that state rather than erroring)."""
+    job_dir = request.args.get("job_dir")
+    if not job_dir:
+        abort(400, description="Missing ?job_dir= parameter")
+    return job_dir
 
 
-def _get_output_dir(log_path: str) -> str:
-    if log_path in _output_dir_cache:
-        return _output_dir_cache[log_path]
-    loc = P.resolve_output_dir(log_path)
-    if not loc.get("output_dir"):
-        abort(400, description=loc.get("error") or "Could not resolve output_dir")
-    _output_dir_cache[log_path] = loc["output_dir"]
-    return loc["output_dir"]
+def _get_task_dir(job_dir: str, task_num_raw) -> str:
+    """Resolves ?task=N to that task's own directory under job_dir - looked
+    up via discover_tasks() (not a naive job_dir/f"{n:02d}" join) so this
+    still works regardless of exactly how many digits the folder name
+    uses."""
+    if task_num_raw is None:
+        abort(400, description="Missing ?task= parameter")
+    try:
+        task_num = int(task_num_raw)
+    except ValueError:
+        abort(400, description="?task= must be an integer")
+    for num, task_dir in P.discover_tasks(job_dir):
+        if num == task_num:
+            return task_dir
+    abort(404, description=f"Task {task_num} not found under {job_dir}")
 
 
 def _is_within(candidate: str, base: str) -> bool:
@@ -166,13 +182,8 @@ def index():
 
 @app.route("/api/status")
 def api_status():
-    log_path = request.args.get("log")
-    if not log_path:
-        return jsonify({"error": "Missing ?log= parameter"}), 400
-    status = P.get_status(log_path)
-    if status.get("location", {}).get("output_dir"):
-        _output_dir_cache[log_path] = status["location"]["output_dir"]
-    return jsonify(status)
+    job_dir = _require_job_dir()
+    return jsonify(P.get_job_status(job_dir))
 
 
 # ---------------------------------------------------------------------------
@@ -182,23 +193,33 @@ def api_status():
 
 @app.route("/api/backbones")
 def api_backbones():
-    log_path = request.args.get("log")
-    output_dir = _get_output_dir(log_path)
-    with open(log_path, "r", errors="replace") as f:
-        lines = f.readlines()
-    stage = P.detect_stage(lines)["stage"]
-    filtering_done = stage not in ("setup", "rfdiffusion", "filtering")
-    return jsonify(P.list_backbones(output_dir, filtering_done=filtering_done))
+    """Every task's backbones, concatenated and tagged with task_num - for
+    the common num_tasks=1 case this is exactly one task's list (identical
+    shape to before, plus the tag); for num_tasks>1 the Backbones tab shows
+    every task's backbones together rather than needing a separate tracked
+    job per task."""
+    job_dir = _require_job_dir()
+    job_status = P.get_job_status(job_dir)
+    if job_status.get("error"):
+        abort(400, description=job_status["error"])
+    out = []
+    for task in job_status["tasks"]:
+        stage = task["stage"]
+        filtering_done = stage not in ("setup", "rfdiffusion", "filtering")
+        for b in P.list_backbones(task["task_dir"], filtering_done=filtering_done):
+            b["task_num"] = task["task_num"]
+            out.append(b)
+    return jsonify(out)
 
 
 @app.route("/api/backbone_pdb")
 def api_backbone_pdb():
-    log_path = request.args.get("log")
+    job_dir = _require_job_dir()
+    task_dir = _get_task_dir(job_dir, request.args.get("task"))
     name = request.args.get("name")
     status = request.args.get("status", "passed")
-    output_dir = _get_output_dir(log_path)
     subdir = "failed_filters" if status == "failed_filter" else ""
-    path = _safe_join(output_dir, "1_rfdiff", subdir, f"{name}.pdb")
+    path = _safe_join(task_dir, "1_rfdiff", subdir, f"{name}.pdb")
     if not os.path.isfile(path):
         abort(404, description="pdb not found")
     return send_file(path, mimetype="chemical/x-pdb")
@@ -211,9 +232,18 @@ def api_backbone_pdb():
 
 @app.route("/api/sequences")
 def api_sequences():
-    log_path = request.args.get("log")
-    output_dir = _get_output_dir(log_path)
-    return jsonify(P.list_sequences(output_dir))
+    """Every task's sequences, concatenated - each backbone/monomer entry
+    tagged with task_num so num_tasks>1 shows all tasks together (see
+    /api/backbones's docstring for the same pattern)."""
+    job_dir = _require_job_dir()
+    out = {"backbones": [], "monomers": []}
+    for task_num, task_dir in P.discover_tasks(job_dir):
+        mp = P.list_sequences(task_dir)
+        for key in ("backbones", "monomers"):
+            for entry in mp[key]:
+                entry["task_num"] = task_num
+                out[key].append(entry)
+    return jsonify(out)
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +253,16 @@ def api_sequences():
 
 @app.route("/api/models")
 def api_models():
-    log_path = request.args.get("log")
-    output_dir = _get_output_dir(log_path)
-    cfg = P.extract_config(log_path, output_dir)
-    return jsonify(P.list_models(output_dir, model_monomer=bool(cfg.get("model_monomer"))))
+    """Every task's models, concatenated and tagged with task_num (same
+    pattern as /api/backbones/api/sequences above)."""
+    job_dir = _require_job_dir()
+    out = []
+    for task_num, task_dir in P.discover_tasks(job_dir):
+        cfg = P.extract_config(None, task_dir)
+        for m in P.list_models(task_dir, model_monomer=bool(cfg.get("model_monomer"))):
+            m["task_num"] = task_num
+            out.append(m)
+    return jsonify(out)
 
 
 def _resolve_within_output_dir(output_dir: str, path: str) -> str:
@@ -251,10 +287,10 @@ def _resolve_within_output_dir_or_none(output_dir: str, path: str):
 
 @app.route("/api/model_pdb")
 def api_model_pdb():
-    log_path = request.args.get("log")
+    job_dir = _require_job_dir()
+    task_dir = _get_task_dir(job_dir, request.args.get("task"))
     path = request.args.get("path")
-    output_dir = _get_output_dir(log_path)
-    full = _resolve_within_output_dir(output_dir, path)
+    full = _resolve_within_output_dir(task_dir, path)
     if not os.path.isfile(full):
         abort(404, description="structure file not found")
     mimetype = "chemical/x-cif" if full.lower().endswith(".cif") else "chemical/x-pdb"
@@ -263,10 +299,10 @@ def api_model_pdb():
 
 @app.route("/api/model_confidence")
 def api_model_confidence():
-    log_path = request.args.get("log")
+    job_dir = _require_job_dir()
+    task_dir = _get_task_dir(job_dir, request.args.get("task"))
     path = request.args.get("path")
-    output_dir = _get_output_dir(log_path)
-    full = _resolve_within_output_dir(output_dir, path)
+    full = _resolve_within_output_dir(task_dir, path)
     if not os.path.isfile(full):
         abort(404, description="confidence file not found")
     return jsonify(P.load_confidence(full))
@@ -274,22 +310,29 @@ def api_model_confidence():
 
 @app.route("/api/trb")
 def api_trb():
-    """Generic .trb reader - takes any path under output_dir, so it works
-    for a backbone's own _N.trb (Backbones tab) and for the RFdiffusion
-    .trb reachable from a final result row's path_rfdiff column (Results
-    tab, path derived client-side by swapping .pdb -> .trb)."""
-    log_path = request.args.get("log")
+    """Generic .trb reader - takes any path under a task's own directory,
+    so it works for a backbone's own _N.trb (Backbones tab) and for the
+    RFdiffusion .trb reachable from a final result row's path_rfdiff column
+    (Results tab, path derived client-side by swapping .pdb -> .trb)."""
+    job_dir = _require_job_dir()
+    task_dir = _get_task_dir(job_dir, request.args.get("task"))
     path = request.args.get("path")
-    output_dir = _get_output_dir(log_path)
     # A Backbones/Models-tab trb_path is already local (built server-side
-    # from the already-translated output_dir) - translate_remote_path() is
-    # a no-op for it. A Results-tab path, derived client-side from
-    # final_output.csv's own path_rfdiff column, is still exactly what
-    # Prosculpt itself wrote (load_final_csv() deliberately returns that
-    # file untouched - see its docstring) - a path as recorded on whichever
-    # cluster the job ran on, translated here, at the one place it's
-    # actually opened, rather than rewriting the CSV data itself.
-    full = _resolve_within_output_dir(output_dir, RT.translate_remote_path(path))
+    # from the already-translated task dir), so try it exactly as given
+    # first. Only fall back to translate_remote_path() - for the Results
+    # tab's path_rfdiff, read verbatim from final_output.csv (see
+    # load_final_csv()'s docstring) as recorded on whichever cluster the
+    # job ran on - if the direct interpretation doesn't resolve. Applying
+    # the translation unconditionally used to be assumed a safe no-op for
+    # the already-local case, but it isn't: when this dashboard runs
+    # directly on the target host (not on a machine that mounts it, e.g.
+    # via the Q: SSHFS mount), an already-correct local path can itself
+    # match a mounts: entry's "remote" prefix and get rewritten into that
+    # mount's "local" side (a Windows path, on Linux) - a real bug hit in
+    # production, not just a hypothetical.
+    full = _resolve_within_output_dir_or_none(task_dir, path)
+    if not full or not os.path.isfile(full):
+        full = _resolve_within_output_dir(task_dir, RT.translate_remote_path(path))
     if not os.path.isfile(full):
         abort(404, description="trb file not found")
     return jsonify(P.load_trb_provenance(full))
@@ -300,19 +343,61 @@ def api_trb():
 # ---------------------------------------------------------------------------
 
 
+def _load_merged_final_csv(job_dir: str):
+    """Merges every task's own final_output.csv into one table - union of
+    columns across tasks (a task missing a given column just gets a blank
+    for it), plus a leading "task" column so every row stays attributable
+    - the same idea api_export_filtered_multi() already uses to merge
+    across several *tracked jobs*, just one level down, across one job's
+    own tasks. None if no task has a final_output.csv yet."""
+    all_columns: list[str] = []
+    per_task = []
+    for task_num, task_dir in P.discover_tasks(job_dir):
+        result = P.load_final_csv(task_dir)
+        if result is None or not result["columns"]:
+            continue
+        columns, rows = result["columns"], result["rows"]
+        for c in columns:
+            if c not in all_columns:
+                all_columns.append(c)
+        per_task.append((task_num, columns, rows))
+    if not per_task:
+        return None
+    merged_rows = []
+    for task_num, columns, rows in per_task:
+        col_index = {c: i for i, c in enumerate(columns)}
+        for r in rows:
+            merged_rows.append(
+                [str(task_num), *(r[col_index[c]] if c in col_index and col_index[c] < len(r) else "" for c in all_columns)]
+            )
+    return {"columns": ["task", *all_columns], "rows": merged_rows}
+
+
 @app.route("/api/results")
 def api_results():
-    log_path = request.args.get("log")
-    output_dir = _get_output_dir(log_path)
-    return jsonify(P.results_summary(output_dir))
+    """Aggregated across every task - final_pdbs entries are tagged with
+    task_num (a plain name string wouldn't be unique across tasks)."""
+    job_dir = _require_job_dir()
+    final_pdbs = []
+    any_csv = False
+    all_finished = True
+    any_task = False
+    for task_num, task_dir in P.discover_tasks(job_dir):
+        any_task = True
+        summary = P.results_summary(task_dir)
+        for name in summary["final_pdbs"]:
+            final_pdbs.append({"name": name, "task_num": task_num})
+        any_csv = any_csv or summary["csv_exists"]
+        all_finished = all_finished and summary["finished"]
+    return jsonify({"final_pdbs": final_pdbs, "csv_exists": any_csv, "finished": any_task and all_finished})
 
 
 @app.route("/api/final_pdb")
 def api_final_pdb():
-    log_path = request.args.get("log")
+    job_dir = _require_job_dir()
+    task_dir = _get_task_dir(job_dir, request.args.get("task"))
     name = request.args.get("name")
-    output_dir = _get_output_dir(log_path)
-    path = _safe_join(output_dir, "final_pdbs", name)
+    path = _safe_join(task_dir, "final_pdbs", name)
     if not os.path.isfile(path):
         abort(404, description="pdb not found")
     return send_file(path, mimetype="chemical/x-pdb")
@@ -320,9 +405,8 @@ def api_final_pdb():
 
 @app.route("/api/final_csv")
 def api_final_csv():
-    log_path = request.args.get("log")
-    output_dir = _get_output_dir(log_path)
-    result = P.load_final_csv(output_dir)
+    job_dir = _require_job_dir()
+    result = _load_merged_final_csv(job_dir)
     if result is None:
         abort(404, description="final_output.csv not found")
     return jsonify(result)
@@ -335,20 +419,17 @@ def api_export_filtered():
     this a ".zip" - true .rar creation needs a proprietary external binary
     that isn't reliably available on a cluster, so .zip is used instead;
     it needs no extra dependency and every OS can open it natively.)"""
-    log_path = request.args.get("log")
+    job_dir = request.args.get("job_dir")
     data = request.get_json(silent=True) or {}
-    log_path = data.get("log") or log_path
+    job_dir = data.get("job_dir") or job_dir
     row_ids = data.get("row_ids")
-    if not log_path:
-        abort(400, description="Missing log")
+    if not job_dir:
+        abort(400, description="Missing job_dir")
 
-    output_dir = _get_output_dir(log_path)
-    result = P.load_final_csv(output_dir)
+    result = _load_merged_final_csv(job_dir)
     if result is None:
         abort(404, description="final_output.csv not found")
     columns, data_rows = result["columns"], result["rows"]
-    if not columns:
-        abort(404, description="final_output.csv is empty")
 
     if row_ids is not None:
         wanted = {int(i) for i in row_ids}
@@ -367,8 +448,12 @@ def api_export_filtered():
         writer.writerows(selected_rows)
         zf.writestr("filtered_output.csv", csv_buf.getvalue())
 
-        if "model_path" in columns:
-            idx = columns.index("model_path")
+        # _load_merged_final_csv() always puts "task" first - which task a
+        # given row's model_path lives under, needed since the same model
+        # filename can exist in more than one task's own final_pdbs/.
+        if "model_path" in columns and "task" in columns:
+            model_idx = columns.index("model_path")
+            task_idx = columns.index("task")
             # Only used to actually locate+read the file for zipping - the
             # CSV text written above (writer.writerows(selected_rows)) is
             # already done and keeps the original, untranslated values, the
@@ -377,13 +462,18 @@ def api_export_filtered():
             translate = RT.make_path_translator()
             seen = set()
             for r in selected_rows:
-                p = r[idx] if idx < len(r) else ""
-                if not p or p in seen:
+                p = r[model_idx] if model_idx < len(r) else ""
+                task_str = r[task_idx] if task_idx < len(r) else ""
+                if not p or (task_str, p) in seen:
                     continue
-                seen.add(p)
-                full = _resolve_within_output_dir_or_none(output_dir, translate(p))
+                seen.add((task_str, p))
+                try:
+                    task_dir = _get_task_dir(job_dir, task_str)
+                except HTTPException:
+                    continue
+                full = _resolve_within_output_dir_or_none(task_dir, translate(p))
                 if full and os.path.isfile(full):
-                    zf.write(full, arcname=os.path.join("models", os.path.basename(full)))
+                    zf.write(full, arcname=os.path.join("models", f"task_{task_str}", os.path.basename(full)))
 
     buf.seek(0)
     return send_file(
@@ -394,13 +484,12 @@ def api_export_filtered():
     )
 
 
-def _job_label(log_path: str) -> str:
+def _job_label(job_dir: str) -> str:
     """Same derivation the frontend uses for a job's short display name
     (see jobLabel() in app.js) - kept in lockstep so the "source_job"
     column and the zip's per-job model subfolders match what the user
     sees on screen."""
-    base = os.path.basename(log_path)
-    return os.path.splitext(base)[0]
+    return os.path.basename(os.path.normpath(job_dir))
 
 
 @app.route("/api/export_filtered_multi", methods=["POST"])
@@ -417,20 +506,17 @@ def api_export_filtered_multi():
         abort(400, description="Missing jobs")
 
     all_columns: list[str] = []
-    per_job_selected: list[tuple[str, str, list[str], list[list[str]]]] = []  # (log_path, label, columns, rows)
+    per_job_selected: list[tuple[str, str, list[str], list[list[str]]]] = []  # (job_dir, label, columns, rows)
 
     for job in jobs:
-        log_path = job.get("log")
+        job_dir = job.get("job_dir")
         row_ids = job.get("row_ids")
-        if not log_path:
+        if not job_dir:
             continue
-        output_dir = _get_output_dir(log_path)
-        result = P.load_final_csv(output_dir)
+        result = _load_merged_final_csv(job_dir)
         if result is None:
             continue
         columns, data_rows = result["columns"], result["rows"]
-        if not columns:
-            continue
         if row_ids is not None:
             wanted = {int(i) for i in row_ids}
             selected_rows = [r for i, r in enumerate(data_rows) if i in wanted]
@@ -441,7 +527,7 @@ def api_export_filtered_multi():
         for c in columns:
             if c not in all_columns:
                 all_columns.append(c)
-        per_job_selected.append((log_path, _job_label(log_path), columns, selected_rows))
+        per_job_selected.append((job_dir, _job_label(job_dir), columns, selected_rows))
 
     if not per_job_selected:
         abort(400, description="No rows selected for export")
@@ -451,7 +537,7 @@ def api_export_filtered_multi():
         csv_buf = io.StringIO()
         writer = csv.writer(csv_buf)
         writer.writerow(["source_job", *all_columns])
-        for log_path, label, columns, selected_rows in per_job_selected:
+        for job_dir, label, columns, selected_rows in per_job_selected:
             col_index = {c: i for i, c in enumerate(columns)}
             for r in selected_rows:
                 writer.writerow([label, *(r[col_index[c]] if c in col_index and col_index[c] < len(r) else "" for c in all_columns)])
@@ -464,18 +550,23 @@ def api_export_filtered_multi():
         # keeps the original, untranslated values (see load_final_csv()'s
         # docstring for why that's deliberate).
         translate = RT.make_path_translator()
-        for log_path, label, columns, selected_rows in per_job_selected:
-            if "model_path" not in columns:
+        for job_dir, label, columns, selected_rows in per_job_selected:
+            if "model_path" not in columns or "task" not in columns:
                 continue
-            output_dir = _get_output_dir(log_path)
-            idx = columns.index("model_path")
+            model_idx = columns.index("model_path")
+            task_idx = columns.index("task")
             seen = set()
             for r in selected_rows:
-                p = r[idx] if idx < len(r) else ""
-                if not p or p in seen:
+                p = r[model_idx] if model_idx < len(r) else ""
+                task_str = r[task_idx] if task_idx < len(r) else ""
+                if not p or (task_str, p) in seen:
                     continue
-                seen.add(p)
-                full = _resolve_within_output_dir_or_none(output_dir, translate(p))
+                seen.add((task_str, p))
+                try:
+                    task_dir = _get_task_dir(job_dir, task_str)
+                except HTTPException:
+                    continue
+                full = _resolve_within_output_dir_or_none(task_dir, translate(p))
                 if full and os.path.isfile(full):
                     zf.write(full, arcname=os.path.join("models", label, os.path.basename(full)))
 
@@ -495,31 +586,37 @@ def api_export_filtered_multi():
 
 @app.route("/api/error_log")
 def api_error_log():
-    """Returns the slurm .err file's content whenever it exists, regardless
-    of whether a crash/cancellation has actually been detected - the
-    dashboard looks this file up unconditionally (see locate_err_file), not
-    only once something looks wrong."""
-    log_path = request.args.get("log")
-    if not log_path:
-        return jsonify({"error": "Missing ?log= parameter"}), 400
-    err_loc = P.locate_err_file(log_path)
-    if not err_loc["err_exists"]:
-        return jsonify({"err_exists": False, "err_path": err_loc["err_path"]})
-    err = P.read_text_file(err_loc["err_path"])
-    return jsonify({"err_exists": True, "err_path": err_loc["err_path"], **err})
+    """Returns one task's slurm .err file content whenever it exists,
+    regardless of whether a crash/cancellation has actually been detected -
+    unconditionally looked up (see find_task_log()), not only once
+    something looks wrong. Unlike before, a task may simply have no log at
+    all (never captured, or the job was submitted outside this dashboard) -
+    that's reported as err_exists: False, log_found: False, not an error."""
+    job_dir = _require_job_dir()
+    task_dir = _get_task_dir(job_dir, request.args.get("task"))
+    task_num = int(request.args.get("task"))
+    log_info = P.find_task_log(job_dir, task_num)
+    err_path = log_info["err_path"]
+    if not err_path or not os.path.isfile(err_path):
+        return jsonify({"err_exists": False, "err_path": err_path, "log_found": log_info["out_path"] is not None})
+    err = P.read_text_file(err_path)
+    return jsonify({"err_exists": True, "err_path": err_path, "log_found": True, **err})
 
 
 @app.route("/api/output_log")
 def api_output_log():
-    """Returns the job's own .out log content, for the Output log tab -
-    always available (unlike the .err file) since it's the same file the
-    dashboard already requires to operate."""
-    log_path = request.args.get("log")
-    if not log_path:
-        return jsonify({"error": "Missing ?log= parameter"}), 400
-    if not os.path.isfile(log_path):
-        abort(404, description="log file not found")
-    return jsonify(P.read_text_file(log_path))
+    """Returns one task's own .out log content, for the Output log tab.
+    Unlike before, this may genuinely not exist (a task tracked without a
+    log at all) - reported as log_found: False, not a 404, since that's
+    an expected state now, not a broken request."""
+    job_dir = _require_job_dir()
+    task_dir = _get_task_dir(job_dir, request.args.get("task"))
+    task_num = int(request.args.get("task"))
+    log_info = P.find_task_log(job_dir, task_num)
+    out_path = log_info["out_path"]
+    if not out_path or not os.path.isfile(out_path):
+        return jsonify({"log_found": False})
+    return jsonify({"log_found": True, **P.read_text_file(out_path)})
 
 
 # ---------------------------------------------------------------------------
@@ -541,42 +638,33 @@ def api_browse():
     # No ?path= at all means "just opened the browser" (the frontend omits
     # it for exactly that case, see openBrowse() in app.js) - start at the
     # locally-mounted projects root from dashboard_config.yaml if one's
-    # configured (where a real job's logs actually are, unlike the
-    # process's own home directory), falling back to the home directory
-    # the way this always worked before that file existed.
+    # configured (where real jobs actually are, unlike the process's own
+    # home directory), falling back to the home directory the way this
+    # always worked before that file existed.
     path = request.args.get("path") or RT.get_default_browse_root() or os.path.expanduser("~")
     path = os.path.abspath(path)
-    # A pasted full path to a specific log file (rather than a directory -
-    # see the "paste a path" input in the browser, goToBrowsePath() in
-    # app.js) is resolved to its containing folder, with the file itself
-    # reported back as `preselect` so the frontend can land there with it
-    # already ticked - pasting the exact path you already know shouldn't
-    # require re-navigating to it folder by folder.
-    preselect = None
+    # A pasted path that turns out to be a file (rather than a directory -
+    # see the "paste a path" input, goToBrowsePath() in app.js) is resolved
+    # to its containing folder - there's no equivalent of the old
+    # file-preselect here, since a job is tracked by directory now, not by
+    # picking one specific file.
     if os.path.isfile(path):
-        preselect = path
         path = os.path.dirname(path)
     if not os.path.isdir(path):
         abort(400, description="Not a directory")
     entries = []
     try:
+        # Directories only - a job is tracked by pointing at its own output
+        # directory now, so a plain file (whatever it is) is never a valid
+        # target to select here; only worth listing at all.
         for name in sorted(os.listdir(path)):
             full = os.path.join(path, name)
-            is_dir = os.path.isdir(full)
-            if not is_dir and not (name.endswith(".out") or name.endswith(".log") or name.endswith(".txt")):
-                continue
-            entries.append({"name": name, "path": full, "is_dir": is_dir})
+            if os.path.isdir(full):
+                entries.append({"name": name, "path": full, "is_dir": True})
     except PermissionError:
         abort(403, description="Permission denied")
-    if preselect and not any(e["path"] == preselect for e in entries):
-        # The preselected file may have an extension the listing above
-        # otherwise filters out (e.g. someone pasted a .err path by
-        # mistake) - still show it, since it's the one thing the user
-        # explicitly asked to go to.
-        entries.append({"name": os.path.basename(preselect), "path": preselect, "is_dir": False})
-        entries.sort(key=lambda e: e["name"])
     parent = os.path.dirname(path) if path != os.path.dirname(path) else None
-    return jsonify({"path": path, "parent": parent, "entries": entries, "preselect": preselect})
+    return jsonify({"path": path, "parent": parent, "entries": entries})
 
 
 if __name__ == "__main__":

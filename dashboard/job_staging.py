@@ -8,10 +8,7 @@ kept separate so it's testable/reusable independent of local-vs-remote.
 Not used for the "submit an existing project directory" flow - there, the
 user has already assembled their own layout (which may reference files
 this module knows nothing about, e.g. a custom filter script), so nothing
-here rewrites or reorganizes it. `ensure_logs_dir()` is the only thing
-still needed for that path, since a hand-built project directory just as
-easily forgets the one directory `wrapper_slurm_array_job_group.sh` never
-creates on its own.
+here rewrites or reorganizes it.
 """
 
 from __future__ import annotations
@@ -35,15 +32,6 @@ def sanitize_job_name(job_name: str) -> str:
     if name in (".", ".."):
         raise JobStagingError("Invalid job name")
     return name
-
-
-def ensure_logs_dir(job_dir: str) -> None:
-    # wrapper_slurm_array_job_group.sh has no `#SBATCH --chdir` and never
-    # creates this itself - sbatch inherits whatever directory it was
-    # invoked from, and the job yaml's -o/-e paths (logs/slurm-%A_%a_%x.out)
-    # are relative to that same directory, so it must already exist before
-    # sbatch runs or the job fails immediately with no log at all.
-    os.makedirs(os.path.join(job_dir, "logs"), exist_ok=True)
 
 
 def resolve_available_name(name: str, is_taken) -> tuple[str, bool]:
@@ -105,7 +93,10 @@ def stage_job(
             mode = "w" if isinstance(content, str) else "wb"
             with open(full_path, mode) as f:
                 f.write(content)
-        ensure_logs_dir(job_dir)
+        # No ensure_logs_dir() here anymore - slurm_runner.py creates
+        # <output_dir>/logs/ itself, right before it actually needs it (see
+        # its own comment), which covers both submission modes uniformly
+        # without this module needing to guess where logs will end up.
     except Exception:
         # Don't leave a half-written job directory behind - either the
         # whole thing is there correctly or none of it is.

@@ -66,6 +66,91 @@ def _parse_ts(line: str) -> Optional[datetime]:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Task discovery - a "job" (one thing tracked in the UI) is now a base
+# directory (what slurm_runner.py calls base_output_dir: it directly
+# contains logs/ and one numbered subdirectory per SLURM array task), not
+# a log path. Each numbered subdirectory is a complete, independent
+# pipeline run in its own right (own 1_rfdiff/, 2_mpnn/, 3_models/,
+# final_pdbs/, input.yaml) - everything below this point that used to take
+# a single log_path now operates per-task, with the log optional.
+# ---------------------------------------------------------------------------
+
+_TASK_DIR_RE = re.compile(r"^\d+$")
+
+
+def discover_tasks(job_dir: str) -> list[tuple[int, str]]:
+    """Every immediate subdirectory of job_dir whose name is purely digits
+    is one SLURM array task's own pipeline run - not hardcoded to exactly
+    2 digits, since slurm_runner.py's "{i:02d}" suffix is a *minimum*
+    width, not a fixed one (task 100 is "100", not truncated). Sorted
+    numerically (not lexically - "10" must sort after "09", not before
+    "1")."""
+    out = []
+    try:
+        names = os.listdir(job_dir)
+    except OSError:
+        return out
+    for name in names:
+        if _TASK_DIR_RE.match(name) and os.path.isdir(os.path.join(job_dir, name)):
+            out.append((int(name), os.path.join(job_dir, name)))
+    out.sort(key=lambda t: t[0])
+    return out
+
+
+_TASK_LOG_RE = re.compile(r"^slurm-(\d+)_(\d+)_")
+
+
+def find_task_log(job_dir: str, task_num: int) -> dict:
+    """Looks for this task's own .out/.err under job_dir/logs/ (where
+    slurm_runner.py now puts them by default - see its own comments).
+    Log filenames use SLURM's raw %a (array task id) substitution, which
+    is NOT zero-padded the way the "01"/"02" task folder names are (task
+    1's folder is "01", but its log is named "..._1_...", not "..._01_...")
+    - matched here by parsing the integer task id out of the filename and
+    comparing as int, never by string equality against the folder name."""
+    logs_dir = os.path.join(job_dir, "logs")
+    out_path = None
+    err_path = None
+    if os.path.isdir(logs_dir):
+        for name in os.listdir(logs_dir):
+            m = _TASK_LOG_RE.match(name)
+            if not m or int(m.group(2)) != task_num:
+                continue
+            full = os.path.join(logs_dir, name)
+            if name.endswith(".out"):
+                out_path = full
+            elif name.endswith(".err"):
+                err_path = full
+    return {"out_path": out_path, "err_path": err_path}
+
+
+def detect_stage_from_files(task_dir: str) -> dict:
+    """File-presence-only stage heuristic, used in place of detect_stage()
+    for a task whose log wasn't found - there's no log content to scan for
+    "Running X" trigger lines, so this infers the furthest stage reached
+    purely from what's actually been written to disk. Necessarily coarser
+    than the log-driven version (e.g. it can't tell "filtering in
+    progress" apart from "rfdiffusion still running" - both just look like
+    "1_rfdiff/ has some files, 2_mpnn/ doesn't yet") and can never surface
+    possible_errors (that's log-line pattern matching, with nothing
+    analogous in file presence alone)."""
+    final_dir = os.path.join(task_dir, "final_pdbs")
+    csv_path = os.path.join(task_dir, "final_output.csv")
+    if os.path.isdir(final_dir) and os.listdir(final_dir) and os.path.isfile(csv_path):
+        return {"stage": "finished", "stage_trigger_line": -1, "possible_errors": []}
+    models_dir = os.path.join(task_dir, "3_models")
+    if os.path.isdir(models_dir) and os.listdir(models_dir):
+        return {"stage": "modeling", "stage_trigger_line": -1, "possible_errors": []}
+    seqs_dir = os.path.join(task_dir, "2_mpnn", "seqs")
+    if os.path.isdir(seqs_dir) and glob.glob(os.path.join(seqs_dir, "*.fa")):
+        return {"stage": "mpnn", "stage_trigger_line": -1, "possible_errors": []}
+    rfdiff_dir = os.path.join(task_dir, "1_rfdiff")
+    if os.path.isdir(rfdiff_dir) and glob.glob(os.path.join(rfdiff_dir, "_*.pdb")):
+        return {"stage": "rfdiffusion", "stage_trigger_line": -1, "possible_errors": []}
+    return {"stage": "setup", "stage_trigger_line": -1, "possible_errors": []}
+
+
 def resolve_output_dir(log_path: str) -> dict:
     """Reconstruct the absolute output directory from the log's PWD: and
     output_dir: lines, per the convention described by the pipeline author.
@@ -173,23 +258,31 @@ _DEFAULTS: dict[str, Any] = {
 }
 
 
-def extract_config(log_path: str, output_dir: Optional[str]) -> dict:
+def extract_config(log_path: Optional[str], output_dir: Optional[str]) -> dict:
+    """log_path is optional now (a task may have no discoverable log at
+    all) - when present, its own config dump is tried first (a strict
+    superset of the raw input, per the module docstring above); either
+    way, input.yaml is read to fill in whatever the log didn't have -
+    becoming the *only* source, not just a fallback, when there's no log."""
     cfg: dict[str, Any] = {}
 
-    with open(log_path, "r", errors="replace") as f:
-        lines = f.readlines()
+    if log_path and os.path.isfile(log_path):
+        with open(log_path, "r", errors="replace") as f:
+            lines = f.readlines()
 
-    block = _extract_yaml_config_block(lines)
-    if block and yaml is not None:
-        try:
-            parsed = yaml.safe_load(block)
-            if isinstance(parsed, dict):
-                cfg.update(parsed)
-        except Exception:
-            pass
+        block = _extract_yaml_config_block(lines)
+        if block and yaml is not None:
+            try:
+                parsed = yaml.safe_load(block)
+                if isinstance(parsed, dict):
+                    cfg.update(parsed)
+            except Exception:
+                pass
 
     # Fallback / fill-in: read input.yaml directly if the log block was
-    # missing or incomplete (e.g. truncated log, or a key it doesn't have).
+    # missing or incomplete (e.g. truncated log, or a key it doesn't have),
+    # or the primary (and now just as often the only) source when there's
+    # no log at all.
     if output_dir and yaml is not None:
         yaml_path = os.path.join(output_dir, "input.yaml")
         if os.path.isfile(yaml_path):
@@ -494,9 +587,15 @@ def list_backbones(output_dir: str, filtering_done: bool) -> list[dict]:
         return out
     not_yet_filtered_status = "passed" if filtering_done else "pending"
 
-    def _trb_path(pdb_path: str) -> Optional[str]:
-        candidate = os.path.splitext(pdb_path)[0] + ".trb"
-        return candidate if os.path.isfile(candidate) else None
+    def _trb_path(pdb_path: str) -> str:
+        # Always the constructed candidate, not pre-checked with
+        # os.path.isfile() here - a .trb genuinely missing (or a stat
+        # racing a file still being written, or a flaky network mount
+        # returning a wrong answer for one call but not the next - this
+        # dashboard has hit real cases of exactly that) is /api/trb's own
+        # job to report when it actually tries to open the file, not
+        # something to silently decide on its behalf a second time here.
+        return os.path.splitext(pdb_path)[0] + ".trb"
 
     for pdb in sorted(glob.glob(os.path.join(rfdiff_dir, "_*.pdb"))):
         out.append({
@@ -944,11 +1043,14 @@ def list_models(output_dir: str, model_monomer: bool = False) -> list[dict]:
     # variant the row itself is, so the Models tab's viewer can offer the
     # same RFdiffusion-provenance coloring the Backbones/Results tabs do.
     def _trb_path_for_model(model_x: str) -> Optional[str]:
+        # Same "always the constructed candidate, no pre-check" reasoning
+        # as _trb_path() above - None here is only for "model_x doesn't
+        # even look like a model_<N> directory" (nothing to construct from
+        # at all), not "doesn't exist right now".
         m = re.match(r"model_(\d+)$", model_x)
         if not m:
             return None
-        candidate = os.path.join(output_dir, "1_rfdiff", f"_{m.group(1)}.trb")
-        return candidate if os.path.isfile(candidate) else None
+        return os.path.join(output_dir, "1_rfdiff", f"_{m.group(1)}.trb")
 
     for model_x in sorted(os.listdir(models_dir), key=_natural_key):
         model_x_path = os.path.join(models_dir, model_x)
@@ -1081,69 +1183,125 @@ def load_final_csv(output_dir: str) -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 
-def get_status(log_path: str) -> dict:
-    if not os.path.isfile(log_path):
-        return {"error": f"Log file not found: {log_path}"}
+def _get_task_status(job_dir: str, task_num: int, task_dir: str) -> dict:
+    """Everything get_status() used to compute for one job, now computed
+    per SLURM array task, with its log optional. Every one of the
+    filesystem-ground-truth functions below (rfdiffusion_progress,
+    list_backbones, list_sequences, modeling_progress, results_summary)
+    already worked from `lines` only for log-derived *extras* (avg
+    duration, ETA, current-item name) - the counts themselves already came
+    from glob/os.listdir - so passing lines=[] when there's no log for
+    this task degrades those correctly with no changes needed there.
+    detect_stage() is the one exception (a log-line pattern matcher has
+    nothing to match against an empty list) - detect_stage_from_files()
+    stands in for it in that case."""
+    log_info = find_task_log(job_dir, task_num)
+    log_path = log_info["out_path"]
+    err_path = log_info["err_path"]
+    log_found = bool(log_path and os.path.isfile(log_path))
 
-    loc = resolve_output_dir(log_path)
-    if loc.get("error") or not loc.get("output_dir"):
-        return {"error": loc.get("error") or "Could not resolve output_dir", "location": loc}
+    lines: list[str] = []
+    if log_found:
+        with open(log_path, "r", errors="replace") as f:
+            lines = f.readlines()
 
-    output_dir = loc["output_dir"]
+    cfg = extract_config(log_path if log_found else None, task_dir)
 
-    with open(log_path, "r", errors="replace") as f:
-        lines = f.readlines()
-
-    cfg = extract_config(log_path, output_dir)
-    stage_info = detect_stage(lines)
+    if log_found:
+        stage_info = detect_stage(lines)
+    else:
+        stage_info = detect_stage_from_files(task_dir)
     stage = stage_info["stage"]
 
-    err_loc = locate_err_file(log_path)
-    cancel_info = scan_err_file_for_cancellation(err_loc["err_path"]) if err_loc["err_exists"] else {
+    err_exists = bool(err_path and os.path.isfile(err_path))
+    cancel_info = scan_err_file_for_cancellation(err_path) if err_exists else {
         "cancelled": False,
         "cancelled_line": None,
     }
 
     payload: dict[str, Any] = {
-        "location": loc,
+        "task_num": task_num,
+        "task_dir": task_dir,
+        "log_found": log_found,
+        "log_path": log_path,
         "config": cfg,
         "stage": stage,
         "possible_errors": stage_info["possible_errors"],
-        "output_dir_exists": os.path.isdir(output_dir),
         "job_info": parse_job_info(lines),
         "timing": parse_step_durations(lines),
         "cycle": current_cycle_info(lines, cfg),
         "crash": detect_crash(lines),
-        "err_file": err_loc,
+        "err_file": {"err_path": err_path, "err_exists": err_exists},
         "cancelled": cancel_info["cancelled"],
         "cancelled_line": cancel_info["cancelled_line"],
     }
 
-    if not payload["output_dir_exists"]:
-        return payload
+    payload["rfdiffusion"] = rfdiffusion_progress(lines, task_dir, cfg.get("num_designs_rfdiff"))
 
-    # Always include lightweight counts so the stepper / nav can show
-    # progress hints even when not the active stage.
-    payload["rfdiffusion"] = rfdiffusion_progress(lines, output_dir, cfg.get("num_designs_rfdiff"))
-
-    # Ground truth for how many backbones actually survived plugin_filters
-    # (as opposed to num_designs_rfdiff, which is just the planned count).
-    # Blank (None) until filtering has actually finished - see
-    # list_backbones() for why a backbone isn't tagged "passed" before then.
     filtering_done = stage not in ("setup", "rfdiffusion", "filtering")
-    backbones = list_backbones(output_dir, filtering_done=filtering_done)
+    backbones = list_backbones(task_dir, filtering_done=filtering_done)
     payload["backbones_summary"] = {
         "total": len(backbones),
         "accepted": sum(1 for b in backbones if b["status"] == "passed") if filtering_done else None,
     }
 
-    mp = list_sequences(output_dir)
+    mp = list_sequences(task_dir)
     payload["mpnn"] = {
         "num_backbones_with_sequences": len(mp["backbones"]),
         "num_monomer_backbones": len(mp["monomers"]),
     }
 
-    payload["modeling"] = modeling_progress(lines, output_dir, cfg, mp)
-    payload["scoring"] = results_summary(output_dir)
+    payload["modeling"] = modeling_progress(lines, task_dir, cfg, mp)
+    payload["scoring"] = results_summary(task_dir)
 
     return payload
+
+
+def get_job_status(job_dir: str) -> dict:
+    """Top-level entry point, replacing the old log_path-keyed get_status().
+    job_dir is a base directory - the thing the UI now tracks directly,
+    containing logs/ and one numbered subdirectory (01, 02, ...) per SLURM
+    array task (see discover_tasks()). Each task gets its own full status
+    via _get_task_status(), with its log used if found and gracefully
+    skipped if not (see that function's own docstring). A job with no
+    numbered subdirectories yet (freshly staged, nothing has actually
+    started writing output) is not an error - num_tasks: 0 tells the
+    caller there's simply nothing to show yet."""
+    if not os.path.isdir(job_dir):
+        return {"error": f"Job directory not found: {job_dir}"}
+
+    task_dirs = discover_tasks(job_dir)
+    if not task_dirs:
+        return {
+            "error": None,
+            "job_dir": job_dir,
+            "tasks": [],
+            "num_tasks": 0,
+            "config": {},
+            "any_log_found": False,
+            "all_logs_found": False,
+            "finished": False,
+            "crashed": False,
+            "cancelled": False,
+        }
+
+    tasks = [_get_task_status(job_dir, task_num, task_dir) for task_num, task_dir in task_dirs]
+
+    # Every task in one job shares the same input.yaml content (only
+    # output_dir differs per task) - the first task that actually has a
+    # non-empty config is enough for the job-level rollup (planned counts,
+    # prediction_model, ...) the Overview/All-jobs cards use.
+    config = next((t["config"] for t in tasks if t["config"]), tasks[0]["config"])
+
+    return {
+        "error": None,
+        "job_dir": job_dir,
+        "tasks": tasks,
+        "num_tasks": len(tasks),
+        "config": config,
+        "any_log_found": any(t["log_found"] for t in tasks),
+        "all_logs_found": all(t["log_found"] for t in tasks),
+        "finished": all(t["scoring"]["finished"] for t in tasks),
+        "crashed": any(t["crash"]["crashed"] for t in tasks),
+        "cancelled": any(t["cancelled"] for t in tasks),
+    }
