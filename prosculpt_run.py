@@ -1037,6 +1037,7 @@ def do_cycling(cfg):
                                     mpnn_seq,
                                     yaml_dir,
                                     None,
+                                    monomer_models=monomer_models
                                 )
                                 # input_yaml_files.append(custom_yaml_path)
 
