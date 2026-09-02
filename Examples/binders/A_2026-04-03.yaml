@@ -1,0 +1,45 @@
+task_name: A_2026-04-03
+
+slurm:
+  time: 2-00:00:00
+  # mem: 42g when using Boltz-2
+
+num_tasks: 20 # 10 for scenarios B–D
+
+pdb_path: in_310_Balfa-Cbeta/310_Balfa-Cbeta.pdb
+output_dir: out/A_2026-04-03
+contig: "[B1-437/0 C1-44/C47-360/C369-441/0 60-150]"
+num_designs_rfdiff: 6
+num_seq_per_target_mpnn: 10
+
+af2_mpnn_cycles: 1
+num_models: 2
+chain_break_cutoff_A: 5
+
+sampling_temp: 0.1
+backbone_noise: 0.0
+
+use_a3m: True 
+a3m_dir: in_310_Balfa-Cbeta
+model_monomer: True
+prediction_model: AF3 # Boltz2 when using Boltz-2
+
+defaults:
+  - installation
+  - _self_
+
+pass_to_rfdiff:
+- inference
+- potentials
+- ppi
+- denoiser
+
+inference:
+  generatedWithProsculpt: true
+potentials:
+  generatedWithProsculpt: true
+ppi:
+  hotspot_res: [C162,C263,B409,B112] # as per Supplementary Table 3
+denoiser:
+  noise_scale_ca: 0
+  noise_scale_frame: 0
