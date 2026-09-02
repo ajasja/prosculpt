@@ -21,7 +21,7 @@ The script requires the prosculpt package. It assumes that RFdiffusion, proteinM
 For running tests, Python version must be >= 3.7 (it needs the `capture_output` arg).
 
 ## Installation
-The easiest way to install prosculpt is using a container manager like [apptainer](https://apptainer.org/) (or singularity). To do so, follow these instructions
+The easiest way to install prosculpt is using a container manager like [apptainer](https://apptainer.org/) (or singularity). To do so, follow these instructions. Installation time is quick, but SIF files can take several minutes to download.
 
 Begin by cloning prosculpt:
 ```bash
