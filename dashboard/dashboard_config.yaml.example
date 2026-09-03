@@ -96,3 +96,15 @@ defaults:
   # Preselects this in the Run Job GUI's "Prediction model" field.
   # One of: Colabfold, AF3, Boltz2. Falls back to Colabfold if unset.
   prediction_model: AF3
+  # Port `python app.py` listens on. A PORT env var, if set, wins over this
+  # (e.g. `PORT=8080 python app.py`). Falls back to 5000 if neither is set.
+  port: 5000
+
+# Optional login gate - shows a "Prosculpt Dashboard" password screen before
+# anything else loads. Off by default (or with no dashboard_config.yaml at
+# all). Plain text on purpose - this is meant to keep the dashboard off
+# casual/accidental access on a shared network, not to protect anything
+# sensitive.
+auth:
+  enabled: false
+  password: "changeme"

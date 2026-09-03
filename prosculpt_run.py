@@ -457,11 +457,33 @@ def filter_backbone(backbone_file: Path, filter_configs: List[dict], plugins):
         log.error(f"Error processing {backbone_file.name}: {e}")
 
 
-def parse_additional_args(cfg, group):
+def parse_additional_args_dict(args_dict):
+    """Flattens a dict of args into a " --key value ..." command-line string."""
     dodatniArgumenti = ""
-    for k, v in (cfg.get(group, {}) or {}).items():  # or to allow for empty groups
+    for k, v in (args_dict or {}).items():  # or to allow for empty/None groups
         dodatniArgumenti += f" {k} {v}"
     return dodatniArgumenti
+
+
+def parse_additional_args(cfg, group):
+    return parse_additional_args_dict(cfg.get(group, {}))
+
+
+def resolve_configured_script_path(path_str, default_path=None):
+    """
+    Resolves a user-configurable script path. An absolute path is used as-is;
+    a relative one is checked against the cwd first, then falls back to
+    prosculpt's own install directory. Returns default_path if path_str is falsy.
+    """
+    if not path_str:
+        return Path(default_path)
+
+    raw_path = Path(path_str)
+    if raw_path.is_absolute():
+        return raw_path.resolve()
+
+    cwd_candidate = (Path.cwd() / raw_path).resolve()
+    return cwd_candidate if cwd_candidate.exists() else (Path(__file__).parent / raw_path).resolve()
 
 
 error_messages = ["Testing if we can restart the prosculptApp(cfg)"]
@@ -1113,12 +1135,12 @@ def final_operations(cfg):
         "do we already have csv files? If we need to re-run stats, we have to delete them: ",
         os.listdir(cfg.output_dir),
     )
-    if "output.csv" in os.listdir(cfg.output_dir):
-        os.remove(cfg.output_dir + "/output.csv")
+    if "raw_output.csv" in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir + "/raw_output.csv")
     if "rosetta_scores.csv" in os.listdir(cfg.output_dir):
         os.remove(cfg.output_dir + "/rosetta_scores.csv")
-    if "final_output.csv" in os.listdir(cfg.output_dir):
-        os.remove(cfg.output_dir + "/final_output.csv")
+    if "output.csv" in os.listdir(cfg.output_dir):
+        os.remove(cfg.output_dir + "/output.csv")
 
     for model_i in json_directories:  # for model_i in [model_0, model_1, model_2 ,...]
 
@@ -1197,10 +1219,14 @@ def final_operations(cfg):
         else:
             log.error(f"Unsupported prediction model: {cfg.prediction_model}")
     csv_path = os.path.join(
-        cfg.output_dir, "output.csv"
-    )  # constructed path 'output.csv defined in rename_pdb_create_csv function
+        cfg.output_dir, "raw_output.csv"
+    )  # constructed path 'raw_output.csv defined in rename_pdb_create_csv function
+    scoring_script_path = resolve_configured_script_path(
+        cfg.get("scoring_script", None), default_path=scripts_folder / "scoring_script.py"
+    )
     run_and_log(
-        f'{cfg.prosculpt_python_path} {scripts_folder / "scoring_script.py"} {csv_path}',
+        f'{cfg.prosculpt_python_path} {scoring_script_path} {csv_path}'
+        f'{parse_additional_args(cfg, "scoring_script_arguments")}',
         cfg=cfg,
     )
 
@@ -1209,10 +1235,54 @@ def final_operations(cfg):
     )  #'rosetta_scores.csv defined in scoring_rg_... script
     prosculpt.merge_csv(
         cfg.output_dir, csv_path, rosetta_scores_path
-    )  # , cfg.get("output_best", True), cfg.get("rmsd_threshold",3),cfg.get("plddt_threshold",90) used for filtering. not needed now.
+    )  # writes output_dir/output.csv
 
     os.remove(csv_path)
     os.remove(rosetta_scores_path)
+
+    output_csv_path = os.path.join(cfg.output_dir, "output.csv")
+    prosculpt.apply_filtering(cfg, cfg.output_dir, output_csv_path)
+
+
+def run_post_filtering_scoring(cfg):
+    """
+    Runs cfg.filtering.post_filtering_scoring_script against filtered_output.csv
+    and merges its output back onto it. Invoked as its own SLURM job via the
+    only_run_post_filtering_scoring flag (see slurm_runner.py).
+    """
+    log.info("Running post-filtering scoring")
+
+    script_path = resolve_configured_script_path(cfg.filtering.post_filtering_scoring_script)
+    if not script_path.exists():
+        raise FileNotFoundError(
+            f"post_filtering_scoring_script not found: {script_path}"
+        )
+
+    filtered_csv_path = os.path.join(cfg.output_dir, "filtered_output.csv")
+    log.info(
+        f"Post-filtering scoring: running {script_path} on "
+        f"{prosculpt.count_csv_rows(filtered_csv_path)} filtered model(s)."
+    )
+    # Times the whole subprocess, including per-worker startup cost.
+    start_time = time.time()
+    run_and_log(
+        f"{cfg.prosculpt_python_path} {script_path} {filtered_csv_path} --output_dir {cfg.output_dir}"
+        f'{parse_additional_args_dict(cfg.filtering.get("post_filtering_scoring_script_arguments", {}))}',
+        cfg=cfg,
+    )
+    elapsed = time.time() - start_time
+    log.info(
+        f"Post-filtering scoring: {script_path} finished in {elapsed:.1f}s ({elapsed / 60:.1f} min)."
+    )
+
+    scores_csv_path = os.path.join(cfg.output_dir, "post_filtering_scores.csv")
+    if os.path.exists(scores_csv_path):
+        prosculpt.merge_post_filtering_scores(filtered_csv_path, scores_csv_path)
+        os.remove(scores_csv_path)
+    else:
+        log.warning(
+            f"post_filtering_scoring_script did not produce {scores_csv_path} - filtered_output.csv was not updated with new scores."
+        )
 
 
 def pass_config_to_rfdiff(cfg):
@@ -1324,7 +1394,12 @@ def prosculptApp(cfg: DictConfig) -> None:
     crash_at_error = cfg.get("throw", -1)
     crash_at_cycle = cfg.get("crash_at_cycle", 0)
 
-    if cfg.get("only_run_analysis", False):  # only_run_analysis
+    if cfg.get("only_run_post_filtering_scoring", False):  # only_run_post_filtering_scoring
+        print("***Skip everything, go straight to post-filtering scoring***")
+        dtimelog("only run_post_filtering_scoring")
+        run_post_filtering_scoring(cfg)
+
+    elif cfg.get("only_run_analysis", False):  # only_run_analysis
         print("***Skip everything, go to final operations***")
         dtimelog("only final_operations")
         final_operations(cfg)

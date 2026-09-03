@@ -49,9 +49,7 @@ const CONTIG_HELP = [
 // value) regardless of which modules are active.
 const CORE_FIELDS = [
   { key: "job_name", label: "Job name", type: "text", required: true,
-    help: "Used as the submitted directory name and as task_name unless overridden below." },
-  { key: "task_name", label: "Task name (optional override)", type: "text",
-    help: "Defaults to the job name above." },
+    help: "Used as the submitted directory name and as task_name." },
   { key: "num_tasks", label: "Number of tasks", type: "number", default: 1, min: 1, step: 1 },
   { key: "contig", label: "Contig", type: "textarea", required: true,
     help: "Hover the ? for syntax examples per scenario." },
@@ -93,18 +91,21 @@ const MODULES = {
     help: "Post-filter generated backbones with a plugin script before they proceed to MPNN. Addable to any job.",
     repeatable: true,
     configKey: "rfdiff_backbone_filters",
+    // Each item also gets a free-form "arguments" list (name/value pairs,
+    // written as top-level keys alongside filter_script/delete_failed, not
+    // nested under their own sub-key or "--"-prefixed - see
+    // buildConfigObject() in run_job.js) - a plugin like num_neighbors.py
+    // reads its own arguments this way (e.g. min_neighbors: 5).
+    itemArgs: true,
     itemFields: [
-      { key: "filter_name", label: "Filter name", type: "text", required: true },
-      // Uploaded (not typed) - see the "file_upload_small" handling in
-      // renderRepeatItems()/collectUploadFiles() in run_job.js. Staged
-      // into a filters/ subdirectory of the job's own project directory,
-      // with filter_script set to that path automatically - matches how
-      // boltz2_templates' own "pdb" field uploads a file rather than
-      // asking for a path to one that would have to already exist
-      // somewhere the submitting machine (not necessarily this one) can
-      // see.
-      { key: "filter_script", label: "Filter script", type: "file_upload_small", accept: ".py", required: true,
-        help: "Uploaded into this job's filters/ subdirectory; the path below is set automatically." },
+      // Type-or-upload (see the "path_or_upload" handling in
+      // renderRepeatItems()/collectUploadFiles()/resolveFilterScriptPaths()
+      // in run_job.js) - filter_name is derived from this path's own
+      // filename rather than asked for separately, matching every real
+      // example in the repo (filter_name always equals the script's own
+      // basename).
+      { key: "filter_script", label: "Filter path", type: "path_or_upload", accept: ".py", required: true,
+        tooltip: "Upload your own filter or write the path to one within the prosculpt directory. e.g: plugins/SS_filter.py" },
       { key: "delete_failed", label: "Delete failed structures", type: "boolean", default: false },
     ],
   },
@@ -127,8 +128,8 @@ const MODULES = {
     fields: [
       { key: "designable_residues", label: "Designable residues", type: "text",
         help: "Residues MPNN may redesign; everything else stays fixed.",
-        tooltip: "Example: A1-50. Any chain that should stay entirely fixed (not redesigned) must still be " +
-          "listed here too, given as just its chain letter (e.g. B) - not a residue range." },
+        tooltip: "Example: [A49, A50, A53, A56, A57, B]. Any chain that should stay entirely fixed (not redesigned) " +
+          "must still be listed here too, given as just its chain letter (e.g. B) - not a residue range." },
     ],
   },
   partial_diffusion: {
@@ -147,6 +148,16 @@ const MODULES = {
           "keep counting across chain boundaries (they don't reset at the start of each chain)." },
     ],
   },
+  // Custom (not `fields`/`repeatable`-driven like the others above) -
+  // renderFilteringModuleBody() in run_job.js renders this one's body,
+  // since it bundles three distinct sub-concerns (filter rows, an optional
+  // ranking cap, an optional post-filtering scoring pass) that don't fit
+  // the flat-fields/repeatable-items shape the rest of MODULES uses.
+  filtering: {
+    label: "Filtering & post-filtering scoring",
+    help: "Select which designs pass on one or more metrics, optionally rank/cap the survivors, and optionally run an extra scoring pass on them.",
+    custom: "filtering",
+  },
   boltz2_templates: {
     label: "Boltz2 structural templates",
     help: "Guide Boltz2's prediction with one or more known template structures - only available with prediction model = Boltz2.",
@@ -161,6 +172,40 @@ const MODULES = {
       { key: "threshold", label: "Threshold", type: "number", default: 1, step: 0.1 },
     ],
   },
+};
+
+// Metric dropdown shared by the filtering module's filter rows and its
+// ranking_parameters metric - "OTHER" reveals a free-text field instead,
+// for a scoring-script-provided metric not in this fixed list.
+const FILTER_METRIC_OPTIONS = [
+  "plddt", "plddt_sculpted", "RMSD", "RMSD_sculpted", "RMSD_fixed_chains",
+  "RMSD_motif", "monomer_rmsd", "monomer_plddt", "OTHER",
+];
+
+// monomer_rmsd/monomer_plddt only make sense with "Also predict monomer"
+// (core.model_monomer) enabled - filtered out of the dropdown otherwise, see
+// renderMetricSelectControl() in run_job.js.
+const MONOMER_ONLY_METRICS = ["monomer_rmsd", "monomer_plddt"];
+
+// Whether a preset metric is better higher or lower - locks the ranking
+// module's "Higher is better" toggle to the right value when one of these
+// is selected (see applyLockedHigherBetter() in run_job.js). Metrics not
+// listed here (currently just "OTHER") leave it unlocked/user-set.
+const METRIC_HIGHER_BETTER = {
+  plddt: true, plddt_sculpted: true, monomer_plddt: true,
+  RMSD: false, RMSD_sculpted: false, RMSD_fixed_chains: false, RMSD_motif: false, monomer_rmsd: false,
+};
+
+// Tooltips for the two flags auto-populated when the default post-filtering
+// scoring script is selected (see ensureDefaultPostScoringFlags() in
+// run_job.js) - wording matches that script's own --chain_pairs/
+// --use_backbone_minimization argparse help text.
+const POST_SCORING_FLAG_TOOLTIPS = {
+  chain_pairs:
+    'Which chain-chain interfaces to score. "all" scores every pairwise combination present in the model. ' +
+    'To restrict to specific pairs, give a single pair (e.g. "AB") or a comma-separated list (e.g. "AB,AC").',
+  use_backbone_minimization:
+    "Whether to also minimize the backbone (not just side chains) before scoring ddG/ShapeComplementarity.",
 };
 
 // Fixed order pass_to_rfdiff entries are written in, matching the

@@ -15,6 +15,7 @@ import re
 import shutil
 import tempfile
 
+import yaml
 from flask import Blueprint, abort, jsonify, request
 from werkzeug.utils import secure_filename
 
@@ -128,6 +129,9 @@ def api_run_submit():
     dir_renamed = False
     original_name = None
     final_name = None
+    # Only ever set for "existing" mode - see its own branch below.
+    output_dir_rel = None
+    output_dir_override = None
 
     if mode == "build":
         job_name = request.form.get("job_name", "")
@@ -205,11 +209,43 @@ def api_run_submit():
             abort(400, description="existing_project_path and config_filename are required")
         if not os.path.isdir(existing_path):
             abort(400, description=f"Not a directory (or not reachable from this machine): {existing_path}")
-        # No ensure_logs_dir() call here anymore - slurm_runner.py creates
-        # <output_dir>/logs/ itself before it needs it, so nothing here has
-        # to pre-create a logs/ directory (nor guess where one should go).
         job_dir = existing_path
         reported_local_job_dir = job_dir
+
+        # Read output_dir straight out of the existing config (never
+        # rewritten - it's submitted exactly as-is), for Track job to point
+        # at instead of the project root (see addSubmittedJobToTracking() in
+        # run_job.js). Assumed relative to existing_path, matching every job
+        # yaml's own convention. One project directory can hold more than
+        # one output_dir over time (each resubmission is its own separate
+        # run) - if this one already exists on disk (e.g. a previous run of
+        # this same project), pick the next available name instead - same
+        # collision-avoidance stage_job() uses for a "build"-mode local
+        # target - via an output_dir= override passed to slurm_runner.py,
+        # since the yaml file itself is never touched.
+        output_dir_rel = None
+        output_dir_override = None
+        try:
+            with open(os.path.join(existing_path, config_filename)) as f:
+                existing_yaml = yaml.safe_load(f)
+            candidate = existing_yaml.get("output_dir") if isinstance(existing_yaml, dict) else None
+            if isinstance(candidate, str) and candidate.strip() and not os.path.isabs(candidate):
+                candidate = candidate.strip()
+                # Every real example config in this repo writes output_dir
+                # with a trailing slash (e.g. "Examples/Examples_out/binder/")
+                # - resolve_available_name() would otherwise append "_2"
+                # straight onto that, landing on ".../binder/_2" (a
+                # subdirectory *nested inside* the original, colliding
+                # output_dir) instead of a proper sibling "binder_2".
+                candidate = candidate.rstrip("/\\") or candidate
+                output_dir_rel, renamed = JS.resolve_available_name(
+                    candidate, lambda n: os.path.isdir(os.path.join(existing_path, n))
+                )
+                if renamed:
+                    output_dir_override = output_dir_rel
+        except (OSError, yaml.YAMLError):
+            pass  # Can't determine it - tracking falls back to the project root, as before this existed.
+
         if target["kind"] == "local":
             submit_from = job_dir
             remote_job_dir = None
@@ -246,6 +282,11 @@ def api_run_submit():
 
     dry_run = request.form.get("dry_run") in ("1", "true", "True")
     argv = [target["python_path"], f"{target['slurm_runner_path']}/slurm_runner.py", config_filename]
+    if output_dir_override:
+        # Overrides the yaml's own output_dir for this run only (collision
+        # avoidance - see above) - must come right after config_filename,
+        # matching slurm_runner.py's own documented override order.
+        argv.append(f"output_dir={output_dir_override}")
     if dry_run:
         argv.append("--dry-run")
     # No --allow-custom-log-path here - this dashboard's own submissions get
@@ -290,6 +331,12 @@ def api_run_submit():
             "dir_renamed": dir_renamed,
             "original_name": original_name,
             "final_name": final_name,
+            # "existing" mode only - the output_dir read out of the config
+            # (renamed on collision, see above), relative to local_job_dir/
+            # remote_job_dir. None for "build" mode, which already knows its
+            # own output_dir client-side (see addSubmittedJobToTracking() in
+            # run_job.js).
+            "output_dir_rel": output_dir_rel,
         }
     )
 

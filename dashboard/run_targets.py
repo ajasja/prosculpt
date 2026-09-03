@@ -79,6 +79,15 @@ def get_defaults() -> dict[str, Any]:
     return _load_raw().get("defaults") or {}
 
 
+def get_auth_config() -> dict[str, Any]:
+    """The dashboard's own login gate (`auth:` in dashboard_config.yaml) -
+    {"enabled": bool, "password": str}. Disabled (and no password) with no
+    config file at all, same "never a hard requirement" reasoning as
+    get_defaults()."""
+    auth = _load_raw().get("auth") or {}
+    return {"enabled": bool(auth.get("enabled")), "password": str(auth.get("password") or "")}
+
+
 def _target_mounts(t: dict[str, Any]) -> list[dict[str, Any]]:
     """A target's `mounts:` list, normalized to always be a list (never
     None/missing). Each entry is `{remote: ..., local: ..., label: ...}` -
@@ -115,7 +124,7 @@ def _translate_with_pairs(remote_path: Optional[str], pairs: list[tuple[Optional
     dashboard_config.yaml on every call - the difference between one
     config read per API request (translate_remote_path(), used for a
     single path like output_dir) and one per *cell* of a potentially huge
-    final_output.csv (make_path_translator(), see its own docstring)."""
+    output.csv/filtered_output.csv (make_path_translator(), see its own docstring)."""
     if not remote_path:
         return remote_path
     remote_norm = remote_path.replace("\\", "/").rstrip("/")
@@ -178,7 +187,7 @@ def translate_remote_path(remote_path: Optional[str]) -> Optional[str]:
 
     Not just output_dir: the exact same substitution is needed for any
     other absolute path Prosculpt records at run time and the dashboard
-    later reads back - e.g. final_output.csv's path_rfdiff/model_path/
+    later reads back - e.g. output.csv/filtered_output.csv's path_rfdiff/model_path/
     af2_pdb/af3_pdb/... columns (see load_final_csv() in parser.py, which
     uses make_path_translator() below rather than calling this function
     once per cell).
@@ -202,7 +211,7 @@ def make_path_translator():
     """Loads dashboard_config.yaml *once* and returns a plain function
     `translate(path) -> path` that reuses that single load for as many
     paths as the caller needs translated - for batch use against many
-    paths at once (e.g. every path-like column of a final_output.csv that
+    paths at once (e.g. every path-like column of an output.csv that
     can run into the tens of thousands of rows, see load_final_csv() in
     parser.py) where calling translate_remote_path() per-value would mean
     one disk read + YAML parse per value instead of one for the whole

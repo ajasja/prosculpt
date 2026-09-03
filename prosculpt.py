@@ -17,6 +17,9 @@ from Bio.Align import PairwiseAligner
 import re
 import yaml
 import copy
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def make_boltz_input_yaml(
@@ -869,21 +872,160 @@ def merge_csv(output_dir, output_csv, scores_csv):
 
     # save merged dataframe to csv file
     merged_df.to_csv(
-        f'{os.path.join(output_dir, "final_output.csv")}',
+        f'{os.path.join(output_dir, "output.csv")}',
         index=False,
         float_format="%.1f",
     )
+    # Config-driven filtering into a "best" subset - see apply_filtering() below.
 
-    # Select best ones and copy to another csv. commented out for now
-    # if (output_best):
-    # best_df=merged_df[(merged_df["RMSD"] <= rmsd_threshold) | (merged_df["plddt"] >= plddt_threshold)] #select best based on thresholds
-    # best_df.to_csv(f'{os.path.join(output_dir, "final_output_best.csv")}', index=False)
 
-    # dir_best_pdbs = os.path.join(output_dir, "best_pdbs")
-    # os.makedirs(dir_best_pdbs, exist_ok=True) # directory is created even if some or all of the intermediate directories in the path do not exist
+# Columns where -1 means "could not be computed" rather than a real value
+# (e.g. no control structure to compare RMSD against). Not a blanket rule
+# for every metric - only these columns are known to use -1 this way.
+UNDEFINED_SENTINEL_COLUMNS = {
+    "RMSD",
+    "RMSD_sculpted",
+    "RMSD_fixed_chains",
+    "RMSD_motif",
+    "plddt_sculpted",
+}
+UNDEFINED_SENTINEL_VALUE = -1
 
-    # for file in best_df["model_path"]:
-    #    shutil.copy(file,os.path.join(output_dir, "best_pdbs"))
+
+def apply_filtering(cfg, output_dir, csv_path):
+    """
+    Filters csv_path's rows against cfg.filtering.filtering_parameters
+    (per-metric min/max thresholds), optionally capped to the best
+    max_results by cfg.filtering.ranking_parameters. Copies surviving PDBs
+    into output_dir/filtered_pdbs and writes output_dir/filtered_output.csv.
+
+    An unknown filtering_parameters key is skipped with a warning, not
+    raised. Returns None without doing anything if `filtering:` is absent
+    from cfg.
+    """
+    filtering_cfg = cfg.get("filtering", None)
+    if not filtering_cfg:
+        log.info(
+            "Filtering: no `filtering:` section configured - skipping "
+            "(filtered_pdbs/filtered_output.csv will not be created)."
+        )
+        return None
+
+    df = pd.read_csv(csv_path)
+    total_count = len(df)
+
+    filtering_parameters = filtering_cfg.get("filtering_parameters", {}) or {}
+
+    log.info(f"Filtering: {total_count} total model(s) in {csv_path}.")
+
+    mask = pd.Series(True, index=df.index)
+    for metric, bounds in filtering_parameters.items():
+        if metric not in df.columns:
+            log.warning(
+                f"Filtering metric '{metric}' was not found in {csv_path} - ignoring this filter."
+            )
+            continue
+
+        values = pd.to_numeric(df[metric], errors="coerce")
+        metric_mask = pd.Series(True, index=df.index)
+        if metric in UNDEFINED_SENTINEL_COLUMNS:
+            # Sentinel values never pass a filter on this metric.
+            metric_mask &= values != UNDEFINED_SENTINEL_VALUE
+        if "min" in bounds:
+            metric_mask &= values >= bounds["min"]
+        if "max" in bounds:
+            metric_mask &= values <= bounds["max"]
+        mask &= metric_mask
+
+    filtered_df = df[mask].copy()
+    passed_filtering_count = len(filtered_df)
+
+    if filtering_parameters:
+        log.info(
+            f"Filtering: {passed_filtering_count} of {total_count} model(s) passed filtering_parameters "
+            f"{list(filtering_parameters.keys())}."
+        )
+    else:
+        log.info(
+            f"Filtering: no filtering_parameters configured - all {total_count} model(s) pass."
+        )
+
+    ranking_parameters = filtering_cfg.get("ranking_parameters", None)
+    if ranking_parameters is not None:
+        metric = ranking_parameters["metric"]
+        higher_better = ranking_parameters["higher_better"]
+        max_results = ranking_parameters["max_results"]
+        if metric not in filtered_df.columns:
+            log.warning(
+                f"Ranking metric '{metric}' was not found in {csv_path} - skipping the ranking/max_results cap."
+            )
+        elif passed_filtering_count > max_results:
+            left_out_count = passed_filtering_count - max_results
+            log.info(
+                f"Ranking: {passed_filtering_count} model(s) passed filtering, which exceeds "
+                f"max_results={max_results} - keeping the best {max_results} by '{metric}' "
+                f"(higher_better={higher_better}) and leaving out {left_out_count}."
+            )
+            filtered_df["__ranking_metric_numeric"] = pd.to_numeric(
+                filtered_df[metric], errors="coerce"
+            )
+            filtered_df = filtered_df.sort_values(
+                by="__ranking_metric_numeric", ascending=not higher_better
+            ).head(max_results)
+            filtered_df = filtered_df.drop(columns="__ranking_metric_numeric")
+        else:
+            log.info(
+                f"Ranking: {passed_filtering_count} model(s) passed filtering, which does not exceed "
+                f"max_results={max_results} - ranking_parameters cap was not needed."
+            )
+
+    filtered_pdbs_dir = os.path.join(output_dir, "filtered_pdbs")
+    os.makedirs(filtered_pdbs_dir, exist_ok=True)
+
+    new_model_paths = []
+    for model_path in filtered_df["model_path"]:
+        dest = os.path.join(filtered_pdbs_dir, os.path.basename(model_path))
+        shutil.copy(model_path, dest)
+        new_model_paths.append(dest)
+    filtered_df["model_path"] = new_model_paths
+
+    filtered_csv_path = os.path.join(output_dir, "filtered_output.csv")
+    filtered_df.to_csv(filtered_csv_path, index=False)
+
+    log.info(
+        f"Filtering: {len(filtered_df)} of {total_count} model(s) kept overall and copied to {filtered_pdbs_dir}."
+    )
+    return filtered_csv_path
+
+
+def count_csv_rows(csv_path):
+    """Row count of a CSV file (excluding the header)."""
+    return len(pd.read_csv(csv_path))
+
+
+def merge_post_filtering_scores(filtered_csv_path, scores_csv_path):
+    """
+    Merges a post_filtering_scoring_script's output onto filtered_output.csv,
+    in place, joined on 'model_path'.
+    """
+    filtered_df = pd.read_csv(filtered_csv_path)
+    scores_df = pd.read_csv(scores_csv_path)
+
+    filtered_count = len(filtered_df)
+    scored_count = scores_df["model_path"].nunique()
+    log.info(
+        f"Post-filtering scoring: {scored_count} of {filtered_count} filtered model(s) were scored."
+    )
+    if scored_count < filtered_count:
+        log.warning(
+            f"Post-filtering scoring: {filtered_count - scored_count} filtered model(s) got no score "
+            f"from the post_filtering_scoring_script - their new columns will be blank in filtered_output.csv."
+        )
+
+    merged_df = pd.merge(filtered_df, scores_df, on="model_path", how="left")
+    merged_df = merged_df.loc[:, ~merged_df.columns.duplicated()]
+
+    merged_df.to_csv(filtered_csv_path, index=False)
 
 
 def get_cycle_pdb_paths(cfg, model_subdict):
@@ -970,8 +1112,8 @@ def rename_pdb_create_csv_colabfold(
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "")  # add / to path to access json files within
 
-    # dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "final_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
-    dir_renamed_pdb = os.path.join(output_dir, "final_pdbs")
+    # dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "output_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
+    dir_renamed_pdb = os.path.join(output_dir, "output_pdbs")
     os.makedirs(
         dir_renamed_pdb, exist_ok=True
     )  # directory is created even if some or all of the intermediate directories in the path do not exist
@@ -1217,7 +1359,7 @@ def rename_pdb_create_csv_colabfold(
             dictionary["monomer_plddt"] = monomer_plddt
 
         df = pd.json_normalize(dictionary)
-        path_csv = os.path.join(output_dir, "output.csv")
+        path_csv = os.path.join(output_dir, "raw_output.csv")
         df.to_csv(
             path_csv,
             mode="a",
@@ -1241,8 +1383,8 @@ def rename_pdb_create_csv_boltz(
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "")  # add / to path to access json files within
 
-    # dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "final_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
-    dir_renamed_pdb = os.path.join(output_dir, "final_pdbs")
+    # dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "output_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
+    dir_renamed_pdb = os.path.join(output_dir, "output_pdbs")
     os.makedirs(
         dir_renamed_pdb, exist_ok=True
     )  # directory is created even if some or all of the intermediate directories in the path do not exist
@@ -1499,7 +1641,7 @@ def rename_pdb_create_csv_boltz(
                 dictionary["monomer_plddt"] = monomer_plddt
 
             df = pd.json_normalize(dictionary)
-            path_csv = os.path.join(output_dir, "output.csv")
+            path_csv = os.path.join(output_dir, "raw_output.csv")
             df.to_csv(
                 path_csv,
                 mode="a",
@@ -1523,8 +1665,8 @@ def rename_pdb_create_csv_AF3(
     # Preparing paths to acces correct files
     model_i = os.path.join(model_i, "")  # add / to path to access json files within
 
-    # dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "final_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
-    dir_renamed_pdb = os.path.join(output_dir, "final_pdbs")
+    # dir_renamed_pdb = os.path.join(os.path.dirname(output_dir), "output_pdbs") #Why is this done to the parent folder? It's annoying if running multiple jobs on the same folder
+    dir_renamed_pdb = os.path.join(output_dir, "output_pdbs")
     os.makedirs(
         dir_renamed_pdb, exist_ok=True
     )  # directory is created even if some or all of the intermediate directories in the path do not exist
@@ -1806,7 +1948,7 @@ def rename_pdb_create_csv_AF3(
             dictionary["monomer_plddt"] = monomer_plddt
 
         df = pd.json_normalize(dictionary)
-        path_csv = os.path.join(output_dir, "output.csv")
+        path_csv = os.path.join(output_dir, "raw_output.csv")
         df.to_csv(
             path_csv,
             mode="a",
@@ -1961,15 +2103,19 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
         )
         print(f"ChainResidOffset: {chainResidOffset}")
 
+        # Always written under cfg.rfdiff_out_dir (not pdb_path) so every cycle finds the same file.
+        chain_resid_offset_path = os.path.join(
+            cfg.rfdiff_out_dir, f"_{rf_model_num}_chainResidOffset.json"
+        )
         with open(
-            f"{pdb_path}/../chainResidOffset_{rf_model_num}.json",
+            chain_resid_offset_path,
             "w" if cycle == 0 else "r",
         ) as f:
             if cycle == 0:
                 json.dump(chainResidOffset, f)
             else:
                 chainResidOffset = json.load(f)
-        print(f"Dumped or read chainResidOffset_{rf_model_num}.json")
+        print(f"Dumped or read {os.path.basename(chain_resid_offset_path)}")
         print(f"ChainResidOffset: {chainResidOffset}")
 
         if not skipRfDiff:
