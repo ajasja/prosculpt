@@ -1820,57 +1820,6 @@ def rename_pdb_create_csv_AF3(
 # funkcija na koncu, ki vse združi
 # sestavljanje pathov je ok, dodaj nov column s pathom do rfdif
 
-
-def create_dataframe(path_to_files, output_dir):  # path = r'content/*partial.pdb'
-    # takes path  to renamed pdbs
-    all_files = glob.glob(os.path.join(path_to_files, "*.pdb"))
-    list_of_dicts = []
-
-    for file_name in all_files:
-        p = PDBParser()
-        structure = p.get_structure("model_seq", file_name)
-        ppb = PPBuilder()
-
-        seq = ""
-        for pp in ppb.build_peptides(structure):
-            seq += f":{pp.get_sequence().__str__()}"
-        print(seq)
-        dictionary = {
-            "link_lenght": get_token_value(
-                file_name, "link_", "(\\d*\\.\\d+|\\d+\\.?\\d*)"
-            ),
-            "plddt": get_token_value(
-                file_name, "__plddt_", "(\\d*\\.\\d+|\\d+\\.?\\d*)"
-            ),
-            "RMSD": get_token_value(
-                file_name, "__rmsd_", "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"
-            ),
-            #'Rmsd_all_fixed': get_token_value(file_name, '__rmsd_all_fixed_', "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"),
-            "RMSD_sculpted": get_token_value(
-                file_name, "__rmsd_sculpted_", "(-?\\d*\\.\\d+|-?\\d+\\.?\\d*)"
-            ),
-            "pae": get_token_value(file_name, "__pae_", "(\\d*\\.\\d+|\\d+\\.?\\d*)"),
-            "model_path": file_name,
-            "sequence": seq,
-            "rfdiff model": get_token_value(
-                file_name, "__rf_", "(\\d*\\.\\d+|\\d+\\.?\\d*)"
-            ),
-        }  # MODEL PATH for scoring_rg_... #jsonfilename for traceability
-
-        list_of_dicts.append(dictionary)
-
-    # columns = ['link_length', 'plddt', 'loop_plddt', 'RMSD', 'model_path', 'sequence', 'score_traceb']
-    df = pd.DataFrame(list_of_dicts)
-    path_csv = os.path.join(os.path.dirname(output_dir), "output.csv")
-    df.to_csv(
-        path_csv,
-        mode="a",
-        header=not os.path.exists(path_csv),
-        index=False,
-        float_format="%.1f",
-    )
-
-
 class NumpyInt64Encoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, np.int64):
