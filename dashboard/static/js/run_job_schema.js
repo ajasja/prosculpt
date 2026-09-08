@@ -202,8 +202,15 @@ const METRIC_HIGHER_BETTER = {
 // --use_backbone_minimization argparse help text.
 const POST_SCORING_FLAG_TOOLTIPS = {
   chain_pairs:
-    'Which chain-chain interfaces to score. "all" scores every pairwise combination present in the model. ' +
-    'To restrict to specific pairs, give a single pair (e.g. "AB") or a comma-separated list (e.g. "AB,AC").',
+    "Which interfaces to score ddG / shape-complementarity for. An interface is written " +
+    "as its two sides separated by an underscore.<br><br>" +
+    '<b>A_B</b> - chain A against chain B.<br>' +
+    '<b>AB_CD</b> - chains A and B <i>together</i> against chains C and D together.<br>' +
+    '<b>A_BCD</b> - chain A against the other three as one group.<br>' +
+    '<b>A_B,AB_CD</b> - a comma-separated list of interfaces.<br>' +
+    '<b>all</b> - every pairwise combination of chains present in the model.<br><br>' +
+    'An interface is skipped for any model that does not have all of its chains. ' +
+    '"all" only enumerates pairs - name group interfaces explicitly.',
   use_backbone_minimization:
     "Whether to also minimize the backbone (not just side chains) before scoring ddG/ShapeComplementarity.",
 };
