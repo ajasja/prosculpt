@@ -212,37 +212,52 @@ def api_run_submit():
         job_dir = existing_path
         reported_local_job_dir = job_dir
 
-        # Read output_dir straight out of the existing config (never
-        # rewritten - it's submitted exactly as-is), for Track job to point
-        # at instead of the project root (see addSubmittedJobToTracking() in
+        # Read output_dir straight out of the existing config (the file
+        # itself is never touched by submitting), for Track job to point at
+        # instead of the project root (see addSubmittedJobToTracking() in
         # run_job.js). Assumed relative to existing_path, matching every job
-        # yaml's own convention. One project directory can hold more than
-        # one output_dir over time (each resubmission is its own separate
-        # run) - if this one already exists on disk (e.g. a previous run of
-        # this same project), pick the next available name instead - same
-        # collision-avoidance stage_job() uses for a "build"-mode local
-        # target - via an output_dir= override passed to slurm_runner.py,
-        # since the yaml file itself is never touched.
+        # yaml's own convention.
         output_dir_rel = None
         output_dir_override = None
         try:
             with open(os.path.join(existing_path, config_filename)) as f:
                 existing_yaml = yaml.safe_load(f)
-            candidate = existing_yaml.get("output_dir") if isinstance(existing_yaml, dict) else None
+            if not isinstance(existing_yaml, dict):
+                existing_yaml = {}
+            candidate = existing_yaml.get("output_dir")
+            # Read off the config as submitted rather than from a form
+            # field, so where the job writes can't disagree with what the
+            # job will actually do.
+            rerun_analysis = bool(existing_yaml.get("only_run_analysis"))
             if isinstance(candidate, str) and candidate.strip() and not os.path.isabs(candidate):
-                candidate = candidate.strip()
                 # Every real example config in this repo writes output_dir
                 # with a trailing slash (e.g. "Examples/Examples_out/binder/")
                 # - resolve_available_name() would otherwise append "_2"
                 # straight onto that, landing on ".../binder/_2" (a
                 # subdirectory *nested inside* the original, colliding
                 # output_dir) instead of a proper sibling "binder_2".
+                candidate = candidate.strip()
                 candidate = candidate.rstrip("/\\") or candidate
-                output_dir_rel, renamed = JS.resolve_available_name(
-                    candidate, lambda n: os.path.isdir(os.path.join(existing_path, n))
-                )
-                if renamed:
-                    output_dir_override = output_dir_rel
+                if rerun_analysis:
+                    # only_run_analysis re-runs final operations (and post-
+                    # filtering scoring, if the config asks for one) over a
+                    # run that already happened, so it has to land in that
+                    # run's own output_dir - a fresh "_2" would point it at
+                    # an empty directory with nothing to analyse.
+                    output_dir_rel = candidate
+                else:
+                    # One project directory can hold more than one output_dir
+                    # over time (each resubmission is its own separate run) -
+                    # if this one already exists on disk, pick the next
+                    # available name instead, the same collision-avoidance
+                    # stage_job() uses for a "build"-mode local target, via an
+                    # output_dir= override passed to slurm_runner.py (the yaml
+                    # file itself is never rewritten).
+                    output_dir_rel, renamed = JS.resolve_available_name(
+                        candidate, lambda n: os.path.isdir(os.path.join(existing_path, n))
+                    )
+                    if renamed:
+                        output_dir_override = output_dir_rel
         except (OSError, yaml.YAMLError):
             pass  # Can't determine it - tracking falls back to the project root, as before this existed.
 
@@ -382,3 +397,63 @@ def api_run_check_pending():
         abort(400, description="glob must be under a configured target's projects_path")
     matches = sorted(glob.glob(pattern, recursive=True))
     return jsonify({"found": bool(matches), "paths": matches})
+
+
+# A config file is always read/written through the project directory the
+# user picked, by bare filename - the same contract config_filename has in
+# api_run_submit() ("within that directory"), and the reason a name with a
+# path separator in it is rejected rather than resolved.
+_MAX_CONFIG_BYTES = 1_000_000
+
+
+def _existing_config_path(job_dir: str, filename: str) -> str:
+    if not job_dir or not filename:
+        abort(400, description="dir and filename are required")
+    if not os.path.isdir(job_dir):
+        abort(400, description=f"Not a directory (or not reachable from this machine): {job_dir}")
+    if os.path.basename(filename) != filename or filename in (".", ".."):
+        abort(400, description="filename must be a plain filename inside the project directory")
+    return os.path.join(job_dir, filename)
+
+
+@run_api.route("/api/run/existing_config")
+def api_run_existing_config():
+    """The current text of a config file in an "existing project"
+    directory, for the editor under that pane's own filename field."""
+    path = _existing_config_path(request.args.get("dir", "").strip(), request.args.get("filename", "").strip())
+    if not os.path.isfile(path):
+        abort(404, description=f"No such file: {path}")
+    try:
+        size = os.path.getsize(path)
+        if size > _MAX_CONFIG_BYTES:
+            abort(400, description=f"File is too large to edit here ({size} bytes)")
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+    except UnicodeDecodeError:
+        abort(400, description="Not a text file")
+    except OSError as e:
+        abort(400, description=f"Could not read {path}: {e}")
+    return jsonify({"content": content, "filename": os.path.basename(path)})
+
+
+@run_api.route("/api/run/existing_config", methods=["POST"])
+def api_run_save_existing_config():
+    """Writes an edited config back. Without `overwrite`, an existing file
+    is a 409 rather than being clobbered - that's what lets "Save as" ask
+    before replacing something, while a plain "Save" (same file the editor
+    loaded) passes overwrite and goes straight through."""
+    body = request.get_json(silent=True) or {}
+    path = _existing_config_path(str(body.get("dir") or "").strip(), str(body.get("filename") or "").strip())
+    content = body.get("content")
+    if not isinstance(content, str):
+        abort(400, description="content is required")
+    if len(content.encode("utf-8")) > _MAX_CONFIG_BYTES:
+        abort(400, description="Content is too large")
+    if os.path.exists(path) and not body.get("overwrite"):
+        abort(409, description=f"{os.path.basename(path)} already exists")
+    try:
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(content)
+    except OSError as e:
+        abort(400, description=f"Could not write {path}: {e}")
+    return jsonify({"ok": True, "filename": os.path.basename(path)})

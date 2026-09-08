@@ -18,6 +18,11 @@ let runJob = {
   targets: [],
   suppressYamlSync: false,
   yamlIsValid: true,
+  // "existing project" mode's config editor: `loaded` is the text as it
+  // is on disk, so an edit can be told from the saved state (and dir/
+  // filename record which file that text actually came from, which is not
+  // necessarily what the fields say right now - the user can retype them).
+  existingConfig: { dir: "", filename: "", loaded: null },
 };
 
 function initRunJobDefaults() {
@@ -1560,6 +1565,175 @@ function initRunJobSplitResizer() {
 }
 
 // ---------------------------------------------------------------------
+// "Existing project" config editor - loads the picked config file so it
+// can be edited in place, with Save / Save as. The job is submitted from
+// the file on disk (nothing here is sent along with the submission), so
+// unsaved edits are warned about at submit time rather than silently
+// applied or silently ignored.
+// ---------------------------------------------------------------------
+// only_run_analysis is edited as *text*, not by parsing the YAML and
+// re-serialising it: these are hand-written configs full of comments and
+// deliberate ordering, and a round-trip through a YAML dumper would throw
+// all of that away. Reading the current value can go through the parser
+// safely, though - that doesn't touch the file.
+const ONLY_ANALYSIS_KEY = "only_run_analysis";
+// Top level only: a line with leading whitespace is nested under some
+// other key, and a commented-out one (config/runAdvanced.yaml ships
+// exactly that) isn't in effect and shouldn't be edited in place either.
+const ONLY_ANALYSIS_LINE_RE = new RegExp(`^${ONLY_ANALYSIS_KEY}\s*:(.*)$`);
+
+function readOnlyRunAnalysis(yamlText) {
+  try {
+    const parsed = jsyaml.load(yamlText);
+    if (parsed && typeof parsed === "object") return !!parsed[ONLY_ANALYSIS_KEY];
+  } catch (e) {
+    // Mid-edit YAML can be unparseable - fall back to reading the one line.
+  }
+  const line = yamlText.split("\n").find((l) => ONLY_ANALYSIS_LINE_RE.test(l));
+  return line ? /^\s*(true|yes|on|1)\s*(#.*)?$/i.test(line.replace(ONLY_ANALYSIS_LINE_RE, "$1")) : false;
+}
+
+// Sets the key to `on`, in place if it's already there (keeping any
+// trailing comment) and appended at the end if not. Turning it off writes
+// `false` rather than deleting the line, so a config that had it spelled
+// out doesn't quietly lose the setting.
+function writeOnlyRunAnalysis(yamlText, on) {
+  const lines = yamlText.split("\n");
+  const idx = lines.findIndex((l) => ONLY_ANALYSIS_LINE_RE.test(l));
+  if (idx !== -1) {
+    const comment = (lines[idx].match(/#.*$/) || [""])[0];
+    lines[idx] = `${ONLY_ANALYSIS_KEY}: ${on}${comment ? "  " + comment : ""}`;
+    return lines.join("\n");
+  }
+  if (!on) return yamlText; // Absent already means false - nothing to add.
+  const sep = yamlText.endsWith("\n") || yamlText === "" ? "" : "\n";
+  return `${yamlText}${sep}${ONLY_ANALYSIS_KEY}: true\n`;
+}
+
+function syncOnlyAnalysisCheckbox() {
+  qs("#runJobExistingOnlyAnalysis").checked = readOnlyRunAnalysis(qs("#runJobExistingConfigEditor").value);
+}
+
+function onOnlyAnalysisToggled() {
+  const on = qs("#runJobExistingOnlyAnalysis").checked;
+  qs("#runJobExistingConfigEditor").value = writeOnlyRunAnalysis(qs("#runJobExistingConfigEditor").value, on);
+  updateExistingConfigButtons();
+  if (existingConfigIsDirty()) {
+    setExistingConfigStatus(`${ONLY_ANALYSIS_KEY} set to ${on} below - Save to apply it to this run.`);
+  }
+}
+
+function existingConfigIsDirty() {
+  const ec = runJob.existingConfig;
+  return ec.loaded !== null && qs("#runJobExistingConfigEditor").value !== ec.loaded;
+}
+
+function setExistingConfigStatus(text, isError = false) {
+  const el = qs("#runJobExistingConfigStatus");
+  el.textContent = text || "";
+  el.classList.toggle("rj-warn", !!isError);
+}
+
+function updateExistingConfigButtons() {
+  const dirty = existingConfigIsDirty();
+  qs("#runJobExistingConfigSaveBtn").disabled = !dirty;
+  qs("#runJobExistingConfigSaveAsBtn").disabled = !dirty;
+}
+
+function clearExistingConfigEditor(message = "") {
+  runJob.existingConfig = { dir: "", filename: "", loaded: null };
+  qs("#runJobExistingConfigEditor").value = "";
+  qs("#runJobExistingOnlyAnalysis").checked = false;
+  qs("#runJobExistingConfigEditorField").classList.toggle("hidden", !message);
+  setExistingConfigStatus(message, !!message);
+  updateExistingConfigButtons();
+}
+
+async function loadExistingConfig() {
+  const dir = qs("#runJobExistingPath").value.trim();
+  const filename = qs("#runJobExistingConfigFilename").value.trim();
+  if (!dir || !filename) {
+    clearExistingConfigEditor();
+    return;
+  }
+  const ec = runJob.existingConfig;
+  // Re-picking the file that's already open is a no-op rather than a
+  // reload, so unsaved edits survive it.
+  if (existingConfigIsDirty() && dir === ec.dir && filename === ec.filename) return;
+  // Switching to a different file replaces what's in the editor, so
+  // unsaved edits would be lost - ask, and put the fields back if the
+  // answer is no, so they keep matching the text actually shown.
+  if (existingConfigIsDirty() && !confirm(`Discard your unsaved changes to ${ec.filename}?`)) {
+    qs("#runJobExistingPath").value = ec.dir;
+    qs("#runJobExistingConfigFilename").value = ec.filename;
+    return;
+  }
+  setExistingConfigStatus("Loading...");
+  qs("#runJobExistingConfigEditorField").classList.remove("hidden");
+  try {
+    const data = await apiGet("/api/run/existing_config", { dir, filename });
+    qs("#runJobExistingConfigEditor").value = data.content;
+    runJob.existingConfig = { dir, filename, loaded: data.content };
+    syncOnlyAnalysisCheckbox();
+    setExistingConfigStatus(`Loaded ${filename}.`);
+  } catch (e) {
+    clearExistingConfigEditor(`Could not load ${filename}: ${e.message}`);
+  }
+  updateExistingConfigButtons();
+}
+
+// Writes the editor's contents to `filename`. `overwrite` false asks the
+// server to refuse an existing file (a 409) instead, so "Save as" can
+// confirm before replacing something.
+async function saveExistingConfig(filename, overwrite) {
+  const dir = qs("#runJobExistingPath").value.trim();
+  const content = qs("#runJobExistingConfigEditor").value;
+  const res = await fetch("/api/run/existing_config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dir, filename, content, overwrite: !!overwrite }),
+  });
+  if (res.status === 409) return { conflict: true };
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { error: data.error || data.message || `HTTP ${res.status}` };
+  runJob.existingConfig = { dir, filename, loaded: content };
+  qs("#runJobExistingConfigFilename").value = filename;
+  updateExistingConfigButtons();
+  return { ok: true };
+}
+
+async function onSaveExistingConfig() {
+  const filename = runJob.existingConfig.filename || qs("#runJobExistingConfigFilename").value.trim();
+  if (!filename) return;
+  // Save replaces the file the job will run from, in place - unlike "Save
+  // as", which can't destroy anything without its own overwrite prompt.
+  if (!confirm("Are you sure you want to overwrite this configuration file?")) return;
+  setExistingConfigStatus("Saving...");
+  const res = await saveExistingConfig(filename, true);
+  if (res.error) setExistingConfigStatus(`Could not save ${filename}: ${res.error}`, true);
+  else setExistingConfigStatus(`Saved ${filename}.`);
+}
+
+async function onSaveAsExistingConfig() {
+  const current = runJob.existingConfig.filename || qs("#runJobExistingConfigFilename").value.trim();
+  const asked = prompt("Save the config as (filename within the project directory):", current);
+  if (asked === null) return;
+  const filename = asked.trim();
+  if (!filename) return;
+  setExistingConfigStatus("Saving...");
+  let res = await saveExistingConfig(filename, false);
+  if (res.conflict) {
+    if (!confirm(`${filename} already exists in this directory. Overwrite it?`)) {
+      setExistingConfigStatus("Not saved.");
+      return;
+    }
+    res = await saveExistingConfig(filename, true);
+  }
+  if (res.error) setExistingConfigStatus(`Could not save ${filename}: ${res.error}`, true);
+  else setExistingConfigStatus(`Saved as ${filename} - this job will be submitted with it.`);
+}
+
+// ---------------------------------------------------------------------
 // Mode switch (build vs existing) and init
 // ---------------------------------------------------------------------
 function setSubmitMode(mode) {
@@ -1594,6 +1768,16 @@ function initRunJobTab() {
   setSubmitMode("build");
 
   qs("#runJobSubmitBtn").addEventListener("click", () => {
+    // The job runs from the config file as it is on disk - an unsaved edit
+    // in the editor above simply wouldn't be part of this run, which is
+    // worth saying out loud rather than letting it surprise anyone.
+    if (runJob.submitMode === "existing" && existingConfigIsDirty()) {
+      if (!confirm(
+        `You have unsaved changes to ${runJob.existingConfig.filename}. `
+        + "The job will be submitted using the version currently saved on disk, "
+        + "not your edits. Submit anyway?"
+      )) return;
+    }
     if (!confirm("Submit this job to the cluster now?")) return;
     submitRunJob(false);
   });
@@ -1605,9 +1789,23 @@ function initRunJobTab() {
   qs("#runJobExistingPathBrowseBtn").addEventListener("click", () => {
     const current = qs("#runJobExistingPath").value.trim();
     openBrowsePicker(current || null, {
-      onPick: (path) => { qs("#runJobExistingPath").value = path; },
+      onPick: (path) => {
+        qs("#runJobExistingPath").value = path;
+        loadExistingConfig();
+      },
     });
   });
+  // "change" rather than "input": a path/filename typed by hand is only
+  // worth trying to load once it's committed (blur/Enter), not per keystroke.
+  qs("#runJobExistingPath").addEventListener("change", loadExistingConfig);
+  qs("#runJobExistingConfigFilename").addEventListener("change", loadExistingConfig);
+  qs("#runJobExistingConfigEditor").addEventListener("input", () => {
+    updateExistingConfigButtons();
+    syncOnlyAnalysisCheckbox();
+  });
+  qs("#runJobExistingOnlyAnalysis").addEventListener("change", onOnlyAnalysisToggled);
+  qs("#runJobExistingConfigSaveBtn").addEventListener("click", onSaveExistingConfig);
+  qs("#runJobExistingConfigSaveAsBtn").addEventListener("click", onSaveAsExistingConfig);
   qs("#runJobExistingConfigFilenameBrowseBtn").addEventListener("click", () => {
     const dir = qs("#runJobExistingPath").value.trim();
     if (!dir) {
@@ -1618,7 +1816,10 @@ function initRunJobTab() {
       includeFiles: true,
       // Just the filename, not the full path - config_filename is read
       // relative to existing_project_path (see api_run_submit() in run_api.py).
-      onPick: (path) => { qs("#runJobExistingConfigFilename").value = path.split(/[/\\]/).pop(); },
+      onPick: (path) => {
+        qs("#runJobExistingConfigFilename").value = path.split(/[/\\]/).pop();
+        loadExistingConfig();
+      },
     });
   });
 

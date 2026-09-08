@@ -81,6 +81,20 @@
         <button type="button" id="runJobExistingConfigFilenameBrowseBtn" class="secondary">Browse…</button>
       </div>
     </div>
+    <div class="rj-field hidden" id="runJobExistingConfigEditorField">
+      <label class="toggle-label rj-config-toggle">
+        <input type="checkbox" id="runJobExistingOnlyAnalysis">
+        Re-run final operations and post-filtering scoring (if selected)
+      </label>
+      <p class="rj-field-help" id="runJobExistingOnlyAnalysisHint">Sets <code>only_run_analysis</code> in the config below, and re-runs in the run's existing output directory instead of picking a fresh one.</p>
+      <label for="runJobExistingConfigEditor">Config contents</label>
+      <textarea id="runJobExistingConfigEditor" rows="18" class="rj-yaml-editor" spellcheck="false"></textarea>
+      <div class="rj-config-actions">
+        <button type="button" id="runJobExistingConfigSaveBtn" class="secondary" disabled>Save</button>
+        <button type="button" id="runJobExistingConfigSaveAsBtn" disabled>Save as…</button>
+      </div>
+      <p id="runJobExistingConfigStatus" class="rj-field-help"></p>
+    </div>
   </div>
 
   <div class="card">
