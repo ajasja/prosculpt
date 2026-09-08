@@ -1,0 +1,101 @@
+task_name: af3_binder_filtering_scoring
+
+slurm:
+  #These are just here as an example of job-specific slurm options, but they are also the defaults set in installation.yaml
+  #Do not specify the --array command here. Use the num_tasks parameter below.
+  output: logs/slurm-%A_%a_%x.out
+  error: logs/slurm-%A_%a_%x.err
+
+  #slurm_options_string: #You can use this option to pass a string of options instead of passing them individually.
+
+
+num_tasks: 1
+
+# Config for the current run
+pdb_path: Examples/input_data/insulin_target.pdb # Path to input PDB file || null when building unconditionally
+#output_dir: Examples/Examples_out/binder/ # Path to output directory
+contig: "[B1-150/0 60-120]" # Contig to design
+num_designs_rfdiff: 10 # Number of designs to generate with RFdiffusion
+num_seq_per_target_mpnn: 2 # Number of sequences to generate per target with MPNN
+#chains_to_design: null # All chains of protein even if not redesigned (except if doing binder design)
+af2_mpnn_cycles: 1 # Not used yet?
+num_models: 1 # Choose specific models to cycle in af2-mpnn
+chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
+
+sampling_temp: 0.1
+backbone_noise: 0.0
+
+use_soluble_model: True # Whether to use the soluble model of ProteinMPNN. Default is True.
+use_a3m: True
+a3m_dir: Examples/input_data/Insulin_Alignment
+model_monomer: True
+prediction_model: AF3 # Choose between "Colabfold", "Boltz" and "AF3". Default is Colabfold. Make sure you have the model you're using correctly installed and configured.
+
+defaults:
+  - installation
+  - _self_
+
+pass_to_rfdiff: # Groups to pass to RfDiff
+- inference
+- potentials
+- ppi
+- denoiser
+
+# Symmetry to sample
+# Available symmetries:
+# - Cyclic symmetry (C_n) # call as c5
+# - Dihedral symmetry (D_n) # call as d5
+# - Tetrahedral symmetry # call as tetrahedral
+# - Octahedral symmetry # call as octahedral
+# - Icosahedral symmetry # call as icosahedral
+#symmetry: c2
+
+inference:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+potentials:
+  generatedWithProsculpt: true # Leave this dummy here, otherwise it will overwrite default RfDiff base config with null
+ppi:
+  hotspot_res: [A59,A83,A91] # Without quotes! RfDiff expects contigs as lists, not as strings.
+denoiser:
+  noise_scale_ca: 0
+  noise_scale_frame: 0
+
+#rfdiff_backbone_filters:
+#  - filter_name: SS_filter
+#    filter_script: plugins/SS_filter.py
+#    delete_failed: false           # If False, failed structures are moved to 'failed_filters/'`
+#    #argument_name: value         # Lower bound on allowed neighbor count
+
+# The pre-filtering scoring script run on every model (see final_operations()
+# in prosculpt_run.py). Both entirely optional - defaults to
+# scripts/scoring_script.py with no extra arguments if left out. Shown here
+# explicitly just to demonstrate the syntax (it's the same script the
+# default would use anyway) - point it at your own script if you have one.
+# scoring_script_arguments is left commented since scoring_script.py itself
+# doesn't accept any extra CLI flags today; see post_filtering_scoring_script_arguments
+# below for a live example of the args-passing mechanism itself.
+scoring_script: scripts/scoring_script.py
+#scoring_script_arguments:
+#  --some_flag: some_value
+
+# Filters applied to the final output.csv, plus an optional post-filtering
+# scoring pass on the survivors (a separate, dependent SLURM job - see
+# slurm_runner.py). Entirely optional - leave this whole block out to just
+# get filtered_pdbs/filtered_output.csv as a straight copy of everything.
+# This example is the same as binder_AF3.yaml but with this block turned on,
+# to show the filtering + post-filtering scoring feature end to end.
+filtering:
+  filtering_parameters:      # any key not found in output.csv is skipped with a warning in the log
+    RMSD_sculpted:
+      max: 15                # keep only designs whose AF3-predicted structure is close to the RFdiffusion scaffold
+    plddt:
+      min: 80                # and confidently folded
+  ranking_parameters:        # optional as a whole; if present, all three keys below are mandatory
+    metric: plddt
+    higher_better: true      # plddt: higher is better (use false for a "lower is better" metric like RMSD)
+    max_results: 3           # keep at most the 3 best-plddt designs that passed filtering_parameters above
+  post_filtering_scoring_script: scripts/post_filtering_scoring_script.py   # run ddG/ShapeComplementarity on the surviving designs only
+  post_filtering_scoring_script_arguments:
+    --chain_pairs: all        # score every pairwise chain combination present in each design. Alternatively name interfaces explicitly, each side separated by an underscore: "A_B,B_C" for chain-to-chain, or "AB_CD" for chains A+B together against C+D together
+  filtering_slurm:           # slurm options for that scoring job - same shape as the slurm: block above
+    cpus-per-task: 8          # width of the scoring script's own ProcessPoolExecutor
