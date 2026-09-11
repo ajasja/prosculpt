@@ -15,6 +15,12 @@ The main steps are as follows:
 
 A working Collab can be found [here](https://colab.research.google.com/github/ajasja/prosculpt/blob/main/Prosculpt_Colab.ipynb)
 
+If you use Prosculpt in your research, please cite the preprint:
+
+`Prosculpt: Lowering the Barrier to Computational Protein Design
+Federico A Olivieri, Alina Konstantinova, Neža Ribnikar, Nej Bizjak, Žan Žnidar, Kiyan Abel, Eva Rajh, Ajasja Ljubetič
+bioRxiv 2026.06.25.732351; doi: https://doi.org/10.64898/2026.06.25.732351`
+
 ## Requirements  
 The script requires the prosculpt package. It assumes that RFdiffusion, proteinMPNN, and AF2 are installed and that the correct paths are provided in the `installation.yaml` config file. Additionall biopython, hydra-core, pandas and scipy and pyRosetta are required.  
 
