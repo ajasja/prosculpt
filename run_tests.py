@@ -55,6 +55,7 @@ for test_file in test_file_list:
         process_output = subprocess.run(
             command, shell=True, capture_output=True, text=True
         )
+        # Also picks up the dependent post-filtering scoring job's line, if one was submitted.
         for line in process_output.stdout.split("\n"):
             if "submitted to slurm with id" in line:
                 print(line)

@@ -14,11 +14,10 @@ parser.add_argument(
     '--allow-custom-log-path',
     action="store_true",
     help=(
-        "By default, sbatch's own -o/-e (slurm's stdout/stderr log files) are forced to "
-        "<output_dir>/logs/, regardless of any slurm.output/slurm.error set in the job yaml or in "
-        "installation.yaml - so a job's slurm log always lives next to its own results, not wherever "
-        "a job/site config happened to point it. Pass this to opt back into respecting slurm.output/"
-        "slurm.error instead (the pre-existing behavior)."
+        "By default, sbatch's own -o/-e are forced to <output_dir>/logs/ (and "
+        "<output_dir>/scoring_logs/ for the post-filtering scoring job), overriding any "
+        "slurm.output/error or filtering_slurm.output/error set in the job yaml or "
+        "installation.yaml. Pass this to use those settings instead."
     ),
 )
 args=parser.parse_known_args() #This allows us to pass any other arguments further to prosculpt
@@ -44,24 +43,25 @@ installation_slurm_yaml_data=installation_yaml_data["slurm"]
 slurm_data=yaml_data["slurm"]
 n=yaml_data["num_tasks"]
 
+# filtering: is optional. post_filtering_scoring_script enables a second,
+# dependent SLURM job below; filtering_slurm holds that job's slurm options,
+# merged against installation.yaml's filtering_slurm defaults.
+filtering_data = yaml_data.get("filtering") or {}
+post_filtering_scoring_script = filtering_data.get("post_filtering_scoring_script")
+filtering_slurm_data = filtering_data.get("filtering_slurm") or {}
+installation_filtering_slurm_yaml_data = installation_yaml_data.get("filtering_slurm") or {}
+
 if "task_name" not in yaml_data:
     task_name="prosculpt_task"
 else:
     task_name=yaml_data["task_name"]
 
-out_command_file = f"ps2slurm_{task_name}_{int(time.time_ns())}.txt"
-
-# Base output_dir - the same value the per-task loop below starts from
-# before appending each task's own "01"/"02"/... suffix - used, unless
-# --allow-custom-log-path is passed, as where sbatch's own -o/-e (slurm's
-# stdout/stderr log files, as opposed to whatever prosculpt itself later
-# logs to) get forced to instead. This can only be the *base* output_dir,
-# not each task's own numbered one: all n tasks share a single sbatch
-# array submission (one -o/-e template for the whole array), and SLURM's
-# own %a substitution isn't zero-padded to match "01"/"02"/..., so there's
-# no way for a shared template to land in each task's own numbered
-# directory - the parent all of them share is the one thing that's
-# actually common across the whole array.
+# Base output_dir - what the per-task loop below builds each task's numbered
+# dir from. Also used as where sbatch's forced -o/-e and the generated
+# ps2slurm_*.txt command files go. Must stay the *base* dir, not a per-task
+# one: all tasks share a single sbatch array submission, and SLURM's %a
+# substitution isn't zero-padded to match "01"/"02"/..., so a shared
+# template can't target each task's own numbered directory.
 base_output_dir = None
 for arg in extra_args:
     if "output_dir" in arg:
@@ -69,15 +69,31 @@ for arg in extra_args:
 if base_output_dir is None:
     base_output_dir = yaml_data["output_dir"]
 
-forced_log_dir = None
-if not args[0].allow_custom_log_path:
-    forced_log_dir = os.path.join(base_output_dir, "logs")
+# Needed even with --allow-custom-log-path, since the command file below is
+# written directly into this directory.
+os.makedirs(base_output_dir, exist_ok=True)
+
+out_command_file = os.path.join(base_output_dir, f"ps2slurm_{task_name}_{int(time.time_ns())}.txt")
+
+
+def resolve_forced_log_dir(subdir_name):
+    """
+    Returns base_output_dir/subdir_name (creating it if needed), or None if
+    --allow-custom-log-path was passed.
+    """
+    if args[0].allow_custom_log_path:
+        return None
+    forced_dir = os.path.join(base_output_dir, subdir_name)
     # sbatch does not create the directory portion of -o/-e itself - if it
     # doesn't already exist when the job is submitted, the job fails
     # immediately with no log written anywhere at all (see
     # job_staging.ensure_logs_dir() in the dashboard for the same problem
     # solved the same way, for the cwd-relative logs/ this replaces).
-    os.makedirs(forced_log_dir, exist_ok=True)
+    os.makedirs(forced_dir, exist_ok=True)
+    return forced_dir
+
+
+forced_log_dir = resolve_forced_log_dir("logs")
 
 
 with open(out_command_file, 'w') as f:
@@ -128,39 +144,38 @@ with open(out_command_file, 'w') as f:
 
 print(f"Slurm command can be found in {out_command_file}")
 
-options_string=""
-job_specific_keys=[]
-if slurm_data is not None:
-    for key, value in slurm_data.items(): 
-        job_specific_keys.append(key)
-        # Recorded in job_specific_keys either way (so the installation.yaml
-        # loop below doesn't also try to add its own output/error), but not
-        # actually emitted here when forced_log_dir is set - that's the
-        # whole point of --allow-custom-log-path defaulting to off: the
-        # job yaml's own output/error choice is exactly what gets
-        # overridden by default.
-        if key in ("output", "error") and forced_log_dir is not None:
-            continue
-        if key=="slurm_options_string":
-            options_string+= f" {value}"
-        else:
-            if len(key)==1:
-                options_string+= " -"
-            else:
-                options_string+= " --"
-            options_string+= f"{key} {value}"
 
-#now take the default values from installation.yaml if not present in job yaml
-for key, value in installation_slurm_yaml_data.items(): 
-    if key not in job_specific_keys:
+def build_options_string(job_specific_data, installation_default_data, forced_log_dir):
+    """
+    Builds sbatch's extra options string from a job-specific slurm-like dict
+    merged against installation.yaml defaults of the same shape; job-specific
+    keys win. If forced_log_dir is set, "output"/"error" keys are dropped
+    from both (the caller supplies its own -o/-e instead).
+    """
+    options_string = ""
+    job_specific_keys = []
+    for key, value in (job_specific_data or {}).items():
+        job_specific_keys.append(key)
         if key in ("output", "error") and forced_log_dir is not None:
             continue
-        if len(key)==1:
-            options_string+= " -"
+        if key == "slurm_options_string":
+            options_string += f" {value}"
         else:
-            options_string+= " --"
-        options_string+= f"{key} {value}"
-        
+            options_string += " -" if len(key) == 1 else " --"
+            options_string += f"{key} {value}"
+
+    for key, value in (installation_default_data or {}).items():
+        if key in job_specific_keys:
+            continue
+        if key in ("output", "error") and forced_log_dir is not None:
+            continue
+        options_string += " -" if len(key) == 1 else " --"
+        options_string += f"{key} {value}"
+
+    return options_string
+
+
+options_string = build_options_string(slurm_data, installation_slurm_yaml_data, forced_log_dir)
 
 # The fallback here (relative "logs/slurm-%A_%a.err"/".out", same as
 # always) only actually applies with --allow-custom-log-path - otherwise
@@ -173,14 +188,12 @@ for key, value in installation_slurm_yaml_data.items():
 log_err = f"{forced_log_dir}/slurm-%A_%a_%x.err" if forced_log_dir is not None else "logs/slurm-%A_%a.err"
 log_out = f"{forced_log_dir}/slurm-%A_%a_%x.out" if forced_log_dir is not None else "logs/slurm-%A_%a.out"
 
+exit_code = 0
+main_job_id = None
 if not args[0].dry_run:
-    # --parsable makes sbatch print just the numeric job id (plus ";cluster"
-    # on a federated setup) to stdout instead of its normal "Submitted batch
-    # job N" banner - captured here (rather than the os.system() this used
-    # to be, which discards output entirely) so callers that need the real
-    # job id (e.g. the dashboard's job-submission API, to know which log
-    # file to watch for) can read it reliably instead of scraping free-form
-    # text.
+    # --parsable makes sbatch print just the job id instead of its normal
+    # banner, so callers (the dashboard, and the post-filtering scoring
+    # job's --dependency=aftercorr:<main_job_id> below) can read it reliably.
     full_command= f"export GROUP_SIZE=1; sbatch --parsable -J {task_name} -a 1-{n} -e {log_err} -o {log_out}  {options_string} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {out_command_file}"
     print(f"Full command is: {full_command}")
     result = subprocess.run(full_command, shell=True, capture_output=True, text=True)
@@ -190,18 +203,97 @@ if not args[0].dry_run:
     if result.stderr:
         print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", file=sys.stderr)
     if exit_code == 0:
-        job_id = result.stdout.strip().split(";")[0]
-        print(f"Job {task_name} has been submitted to slurm with id {job_id} and code {exit_code}")
+        main_job_id = result.stdout.strip().split(";")[0]
+        print(f"Job {task_name} has been submitted to slurm with id {main_job_id} and code {exit_code}")
     else:
         print(f"Job submission failed with code {exit_code}")
-    # Propagate sbatch's own exit code as this script's exit code - without
-    # this, the block above already prints "Job submission failed..." on a
-    # real failure (e.g. sbatch couldn't reach the controller) but the
-    # script itself still finishes and exits 0 regardless, which makes a
-    # genuine submission failure look identical to success to anything
-    # checking $? - a plain shell caller, and in particular the dashboard's
-    # own submit API, which reports "Submitted" (ok: true) purely from the
-    # remote command's exit code.
-    sys.exit(exit_code)
 else:
     print("Command wasn't run because --dry-run was active.")
+
+# Post-filtering scoring: a second array job, submitted only if
+# post_filtering_scoring_script is set. Depends on the main job via
+# --dependency=aftercorr:<main_job_id> - each array index starts once that
+# same index in the main job completes, independently of the rest.
+if post_filtering_scoring_script:
+    scoring_command_file = os.path.join(base_output_dir, f"ps2slurm_{task_name}_scoring_{int(time.time_ns())}.txt")
+    with open(scoring_command_file, 'w') as f:
+        for i in range(1, n + 1):
+            arguments = []
+
+            output_dir = ""
+            output_dir_in_args = False
+            for arg in extra_args:
+                if "output_dir" in arg:
+                    output_dir_in_args = True
+                    output_dir = arg
+                    if output_dir[-1:] != "/":
+                        output_dir += "/"
+                    output_dir += f"{i:02d}"
+                    arguments.append(output_dir)
+
+            if not output_dir_in_args:
+                output_dir = yaml_data["output_dir"]
+                if output_dir[-1:] != "/":
+                    output_dir += "/"
+                output_dir += f"{i:02d}"
+                arguments.append("++output_dir=" + output_dir)
+
+            # Must come before -cd/-cn, like any other hydra override.
+            arguments.append("+only_run_post_filtering_scoring=true")
+            arguments.append(f"-cd '{yaml_file_dir}'")
+            arguments.append(f"-cn '{yaml_file_name_no_extension}'")
+
+            cmdline = " ".join(arguments)
+            line = f"""{installation_yaml_data['prosculpt_python_path']} {slurm_runner_path}/prosculpt_run.py {cmdline}"""
+            print(line, file=f)
+
+    print(f"Post-filtering scoring slurm command can be found in {scoring_command_file}")
+
+    forced_scoring_log_dir = resolve_forced_log_dir("scoring_logs")
+    scoring_options_string = build_options_string(
+        filtering_slurm_data, installation_filtering_slurm_yaml_data, forced_scoring_log_dir
+    )
+    scoring_log_err = (
+        f"{forced_scoring_log_dir}/slurm-%A_%a_%x.err"
+        if forced_scoring_log_dir is not None
+        else "scoring_logs/slurm-%A_%a.err"
+    )
+    scoring_log_out = (
+        f"{forced_scoring_log_dir}/slurm-%A_%a_%x.out"
+        if forced_scoring_log_dir is not None
+        else "scoring_logs/slurm-%A_%a.out"
+    )
+
+    if args[0].dry_run:
+        placeholder_dependency = "--dependency=aftercorr:<main_job_id>  # not known in a dry run - only real once the main job is actually submitted"
+        scoring_full_command = f"sbatch --parsable -J {task_name}_scoring -a 1-{n} {placeholder_dependency} -e {scoring_log_err} -o {scoring_log_out} {scoring_options_string} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {scoring_command_file}"
+        print(f"Post-filtering scoring command (dry run): {scoring_full_command}")
+        print("Post-filtering scoring command wasn't run because --dry-run was active.")
+    elif main_job_id is None:
+        print(
+            "Skipping post-filtering scoring submission: the main job was not submitted successfully."
+        )
+    else:
+        scoring_full_command = f"sbatch --parsable -J {task_name}_scoring -a 1-{n} --dependency=aftercorr:{main_job_id} -e {scoring_log_err} -o {scoring_log_out} {scoring_options_string} {slurm_runner_path}/wrapper_slurm_array_job_group.sh {scoring_command_file}"
+        print(f"Full post-filtering scoring command is: {scoring_full_command}")
+        scoring_result = subprocess.run(scoring_full_command, shell=True, capture_output=True, text=True)
+        scoring_exit_code = scoring_result.returncode
+        if scoring_result.stdout:
+            print(scoring_result.stdout, end="" if scoring_result.stdout.endswith("\n") else "\n")
+        if scoring_result.stderr:
+            print(scoring_result.stderr, end="" if scoring_result.stderr.endswith("\n") else "\n", file=sys.stderr)
+        if scoring_exit_code == 0:
+            scoring_job_id = scoring_result.stdout.strip().split(";")[0]
+            print(
+                f"Post-filtering scoring job {task_name}_scoring has been submitted to slurm with id "
+                f"{scoring_job_id} and code {scoring_exit_code}, depending on job {main_job_id}"
+            )
+        else:
+            print(f"Post-filtering scoring job submission failed with code {scoring_exit_code}")
+        if scoring_exit_code != 0:
+            exit_code = scoring_exit_code
+
+# Exit with the first non-zero submission's exit code (main or scoring), so
+# a real submission failure isn't reported as success to callers checking $?.
+if not args[0].dry_run:
+    sys.exit(exit_code)

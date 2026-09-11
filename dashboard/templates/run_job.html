@@ -21,6 +21,7 @@
         <div class="card">
           <h3>Core settings</h3>
           <div id="runJobCoreFields"></div>
+          <div id="runJobScoringScriptSection"></div>
         </div>
 
         <div class="card hidden" id="runJobA3mSection">
@@ -66,10 +67,34 @@
   <div id="runJobExistingPane" class="card hidden">
     <h3>Submit an existing project directory</h3>
     <p class="muted">Point at a directory you've already prepared (your own config yaml plus anything it references, e.g. custom filter scripts) - it's copied/submitted exactly as-is; nothing inside it is rewritten.</p>
-    <label for="runJobExistingPath">Project directory path</label>
-    <input type="text" id="runJobExistingPath" placeholder="/path/to/your/project">
-    <label for="runJobExistingConfigFilename">Config filename (within that directory)</label>
-    <input type="text" id="runJobExistingConfigFilename" placeholder="config.yaml">
+    <div class="rj-field">
+      <label for="runJobExistingPath">Project directory path</label>
+      <div class="rj-input-with-browse">
+        <input type="text" id="runJobExistingPath" placeholder="/path/to/your/project">
+        <button type="button" id="runJobExistingPathBrowseBtn" class="secondary">Browse…</button>
+      </div>
+    </div>
+    <div class="rj-field">
+      <label for="runJobExistingConfigFilename">Config filename (within that directory)</label>
+      <div class="rj-input-with-browse">
+        <input type="text" id="runJobExistingConfigFilename" placeholder="config.yaml">
+        <button type="button" id="runJobExistingConfigFilenameBrowseBtn" class="secondary">Browse…</button>
+      </div>
+    </div>
+    <div class="rj-field hidden" id="runJobExistingConfigEditorField">
+      <label class="toggle-label rj-config-toggle">
+        <input type="checkbox" id="runJobExistingOnlyAnalysis">
+        Re-run final operations and post-filtering scoring (if selected)
+      </label>
+      <p class="rj-field-help" id="runJobExistingOnlyAnalysisHint">Sets <code>only_run_analysis</code> in the config below, and re-runs in the run's existing output directory instead of picking a fresh one.</p>
+      <label for="runJobExistingConfigEditor">Config contents</label>
+      <textarea id="runJobExistingConfigEditor" rows="18" class="rj-yaml-editor" spellcheck="false"></textarea>
+      <div class="rj-config-actions">
+        <button type="button" id="runJobExistingConfigSaveBtn" class="secondary" disabled>Save</button>
+        <button type="button" id="runJobExistingConfigSaveAsBtn" disabled>Save as…</button>
+      </div>
+      <p id="runJobExistingConfigStatus" class="rj-field-help"></p>
+    </div>
   </div>
 
   <div class="card">
@@ -77,7 +102,6 @@
     <select id="runJobTarget"></select>
     <p id="runJobTargetsWarning" class="rj-warn hidden"></p>
     <div class="rj-submit-row">
-      <button type="button" id="runJobPreviewBtn" class="secondary rj-submit-btn">Preview (dry run)</button>
       <button type="button" id="runJobSubmitBtn" class="rj-submit-btn">Submit</button>
     </div>
     <div id="runJobResult" class="hidden"></div>

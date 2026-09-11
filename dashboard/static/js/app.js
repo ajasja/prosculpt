@@ -13,7 +13,7 @@ const STAGE_LABEL = {
   filtering: "Filtering",
   mpnn: "ProteinMPNN",
   modeling: "Modeling",
-  scoring: "Scoring / final ops",
+  scoring: "Scoring and filtering",
   finished: "Finished",
 };
 
@@ -27,7 +27,7 @@ const AA_COLORS = {
   C: "#ffb703", G: "#adb5bd", P: "#e5989b",
 };
 
-// Columns in final_output.csv that hold filesystem paths - cumbersome in the
+// Columns in output.csv/filtered_output.csv that hold filesystem paths - cumbersome in the
 // middle of the table, so they get pushed to the end (see D1 in the spec).
 const PATH_COLUMNS = ["model_path", "af3_json", "af3_pdb", "path_rfdiff"];
 
@@ -61,10 +61,14 @@ let state = {
   selectedTaskNum: null,
   pollTimer: null,
   browsePath: null,
+  // Set only while the browse modal is being used as a single-pick file/
+  // directory picker (see openBrowsePicker()) rather than Track job's own
+  // multi-select "Add jobs" mode - null the rest of the time.
+  browsePick: null,
 
   jobs: [], // ordered list of tracked job directories
   jobStatuses: {}, // jobDir -> { status, terminal }
-  topView: "job", // "job" | "all-overview" | "all-results"
+  topView: "job", // "job" | "all-overview" | "all-unfiltered-results" | "all-results"
 
   backbonesCache: [],
   selectedBackboneKey: null,
@@ -221,9 +225,19 @@ function initTopbar() {
   // if any - see get_default_browse_root() in run_targets.py) instead of
   // this always defaulting to "." (the dashboard process's own cwd,
   // rarely where anyone's actual jobs are).
-  qs("#browseBtn").addEventListener("click", () => openBrowse(state.browsePath));
-  qs("#browseCloseBtn").addEventListener("click", () => qs("#browseModal").classList.add("hidden"));
+  qs("#browseBtn").addEventListener("click", () => {
+    state.browsePick = null; // in case a picker session (see openBrowsePicker()) was left open
+    openBrowse(state.browsePath);
+  });
+  qs("#browseCloseBtn").addEventListener("click", () => {
+    state.browsePick = null;
+    qs("#browseModal").classList.add("hidden");
+  });
   qs("#browseAddSelectedBtn").addEventListener("click", () => {
+    if (state.browsePick) {
+      finishBrowsePick(state.browsePath);
+      return;
+    }
     // Nothing ticked - add whichever directory is currently being
     // looked at, rather than requiring a tick on it too (you're
     // already looking right at it). One or more ticked - add exactly
@@ -317,6 +331,7 @@ function resetPerJobViewState() {
   state.loadedModelConfKey = null;
 
   resultsView.reset();
+  filteredResultsView.reset();
 
   // Clear anything already drawn immediately, rather than leaving the
   // previous job's structure on screen until the next tab visit's fetch
@@ -328,10 +343,11 @@ function resetPerJobViewState() {
   // makes an *unrelated* viewer's rotation stutter after a long session
   // (WebGL contexts are a small, browser-capped resource; once that cap
   // is hit the browser starts evicting/thrashing them).
-  ["#backboneViewer", "#modelViewer", "#resultViewer"].forEach(disposeViewer);
+  ["#backboneViewer", "#modelViewer", "#resultViewer", "#filteredResultViewer"].forEach(disposeViewer);
   const backboneLabel = qs("#backboneViewerLabel"); if (backboneLabel) backboneLabel.textContent = "";
   const modelLabel = qs("#modelViewerLabel"); if (modelLabel) modelLabel.textContent = "";
   const resultsSeq = qs("#resultsSequenceContent"); if (resultsSeq) resultsSeq.innerHTML = "";
+  const filteredResultsSeq = qs("#filteredResultsSequenceContent"); if (filteredResultsSeq) filteredResultsSeq.innerHTML = "";
 }
 
 // Which tab owns which of the job's own 3D viewers, and how to make that
@@ -344,6 +360,7 @@ const JOB_TAB_VIEWER = {
   backbones: { selector: "#backboneViewer", onDispose: () => { state.loadedBackboneKey = null; } },
   models: { selector: "#modelViewer", onDispose: () => { state.loadedModelStructureKey = null; state.loadedModelConfKey = null; } },
   results: { selector: "#resultViewer", onDispose: () => resultsView.dropLoadedKey() },
+  "filtered-results": { selector: "#filteredResultViewer", onDispose: () => filteredResultsView.dropLoadedKey() },
 };
 
 // Only one of the job's own 3D viewers is ever live at a time now - each
@@ -382,9 +399,20 @@ let browseSelectedPaths = new Set();
 // selected jobs") - clicking the checkbox selects without navigating,
 // clicking anywhere else on the row still navigates into it, same
 // threading trick this used for file rows before. /api/browse only
-// returns directories now (see its own docstring in app.py) - there's
-// nothing else in this listing to interact with.
+// returns directories by default (see its own docstring in app.py; single-
+// pick file mode below is the one exception).
+// "Select an output folder" for Track job's own multi-select "Add jobs"
+// mode (state.browsePick null); whatever hint (if any) openBrowsePicker()
+// was given otherwise.
+function renderBrowseHint() {
+  const el = qs("#browseHint");
+  const hint = state.browsePick ? state.browsePick.hint : "Select an output folder";
+  el.textContent = hint || "";
+  el.classList.toggle("hidden", !hint);
+}
+
 async function openBrowse(path) {
+  renderBrowseHint();
   qs("#browseModal").classList.remove("hidden");
   qs("#browseFilterInput").value = "";
   browseSelectedPaths = new Set();
@@ -395,7 +423,10 @@ async function openBrowse(path) {
     // the server then picks its own starting directory (see
     // get_default_browse_root() in run_targets.py) rather than this
     // needing to know or guess one itself.
-    const url = path ? `/api/browse?path=${encodeURIComponent(path)}` : "/api/browse";
+    const params = [];
+    if (path) params.push(`path=${encodeURIComponent(path)}`);
+    if (state.browsePick && state.browsePick.includeFiles) params.push("include_files=1");
+    const url = params.length ? `/api/browse?${params.join("&")}` : "/api/browse";
     const data = await fetch(url).then((r) => r.json());
     state.browsePath = data.path;
     qs("#browsePath").textContent = data.path;
@@ -433,6 +464,26 @@ function renderBrowseEntries(filterText) {
   filtered.forEach((e) => {
     const div = document.createElement("div");
     div.className = "browse-entry";
+
+    if (!e.is_dir) {
+      // Only ever present in single-pick "choose a file" mode
+      // (include_files=1) - click selects it immediately, no checkbox.
+      div.innerHTML = `📄 ${escapeHtml(e.name)}`;
+      div.addEventListener("click", () => finishBrowsePick(e.path));
+      wrap.appendChild(div);
+      return;
+    }
+
+    if (state.browsePick) {
+      // Single-pick mode: no checkbox - clicking a directory just
+      // navigates into it; "Select this directory" (the bottom button)
+      // is how you actually choose one.
+      div.innerHTML = `📁 ${escapeHtml(e.name)}`;
+      div.addEventListener("click", () => openBrowse(e.path));
+      wrap.appendChild(div);
+      return;
+    }
+
     const checked = browseSelectedPaths.has(e.path) ? "checked" : "";
     div.innerHTML = `<input type="checkbox" data-path="${escapeHtml(e.path)}" ${checked}> 📁 ${escapeHtml(e.name)}`;
     const cb = div.querySelector("input");
@@ -454,8 +505,20 @@ function renderBrowseEntries(filterText) {
 
 function updateBrowseSelectedCount() {
   const n = browseSelectedPaths.size;
-  qs("#browseSelectedCount").textContent = n ? `${n} selected` : "";
   const btn = qs("#browseAddSelectedBtn");
+  if (state.browsePick) {
+    // Single-pick mode: no multi-select count to show. Picking a file
+    // happens by clicking its row directly (see renderBrowseEntries()),
+    // so this button is only meaningful - and only shown - for a directory
+    // pick.
+    qs("#browseSelectedCount").textContent = "";
+    btn.classList.toggle("hidden", !!state.browsePick.includeFiles);
+    btn.textContent = "Select this directory";
+    btn.disabled = !state.browsePath;
+    return;
+  }
+  btn.classList.remove("hidden");
+  qs("#browseSelectedCount").textContent = n ? `${n} selected` : "";
   // Nothing ticked - the button falls back to adding whichever directory
   // is currently open (see its click handler), so it says that instead
   // and is never disabled for having zero selections; only actually
@@ -463,6 +526,22 @@ function updateBrowseSelectedCount() {
   // successfully opened yet).
   btn.textContent = n ? "Add selected jobs" : "Add current directory";
   btn.disabled = n === 0 && !state.browsePath;
+}
+
+// Opens the same modal in single-pick mode - `onPick` is called with the
+// chosen path (a directory, or a file if includeFiles), closing the modal,
+// instead of Track job's own multi-select "Add jobs" behavior (used by the
+// Run job tab's "existing project" path/config-filename browse buttons).
+function openBrowsePicker(startPath, { includeFiles = false, onPick, hint } = {}) {
+  state.browsePick = { includeFiles, onPick, hint };
+  openBrowse(startPath);
+}
+
+function finishBrowsePick(path) {
+  const pick = state.browsePick;
+  state.browsePick = null;
+  qs("#browseModal").classList.add("hidden");
+  if (pick && pick.onPick) pick.onPick(path);
 }
 
 // ---------------------------------------------------------------------
@@ -566,18 +645,22 @@ function showTopView(view) {
   state.topView = view;
   qs("#jobView").classList.toggle("hidden", view !== "job");
   qs("#tab-all-overview").classList.toggle("hidden", view !== "all-overview");
+  qs("#tab-all-unfiltered-results").classList.toggle("hidden", view !== "all-unfiltered-results");
   qs("#tab-all-results").classList.toggle("hidden", view !== "all-results");
   renderJobTabsBar();
   renderActiveJobBanner();
   if (view === "all-overview") renderAllOverview();
+  else if (view === "all-unfiltered-results") allUnfilteredResultsView.load(true);
   else if (view === "all-results") allResultsView.load(true);
   // Only one 3D viewer stays live at a time overall, not just within the
   // job view's own tabs (see disposeInactiveJobTabViewers()) - leaving
-  // "job" entirely, or leaving "all-results", drops whichever viewer(s)
-  // that view owned, since none of them can still be visible from here.
+  // "job", "all-unfiltered-results", or "all-results" drops that view's viewer(s).
   if (prevView !== view) {
     if (prevView === "job") disposeInactiveJobTabViewers(null);
-    else if (prevView === "all-results") {
+    else if (prevView === "all-unfiltered-results") {
+      disposeViewer("#allUnfilteredResultViewer");
+      allUnfilteredResultsView.dropLoadedKey();
+    } else if (prevView === "all-results") {
       disposeViewer("#allResultViewer");
       allResultsView.dropLoadedKey();
     }
@@ -809,6 +892,7 @@ function startJobStatusPolling() {
 function initTabs() {
   qsa(".tab-btn").forEach((btn) => {
     btn.addEventListener("click", () => {
+      if (btn.classList.contains("disabled")) return; // e.g. Filtered Results when filtering isn't configured
       qsa(".tab-btn").forEach((b) => b.classList.remove("active"));
       qsa(".tab-panel").forEach((p) => p.classList.remove("active"));
       btn.classList.add("active");
@@ -826,6 +910,7 @@ function refreshActiveTabData(showLoadingState) {
   else if (state.activeTab === "sequences") loadSequences(showLoadingState);
   else if (state.activeTab === "models") loadModels(showLoadingState);
   else if (state.activeTab === "results") resultsView.load(showLoadingState);
+  else if (state.activeTab === "filtered-results") filteredResultsView.load(showLoadingState);
   else if (state.activeTab === "error") loadErrorTab();
   else if (state.activeTab === "outputlog") loadOutputLog();
 }
@@ -986,6 +1071,9 @@ function stopPolling() {
 // matching what the rest of the Overview tab's rendering already expects).
 function isTerminalStatus(status) {
   if (!status) return false;
+  // Not done while post-filtering scoring is still pending, even if the main
+  // pipeline finished (see post_filtering_scoring_status() in parser.py).
+  if (status.post_filtering_scoring && status.post_filtering_scoring.pending) return false;
   if (status.finished || status.crashed) return true;
   return status.stage === "finished" || !!(status.crash && status.crash.crashed) || !!status.cancelled;
 }
@@ -1044,7 +1132,65 @@ function activeTaskView(status) {
   };
 }
 
+// Whether the active task's `filtering:` config is non-empty (an empty
+// object is truthy in JS, so this can't just be `!!task.config.filtering`).
+function filteringConfiguredForActiveTask() {
+  const task = activeTaskView(state.lastStatus);
+  const filtering = task && task.config && task.config.filtering;
+  return !!(filtering && typeof filtering === "object" && Object.keys(filtering).length > 0);
+}
+
+// Shows a banner on the Filtered Results tab while post-filtering scoring
+// is still running.
+function renderPostFilteringScoringBanner() {
+  const el = qs("#postFilteringScoringBanner");
+  if (!el) return;
+  const task = activeTaskView(state.lastStatus);
+  const pfs = task && task.post_filtering_scoring;
+  const pfsState = pfs && pfs.state;
+  if (pfsState === "crashed") {
+    el.className = "alert-banner";
+    const errPath = pfs.crash && pfs.crash.err_path;
+    el.innerHTML = `<span class="crash-icon">⚠</span><div><b>Post-filtering scoring crashed.</b>${errPath ? ` Check <code>${escapeHtml(errPath)}</code> for details.` : " Check the job's scoring_logs/ directory for details."}</div>`;
+    return;
+  }
+  if (pfsState === "running") {
+    el.className = "info-banner";
+    el.innerHTML = `<span class="banner-icon"><span class="spinner"></span></span><span>Post-filtering scoring is still running. When it's finished, results will be added to the metrics table automatically.</span>`;
+    return;
+  }
+  // "not_ready" (filtering itself hasn't finished yet - nothing running to
+  // report on; the tab's own empty state already explains this, no
+  // spinner), "finished", or not configured at all - nothing to show.
+  el.className = "info-banner hidden";
+}
+
+// Grays out and disables the Filtered Results tab when this job's config
+// has no `filtering:` section.
+function renderFilteredResultsTabAvailability() {
+  const btn = qs('.tab-btn[data-tab="filtered-results"]');
+  if (!btn) return;
+  const configured = filteringConfiguredForActiveTask();
+  btn.classList.toggle("disabled", !configured);
+  btn.title = configured ? "" : "Results filtering was not used in this run";
+}
+
+// True once the user has switched to a different job (or away from Track
+// job's single-job view entirely) since a request for `jobDirAtRequestTime`
+// was issued. apiGet()/fetch() calls scope themselves to state.jobDir at
+// the moment they're *called*, but a slow response can still land after a
+// faster switch to a different job - without checking this, that stale
+// response would overwrite whatever the newer, actually-relevant request
+// already rendered (or is about to) with the wrong job's data, sometimes
+// for as long as the stale request took to resolve. Every async loader
+// below captures `state.jobDir` before its own await and checks this right
+// after, before touching any state or the DOM.
+function jobSwitchedAwayFrom(jobDirAtRequestTime) {
+  return state.jobDir !== jobDirAtRequestTime;
+}
+
 async function loadStatus(showLoadingState) {
+  const requestedJobDir = state.jobDir;
   const errBanner = qs("#errorBanner");
   // Only on an actual job switch / explicit Load (not routine poll ticks,
   // which would otherwise flash a spinner over perfectly fine content every
@@ -1058,7 +1204,10 @@ async function loadStatus(showLoadingState) {
   }
   try {
     const status = await apiGet("/api/status");
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     state.lastStatus = status;
+    renderPostFilteringScoringBanner();
+    renderFilteredResultsTabAvailability();
     if (status.error) {
       errBanner.textContent = status.error;
       errBanner.classList.remove("hidden");
@@ -1080,7 +1229,12 @@ async function loadStatus(showLoadingState) {
     if (!task) {
       qs("#stepper").innerHTML = "";
       qs("#stageCard").innerHTML = "";
-      qs("#overviewCard").innerHTML = `<p class="muted">This job directory exists, but no task (01/02/...) has started writing output yet.</p>`;
+      // logs/ already existing means slurm_runner.py has genuinely been
+      // invoked here (see looks_like_output_dir in parser.py) - just too
+      // early for any task (01/02/...) to exist yet, not a wrong directory.
+      qs("#overviewCard").innerHTML = status.looks_like_output_dir
+        ? `<p class="muted">No output has been generated yet.</p>`
+        : `<div class="alert-banner"><span class="crash-icon">⚠</span><div><b>The tracked directory doesn't look like an output directory.</b> Prosculpt output directory has subdirectories called 01, 02, 03, etc.</div></div>`;
       qs("#timingCard").classList.add("hidden");
       return;
     }
@@ -1089,6 +1243,7 @@ async function loadStatus(showLoadingState) {
     renderModelsCycleNote(task);
     if (isTerminalStatus(status)) stopPollingForTerminalState(task);
   } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     errBanner.textContent = err.message;
     errBanner.classList.remove("hidden");
   }
@@ -1215,9 +1370,16 @@ function renderStageBlock(status, cycleSuffix) {
     return simpleStageMessage("🔍", `Filtering backbones and rebuilding chains before ProteinMPNN — a quick housekeeping step.`);
   }
   if (status.stage === "scoring") {
-    return simpleStageMessage(`<span class="spinner"></span>`, `Running final scoring (final_operations)… this produces <code>final_pdbs/</code> and <code>final_output.csv</code>. Check the <b>Results</b> tab once it's done.`);
+    return simpleStageMessage(`<span class="spinner"></span>`, `Running final scoring (final_operations)… this produces <code>output_pdbs/</code> and <code>output.csv</code> (and, if a filtering: config is set, <code>filtered_pdbs/</code>/<code>filtered_output.csv</code> right after). Check the <b>Results</b> tab once it's done.`);
   }
   if (status.stage === "finished") {
+    const pfs = status.post_filtering_scoring;
+    if (pfs && pfs.state === "crashed") {
+      return simpleStageMessage("⚠", `Post-filtering scoring crashed. Check the <b>Filtered Results</b> tab / <code>scoring_logs/</code> for details.`);
+    }
+    if (pfs && pfs.pending) {
+      return simpleStageMessage(`<span class="spinner"></span>`, `Post-filtering scoring is being conducted.`);
+    }
     const fp = (status.scoring && status.scoring.final_pdbs) || [];
     return simpleStageMessage("✅", `Job finished with <b>${fp.length}</b> final model(s). See the <b>Results</b> tab.`);
   }
@@ -1248,12 +1410,20 @@ function renderOverview(status) {
     ? `<a class="crash-link" id="gotoErrorTabFromStat">available</a>`
     : `<span class="muted">not found</span>`;
 
+  // Post-filtering scoring runs as a separate async SLURM job (see
+  // slurm_runner.py); overlaid on the stage label here for display only.
+  const stagePendingPostFiltering = status.stage === "finished"
+    && status.post_filtering_scoring && status.post_filtering_scoring.pending;
+  const currentStageLabel = stagePendingPostFiltering
+    ? "Post-filtering scoring"
+    : (STAGE_LABEL[status.stage] || status.stage);
+
   card.innerHTML = `
     <div class="status-grid">
       <div class="stat-box"><div class="label">Job</div><div class="value small">${escapeHtml(cfg.task_name || "—")}</div></div>
       <div class="stat-box"><div class="label">Prediction model</div><div class="value small">${escapeHtml(cfg.prediction_model || "—")}</div></div>
       <div class="stat-box"><div class="label">Output dir</div><div class="value small" style="word-break:break-all">${escapeHtml(loc.output_dir || "—")}</div></div>
-      <div class="stat-box"><div class="label">Current stage</div><div class="value">${STAGE_LABEL[status.stage] || status.stage}${cycleSuffix}</div></div>
+      <div class="stat-box"><div class="label">Current stage</div><div class="value">${currentStageLabel}${cycleSuffix}</div></div>
       <div class="stat-box"><div class="label">Slurm job</div><div class="value small">${job.job_id ? "#" + escapeHtml(job.job_id) : "—"}</div></div>
       <div class="stat-box"><div class="label">Node</div><div class="value small">${escapeHtml(job.node || "—")}</div></div>
       <div class="stat-box"><div class="label">Started</div><div class="value small">${escapeHtml(job.started_at || "—")}</div></div>
@@ -1440,6 +1610,7 @@ function renderModelingStage(m, cycleSuffix) {
 // ---------------------------------------------------------------------
 
 async function loadErrorTab() {
+  const requestedJobDir = state.jobDir;
   const el = qs("#errorTabContent");
   const task = activeTaskView(state.lastStatus);
   const errFile = task && task.err_file;
@@ -1450,6 +1621,7 @@ async function loadErrorTab() {
   el.innerHTML = `<p class="muted">Loading…</p>`;
   try {
     const data = await apiGet("/api/error_log", { task: task.task_num });
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     if (!data.err_exists) {
       el.innerHTML = `<p class="muted">No slurm error file found at <code>${escapeHtml(data.err_path || "?")}</code>.</p>`;
       return;
@@ -1471,6 +1643,7 @@ async function loadErrorTab() {
       <pre class="log-pre">${escapeHtml(data.content)}</pre>
     `;
   } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
 }
@@ -1480,6 +1653,7 @@ async function loadErrorTab() {
 // ---------------------------------------------------------------------
 
 async function loadOutputLog() {
+  const requestedJobDir = state.jobDir;
   const el = qs("#outputLogContent");
   const prevPre = qs("#outputLogPre", el);
   // "Smart tail": if the user was scrolled to the bottom (or this is the
@@ -1492,6 +1666,7 @@ async function loadOutputLog() {
   if (!task) { el.innerHTML = `<p class="muted">Load a job first.</p>`; return; }
   try {
     const data = await apiGet("/api/output_log", { task: task.task_num });
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     if (data.error) throw new Error(data.error);
     if (!data.log_found) {
       el.innerHTML = `<p class="muted">No log file found for task ${task.task_num}.</p>`;
@@ -1508,6 +1683,7 @@ async function loadOutputLog() {
     const pre = qs("#outputLogPre", el);
     pre.scrollTop = wasAtBottom ? pre.scrollHeight : prevScrollTop;
   } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
 }
@@ -1597,12 +1773,16 @@ function renderBackbonesList() {
   if (current) selectBackbone(current);
 }
 async function loadBackbones(showLoadingState) {
+  const requestedJobDir = state.jobDir;
   const listEl = qs("#backbonesList");
   if (showLoadingState) listEl.innerHTML = loadingPlaceholder("backbones");
   try {
-    state.backbonesCache = await apiGet("/api/backbones");
+    const data = await apiGet("/api/backbones");
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    state.backbonesCache = data;
     renderBackbonesList();
   } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
 }
@@ -1837,6 +2017,7 @@ const VIEWER_LEGEND_IDS = {
   "#modelViewer": "#modelColorLegend",
   "#allResultViewer": "#allResultsColorLegend",
   "#runJobPdbViewer": "#runJobPdbColorLegend",
+  "#filteredResultViewer": "#filteredResultsColorLegend",
 };
 
 function refreshChainLegendFor(selector) {
@@ -2557,12 +2738,16 @@ function renderSequencesContent() {
 }
 
 async function loadSequences(showLoadingState) {
+  const requestedJobDir = state.jobDir;
   const el = qs("#sequencesContent");
   if (showLoadingState) el.innerHTML = loadingPlaceholder("sequences");
   try {
-    state.sequencesCache = await apiGet("/api/sequences");
+    const data = await apiGet("/api/sequences");
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    state.sequencesCache = data;
     renderSequencesContent();
   } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
 }
@@ -2652,12 +2837,16 @@ function renderModelsList() {
   else if (visible.length) selectModel(visible[0].m);
 }
 async function loadModels(showLoadingState) {
+  const requestedJobDir = state.jobDir;
   const listEl = qs("#modelsList");
   if (showLoadingState) listEl.innerHTML = loadingPlaceholder("models");
   try {
-    state.modelsCache = await apiGet("/api/models");
+    const data = await apiGet("/api/models");
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    state.modelsCache = data;
     renderModelsList();
   } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
     listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
   }
 }
@@ -2735,7 +2924,7 @@ function renderModelsSequencePanel() {
 // Results tab
 // ---------------------------------------------------------------------
 
-// The .trb sits next to the RFdiffusion pdb that final_output.csv's
+// The .trb sits next to the RFdiffusion pdb that output.csv's
 // path_rfdiff column already points to - same basename, .trb extension,
 // same convention as the Backbones tab.
 function trbPathForResultRow(row) {
@@ -3052,6 +3241,11 @@ function createResultsView(cfg) {
   }
 
   async function load(showLoadingState) {
+    // Only meaningful for a single-job instance (resultsView/
+    // filteredResultsView) - a multi-job "All jobs" instance has no single
+    // active job to compare against, so the check below is skipped for it
+    // entirely (cfg.isMulti short-circuits it).
+    const requestedJobDir = cfg.isMulti ? null : state.jobDir;
     const listEl = qs(cfg.ids.list);
     if (showLoadingState) {
       listEl.innerHTML = loadingPlaceholder("results");
@@ -3060,6 +3254,7 @@ function createResultsView(cfg) {
     }
     try {
       const data = await cfg.fetchData();
+      if (!cfg.isMulti && jobSwitchedAwayFrom(requestedJobDir)) return;
       // The list/table/alignment views are each individually paginated
       // (see pageOf()) so they're bounded, but "bounded" still means
       // real, non-trivial DOM work (escaped/styled table cells, one
@@ -3117,6 +3312,7 @@ function createResultsView(cfg) {
       updateFiltersBadge();
       renderAll();
     } catch (err) {
+      if (!cfg.isMulti && jobSwitchedAwayFrom(requestedJobDir)) return;
       listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
     }
   }
@@ -3207,10 +3403,8 @@ function createResultsView(cfg) {
     renderTableSelectionOnly();
     const pdbName = basename(row.model_path);
     const rowJobDir = cfg.getJobDir(row);
-    // "task" is a column _load_merged_final_csv() (app.py) always puts
-    // first in every final_output.csv row now, since a task-less job
-    // directory isn't possible - which task this particular row's own
-    // model_path lives under.
+    // "task" column added by _load_merged_final_csv()/_load_merged_filtered_csv()
+    // (app.py): which task this row's model_path belongs to.
     const rowTaskNum = row.task;
     // Same structure already showing - skip refetching so the viewer's
     // camera (zoom/rotation) isn't reset on every poll tick. Keyed by job
@@ -3285,7 +3479,7 @@ function createResultsView(cfg) {
       return;
     }
     if (!results.columns.includes("sequence")) {
-      el.innerHTML = `<p class="muted">final_output.csv has no "sequence" column.</p>`;
+      el.innerHTML = `<p class="muted">This results table has no "sequence" column.</p>`;
       return;
     }
     const scale = computeColorScale(rows);
@@ -3550,7 +3744,7 @@ function createResultsView(cfg) {
   // Rows are tagged with which job they came from (getJobDir) - for a
   // multi-job export that means grouping by job and sending each job its
   // own row indices, since a merged row's __rowId is an index into the
-  // *combined* list, not that job's own final_output.csv.
+  // *combined* list, not that job's own output.csv/filtered_output.csv.
   function groupRowsByJob(rows) {
     const byJob = new Map();
     rows.forEach((r) => {
@@ -3720,6 +3914,28 @@ async function fetchAllJobsResults() {
   return { csv_exists: true, columns, rows, rowMeta };
 }
 
+// Unfiltered cross-job results view ("All jobs results").
+const allUnfilteredResultsView = createResultsView({
+  ids: {
+    list: "#allUnfilteredFinalPdbsList", viewer: "#allUnfilteredResultViewer", viewerLegend: "#allUnfilteredResultsColorLegend",
+    seqContent: "#allUnfilteredResultsSequenceContent", csvWrap: "#allUnfilteredCsvTableWrap", alignContent: "#allUnfilteredResultsAlignContent",
+    count: "#allUnfilteredResultsCount", colorByField: "#allUnfilteredColorByField", colorByDirection: "#allUnfilteredColorByDirection",
+    sortByField: "#allUnfilteredSortByField", sortByDirection: "#allUnfilteredSortByDirection",
+    filtersBtn: "#allUnfilteredFiltersBtn", filtersPanel: "#allUnfilteredFiltersPanel", filtersList: "#allUnfilteredFiltersList",
+    filtersBadge: "#allUnfilteredFiltersBadge", clearFiltersBtn: "#allUnfilteredClearFiltersBtn", exportBtn: "#allUnfilteredExportFilteredBtn",
+    structColorMode: "#allUnfilteredResultsStructColorMode", chainPaletteWrap: "#allUnfilteredResultsChainPaletteWrap",
+    listPager: "#allUnfilteredResultsListPager", tablePager: "#allUnfilteredResultsTablePager",
+  },
+  viewerSelector: "#allUnfilteredResultViewer",
+  isMulti: true,
+  getJobDir: (row) => row.__jobDir,
+  fetchData: fetchAllJobsResults,
+  exportUrl: "/api/export_filtered_multi",
+  exportFilename: "prosculpt_all_jobs_results_export.zip",
+  emptyMessage: "No final models yet across any tracked job.",
+  emptyCsvMessage: "Not available yet.",
+});
+
 const resultsView = createResultsView({
   ids: {
     list: "#finalPdbsList", viewer: "#resultViewer", viewerLegend: "#resultsColorLegend",
@@ -3741,6 +3957,81 @@ const resultsView = createResultsView({
   emptyCsvMessage: "Not available yet — created once final_operations finishes.",
 });
 
+// Fetches this job's filtered results (/api/filtering_results +
+// /api/filtering_csv) for the Filtered Results tab.
+async function fetchFilteredResults() {
+  const res = await apiGet("/api/filtering_results");
+  if (!res.csv_exists) {
+    return { csv_exists: false, final_pdbs: (res.final_pdbs || []).map((p) => ({ ...p, jobDir: state.jobDir })) };
+  }
+  const csv = await apiGet("/api/filtering_csv");
+  return { csv_exists: true, columns: csv.columns, rows: csv.rows };
+}
+
+// Fetches filtered results across all tracked jobs for "All jobs filtered results".
+async function fetchAllJobsFilteredResults() {
+  const jobs = state.jobs.slice();
+  const perJob = await Promise.all(jobs.map(async (jobDir) => {
+    try {
+      const res = await apiGet("/api/filtering_results", { job_dir: jobDir });
+      if (!res.csv_exists) return { jobDir, csv_exists: false, final_pdbs: res.final_pdbs || [] };
+      const csv = await apiGet("/api/filtering_csv", { job_dir: jobDir });
+      return { jobDir, csv_exists: true, columns: csv.columns, rows: csv.rows };
+    } catch (e) {
+      return { jobDir, csv_exists: false, final_pdbs: [] };
+    }
+  }));
+
+  const withCsv = perJob.filter((j) => j.csv_exists);
+  if (!withCsv.length) {
+    return {
+      csv_exists: false,
+      final_pdbs: perJob.flatMap((j) => (j.final_pdbs || []).map((p) => ({ ...p, jobDir: j.jobDir, jobLabel: jobLabel(j.jobDir) }))),
+    };
+  }
+
+  const unionColumns = [];
+  withCsv.forEach((j) => j.columns.forEach((c) => { if (!unionColumns.includes(c)) unionColumns.push(c); }));
+  const columns = ["job", ...unionColumns];
+  const rows = [];
+  const rowMeta = [];
+  withCsv.forEach((j) => {
+    const colIndex = {};
+    j.columns.forEach((c, i) => { colIndex[c] = i; });
+    j.rows.forEach((r, origIdx) => {
+      const row = [jobLabel(j.jobDir)];
+      unionColumns.forEach((c) => { row.push(c in colIndex ? (r[colIndex[c]] ?? "") : ""); });
+      rows.push(row);
+      rowMeta.push({ jobDir: j.jobDir, origRowId: origIdx });
+    });
+  });
+  return { csv_exists: true, columns, rows, rowMeta };
+}
+
+const filteredResultsView = createResultsView({
+  ids: {
+    list: "#filteredPdbsList", viewer: "#filteredResultViewer", viewerLegend: "#filteredResultsColorLegend",
+    seqContent: "#filteredResultsSequenceContent", csvWrap: "#filteredCsvTableWrap", alignContent: "#filteredResultsAlignContent",
+    count: "#filteredResultsCount", colorByField: "#filteredColorByField", colorByDirection: "#filteredColorByDirection",
+    sortByField: "#filteredSortByField", sortByDirection: "#filteredSortByDirection",
+    filtersBtn: "#filteredFiltersBtn", filtersPanel: "#filteredFiltersPanel", filtersList: "#filteredFiltersList",
+    filtersBadge: "#filteredFiltersBadge", clearFiltersBtn: "#filteredClearFiltersBtn", exportBtn: "#exportFilteringResultsBtn",
+    structColorMode: "#filteredResultsStructColorMode", chainPaletteWrap: "#filteredResultsChainPaletteWrap",
+    listPager: "#filteredResultsListPager", tablePager: "#filteredResultsTablePager",
+  },
+  viewerSelector: "#filteredResultViewer",
+  isMulti: false,
+  getJobDir: () => state.jobDir,
+  fetchData: fetchFilteredResults,
+  exportUrl: "/api/export_filtering_results",
+  exportFilename: "prosculpt_filtered_results_export.zip",
+  // Only shown when filtering is configured; otherwise the tab is disabled
+  // instead (see renderFilteredResultsTabAvailability()).
+  emptyMessage: "No filtered models yet — this appears once prosculpt's filtering stage completes.",
+  emptyCsvMessage: "Not available yet — created once prosculpt's filtering stage finishes.",
+});
+
+// Cross-job aggregation of filtered results for "All jobs filtered results".
 const allResultsView = createResultsView({
   ids: {
     list: "#allFinalPdbsList", viewer: "#allResultViewer", viewerLegend: "#allResultsColorLegend",
@@ -3755,10 +4046,10 @@ const allResultsView = createResultsView({
   viewerSelector: "#allResultViewer",
   isMulti: true,
   getJobDir: (row) => row.__jobDir,
-  fetchData: fetchAllJobsResults,
-  exportUrl: "/api/export_filtered_multi",
-  exportFilename: "prosculpt_all_jobs_filtered_export.zip",
-  emptyMessage: "No final models yet across any tracked job.",
+  fetchData: fetchAllJobsFilteredResults,
+  exportUrl: "/api/export_filtering_results_multi",
+  exportFilename: "prosculpt_all_jobs_filtered_results_export.zip",
+  emptyMessage: "No filtered models yet across any tracked job.",
   emptyCsvMessage: "Not available yet.",
 });
 
@@ -3777,6 +4068,8 @@ document.addEventListener("DOMContentLoaded", () => {
   initTabs();
   initCancelJobModal();
   resultsView.initAll();
+  filteredResultsView.initAll();
+  allUnfilteredResultsView.initAll();
   allResultsView.initAll();
   qs("#modelsFilter").addEventListener("input", () => {
     modelsListPage = 0; // a new filter text means "page 3" means something different now

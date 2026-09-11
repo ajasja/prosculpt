@@ -40,13 +40,117 @@
      switchTopView() in app.js. -->
 <nav class="job-tabs" id="jobTabsBar">
   <button class="job-tab-btn special" data-top="all-overview">All jobs overview</button>
-  <button class="job-tab-btn special" data-top="all-results">All jobs results</button>
+  <button class="job-tab-btn special" data-top="all-unfiltered-results">All jobs results</button>
+  <button class="job-tab-btn special" data-top="all-results">All jobs filtered results</button>
   <div id="jobChips" class="job-chips"></div>
 </nav>
 
 <main>
 <section id="tab-all-overview" class="hidden">
   <div id="allOverviewList"><p class="muted">Add a job above to get started.</p></div>
+</section>
+
+<!-- All jobs results (unfiltered), mirrors #tab-all-results below -
+     ids prefixed "allUnfiltered" to stay distinct. -->
+<section id="tab-all-unfiltered-results" class="hidden">
+  <div class="card" id="allUnfilteredResultsToolbar">
+    <div class="toolbar-row">
+      <div class="toolbar-group">
+        <button id="allUnfilteredFiltersBtn" class="secondary">🔧 Filters <span id="allUnfilteredFiltersBadge" class="filters-badge hidden">0</span></button>
+        <div id="allUnfilteredFiltersPanel" class="filters-panel hidden">
+          <div class="filters-panel-header">
+            <b>Filter by column value</b>
+            <button id="allUnfilteredClearFiltersBtn" class="secondary small">Clear all</button>
+          </div>
+          <div id="allUnfilteredFiltersList" class="filters-list"></div>
+        </div>
+      </div>
+      <div class="toolbar-group">
+        <label class="toolbar-label" for="allUnfilteredSortByField">Sort list by</label>
+        <select id="allUnfilteredSortByField"><option value="">None</option></select>
+        <select id="allUnfilteredSortByDirection">
+          <option value="1">Ascending</option>
+          <option value="-1">Descending</option>
+        </select>
+      </div>
+      <div class="toolbar-group">
+        <label class="toolbar-label" for="allUnfilteredColorByField">Color list by</label>
+        <select id="allUnfilteredColorByField"><option value="">None</option></select>
+        <select id="allUnfilteredColorByDirection">
+          <option value="higher">Higher = better</option>
+          <option value="lower">Lower = better</option>
+        </select>
+      </div>
+      <div class="toolbar-group">
+        <button id="allUnfilteredExportFilteredBtn" class="secondary">⬇ Export filtered (.zip)</button>
+      </div>
+      <div class="toolbar-group" id="allUnfilteredResultsCountWrap">
+        <span class="muted" id="allUnfilteredResultsCount"></span>
+      </div>
+    </div>
+  </div>
+
+  <div class="split-view">
+    <div class="list-pane">
+      <div id="allUnfilteredFinalPdbsList"><p class="muted">Add a job above to get started.</p></div>
+      <div id="allUnfilteredResultsListPager" class="pager-bar"></div>
+    </div>
+    <div class="viewer-pane">
+      <div class="viewer-color-toolbar">
+        <div class="viewer-color-row">
+          <label class="toolbar-label" for="allUnfilteredResultsStructColorMode">Color structure by</label>
+          <select id="allUnfilteredResultsStructColorMode">
+            <option value="chain">Chain</option>
+            <option value="provenance">RFdiffusion provenance</option>
+          </select>
+          <span id="allUnfilteredResultsChainPaletteWrap" class="chain-palette-wrap">
+            <label class="toolbar-label" for="allUnfilteredResultsChainPaletteSelect">Palette</label>
+            <select id="allUnfilteredResultsChainPaletteSelect" class="chain-palette-select">
+              <option value="vivid">Vivid</option>
+              <option value="pastel">Pastel</option>
+              <option value="cvd">Colorblind-safe</option>
+              <option value="bright">Bright</option>
+              <option value="sunset">Sunset</option>
+              <option value="ocean">Ocean</option>
+              <option value="custom" disabled>Custom</option>
+            </select>
+          </span>
+          <span class="bg-color-wrap">
+            <label class="toolbar-label" for="allUnfilteredResultsBgColorSelect">Background</label>
+            <select id="allUnfilteredResultsBgColorSelect" class="bg-color-select">
+              <option value="black">Black</option>
+              <option value="navy">Dark navy</option>
+              <option value="white">White</option>
+              <option value="light">Light gray</option>
+            </select>
+          </span>
+        </div>
+        <div class="viewer-color-row">
+          <div id="allUnfilteredResultsColorLegend" class="color-legend hidden"></div>
+          <div class="sidechain-mode-group">
+            <span class="toolbar-label">Show sidechains:</span>
+            <label class="sidechain-mode-option"><input type="radio" name="allUnfilteredResultsSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+            <label class="sidechain-mode-option"><input type="radio" name="allUnfilteredResultsSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+            <label class="sidechain-mode-option"><input type="radio" name="allUnfilteredResultsSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+            <label class="sidechain-mode-option"><input type="radio" name="allUnfilteredResultsSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+          </div>
+        </div>
+      </div>
+      <div id="allUnfilteredResultViewer" class="mol-viewer"></div>
+      <div id="allUnfilteredResultsSequenceContent" class="seq-panel"></div>
+    </div>
+  </div>
+
+  <div class="card" id="allUnfilteredCsvCard">
+    <h3>Metrics</h3>
+    <div id="allUnfilteredCsvTableWrap"><p class="muted">Add a job above to get started.</p></div>
+    <div id="allUnfilteredResultsTablePager" class="pager-bar"></div>
+  </div>
+
+  <div class="card" id="allUnfilteredResultsAlignCard">
+    <h3>Sequence alignment</h3>
+    <div id="allUnfilteredResultsAlignContent"><p class="muted">Not available yet.</p></div>
+  </div>
 </section>
 
 <section id="tab-all-results" class="hidden">
@@ -157,7 +261,8 @@
   <button class="tab-btn" data-tab="backbones">Backbones</button>
   <button class="tab-btn" data-tab="sequences">Sequences</button>
   <button class="tab-btn" data-tab="models">Models</button>
-  <button class="tab-btn" data-tab="results">Results</button>
+  <button class="tab-btn" data-tab="results">All Results</button>
+  <button class="tab-btn" data-tab="filtered-results">Filtered Results</button>
   <button class="tab-btn" data-tab="error" id="errorTabBtn">Error log</button>
   <button class="tab-btn" data-tab="outputlog">Output log</button>
   <!-- Deliberately not a .tab-btn (no data-tab/panel of its own - it does
@@ -421,33 +526,114 @@
     </div>
   </section>
 
+  <!-- Filtered Results: prosculpt's filtering-stage output (filtered_pdbs/filtered_output.csv). -->
+  <section id="tab-filtered-results" class="tab-panel">
+    <div id="postFilteringScoringBanner" class="info-banner hidden"></div>
+    <div class="card" id="filteredResultsToolbar">
+      <div class="toolbar-row">
+        <div class="toolbar-group">
+          <button id="filteredFiltersBtn" class="secondary">🔧 Filters <span id="filteredFiltersBadge" class="filters-badge hidden">0</span></button>
+          <div id="filteredFiltersPanel" class="filters-panel hidden">
+            <div class="filters-panel-header">
+              <b>Filter by column value</b>
+              <button id="filteredClearFiltersBtn" class="secondary small">Clear all</button>
+            </div>
+            <div id="filteredFiltersList" class="filters-list"></div>
+          </div>
+        </div>
+        <div class="toolbar-group">
+          <label class="toolbar-label" for="filteredSortByField">Sort list by</label>
+          <select id="filteredSortByField"><option value="">None</option></select>
+          <select id="filteredSortByDirection">
+            <option value="1">Ascending</option>
+            <option value="-1">Descending</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <label class="toolbar-label" for="filteredColorByField">Color list by</label>
+          <select id="filteredColorByField"><option value="">None</option></select>
+          <select id="filteredColorByDirection">
+            <option value="higher">Higher = better</option>
+            <option value="lower">Lower = better</option>
+          </select>
+        </div>
+        <div class="toolbar-group">
+          <button id="exportFilteringResultsBtn" class="secondary">⬇ Export (.zip)</button>
+        </div>
+        <div class="toolbar-group" id="filteredResultsCountWrap">
+          <span class="muted" id="filteredResultsCount"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="split-view">
+      <div class="list-pane">
+        <div id="filteredPdbsList"><p class="muted">Load a job first.</p></div>
+        <div id="filteredResultsListPager" class="pager-bar"></div>
+      </div>
+      <div class="viewer-pane">
+        <div class="viewer-color-toolbar">
+          <div class="viewer-color-row">
+            <label class="toolbar-label" for="filteredResultsStructColorMode">Color structure by</label>
+            <select id="filteredResultsStructColorMode">
+              <option value="chain">Chain</option>
+              <option value="provenance">RFdiffusion provenance</option>
+            </select>
+            <span id="filteredResultsChainPaletteWrap" class="chain-palette-wrap">
+              <label class="toolbar-label" for="filteredResultsChainPaletteSelect">Palette</label>
+              <select id="filteredResultsChainPaletteSelect" class="chain-palette-select">
+                <option value="vivid">Vivid</option>
+                <option value="pastel">Pastel</option>
+                <option value="cvd">Colorblind-safe</option>
+                <option value="bright">Bright</option>
+                <option value="sunset">Sunset</option>
+                <option value="ocean">Ocean</option>
+                <option value="custom" disabled>Custom</option>
+              </select>
+            </span>
+            <span class="bg-color-wrap">
+              <label class="toolbar-label" for="filteredResultsBgColorSelect">Background</label>
+              <select id="filteredResultsBgColorSelect" class="bg-color-select">
+                <option value="black">Black</option>
+                <option value="navy">Dark navy</option>
+                <option value="white">White</option>
+                <option value="light">Light gray</option>
+              </select>
+            </span>
+          </div>
+          <div class="viewer-color-row">
+            <div id="filteredResultsColorLegend" class="color-legend hidden"></div>
+            <div class="sidechain-mode-group">
+              <span class="toolbar-label">Show sidechains:</span>
+              <label class="sidechain-mode-option"><input type="radio" name="filteredResultsSidechainMode" class="sidechain-mode-radio" value="selected"> Only selected</label>
+              <label class="sidechain-mode-option"><input type="radio" name="filteredResultsSidechainMode" class="sidechain-mode-radio" value="interface"> Interface</label>
+              <label class="sidechain-mode-option"><input type="radio" name="filteredResultsSidechainMode" class="sidechain-mode-radio" value="hydrophobic"> Hydrophobic</label>
+              <label class="sidechain-mode-option"><input type="radio" name="filteredResultsSidechainMode" class="sidechain-mode-radio" value="all"> All</label>
+            </div>
+          </div>
+        </div>
+        <div id="filteredResultViewer" class="mol-viewer"></div>
+        <div id="filteredResultsSequenceContent" class="seq-panel"></div>
+      </div>
+    </div>
+
+    <div class="card" id="filteredCsvCard">
+      <h3>Metrics</h3>
+      <div id="filteredCsvTableWrap"><p class="muted">Not available yet.</p></div>
+      <div id="filteredResultsTablePager" class="pager-bar"></div>
+    </div>
+
+    <div class="card" id="filteredResultsAlignCard">
+      <h3>Sequence alignment</h3>
+      <div id="filteredResultsAlignContent"><p class="muted">Not available yet.</p></div>
+    </div>
+  </section>
+
   <section id="tab-outputlog" class="tab-panel">
     <div id="outputLogContent"><p class="muted">Load a job first.</p></div>
   </section>
 </div>
 </main>
-
-<div id="browseModal" class="modal hidden">
-  <div class="modal-content">
-    <div class="modal-header">
-      <span id="browsePath"></span>
-      <button id="browseCloseBtn">✕</button>
-    </div>
-    <div class="browse-nav-row">
-      <select id="browseRootSelect" class="browse-root-select" title="Jump to a configured cluster's root directory">
-        <option value="">Jump to…</option>
-      </select>
-      <input type="text" id="browseGoToPathInput" class="browse-goto-input" placeholder="…or paste a full path and press Enter">
-      <button type="button" id="browseGoToPathBtn" class="secondary">Go</button>
-    </div>
-    <input type="text" id="browseFilterInput" class="browse-filter-input" placeholder="Filter this folder by name…">
-    <div id="browseEntries" class="browse-entries"></div>
-    <div class="modal-footer">
-      <span id="browseSelectedCount" class="muted"></span>
-      <button id="browseAddSelectedBtn" class="secondary" disabled>Add current directory</button>
-    </div>
-  </div>
-</div>
 
 <!-- Cancel job confirmation: asks which target/account the job's cluster is
      on (the dashboard has no other way to know - a job just tracked by log
@@ -481,6 +667,33 @@
   </div>
 </div>
 </div> <!-- /trackJobRoot -->
+
+<!-- Not nested inside #trackJobRoot - Run job's own "existing project"
+     browse buttons (see openBrowsePicker() in app.js) need this reachable
+     while #trackJobRoot itself is hidden (display:none), which a nested
+     modal's own class can't override. -->
+<div id="browseModal" class="modal hidden">
+  <div class="modal-content">
+    <div class="modal-header">
+      <span id="browsePath"></span>
+      <button id="browseCloseBtn">✕</button>
+    </div>
+    <p id="browseHint" class="muted browse-hint hidden"></p>
+    <div class="browse-nav-row">
+      <select id="browseRootSelect" class="browse-root-select" title="Jump to a configured cluster's root directory">
+        <option value="">Jump to…</option>
+      </select>
+      <input type="text" id="browseGoToPathInput" class="browse-goto-input" placeholder="…or paste a full path and press Enter">
+      <button type="button" id="browseGoToPathBtn" class="secondary">Go</button>
+    </div>
+    <input type="text" id="browseFilterInput" class="browse-filter-input" placeholder="Filter this folder by name…">
+    <div id="browseEntries" class="browse-entries"></div>
+    <div class="modal-footer">
+      <span id="browseSelectedCount" class="muted"></span>
+      <button id="browseAddSelectedBtn" class="secondary" disabled>Add current directory</button>
+    </div>
+  </div>
+</div>
 
 {% include "run_job.html" %}
 

@@ -72,7 +72,7 @@ def _parse_ts(line: str) -> Optional[datetime]:
 # contains logs/ and one numbered subdirectory per SLURM array task), not
 # a log path. Each numbered subdirectory is a complete, independent
 # pipeline run in its own right (own 1_rfdiff/, 2_mpnn/, 3_models/,
-# final_pdbs/, input.yaml) - everything below this point that used to take
+# output_pdbs/, input.yaml) - everything below this point that used to take
 # a single log_path now operates per-task, with the log optional.
 # ---------------------------------------------------------------------------
 
@@ -125,6 +125,51 @@ def find_task_log(job_dir: str, task_num: int) -> dict:
     return {"out_path": out_path, "err_path": err_path}
 
 
+def find_scoring_task_log(job_dir: str, task_num: int) -> dict:
+    """Mirrors find_task_log(), but under job_dir/scoring_logs/ - the
+    dependent post-filtering scoring job's own logs (see slurm_runner.py).
+    It's a separate SLURM submission with its own job id, but the same
+    task-id-only matching applies (the job id in the filename is never
+    checked here either)."""
+    logs_dir = os.path.join(job_dir, "scoring_logs")
+    out_path = None
+    err_path = None
+    if os.path.isdir(logs_dir):
+        for name in os.listdir(logs_dir):
+            m = _TASK_LOG_RE.match(name)
+            if not m or int(m.group(2)) != task_num:
+                continue
+            full = os.path.join(logs_dir, name)
+            if name.endswith(".out"):
+                out_path = full
+            elif name.endswith(".err"):
+                err_path = full
+    return {"out_path": out_path, "err_path": err_path}
+
+
+# "final_pdbs"/"final_output.csv" were renamed to "output_pdbs"/"output.csv";
+# these resolve to whichever name is actually on disk (new first) so old job
+# directories still work. Use these instead of hardcoding either name.
+def resolve_final_pdbs_dir(output_dir: str) -> str:
+    new_dir = os.path.join(output_dir, "output_pdbs")
+    if os.path.isdir(new_dir):
+        return new_dir
+    old_dir = os.path.join(output_dir, "final_pdbs")
+    if os.path.isdir(old_dir):
+        return old_dir
+    return new_dir
+
+
+def resolve_final_csv_path(output_dir: str) -> str:
+    new_path = os.path.join(output_dir, "output.csv")
+    if os.path.isfile(new_path):
+        return new_path
+    old_path = os.path.join(output_dir, "final_output.csv")
+    if os.path.isfile(old_path):
+        return old_path
+    return new_path
+
+
 def detect_stage_from_files(task_dir: str) -> dict:
     """File-presence-only stage heuristic, used in place of detect_stage()
     for a task whose log wasn't found - there's no log content to scan for
@@ -135,8 +180,8 @@ def detect_stage_from_files(task_dir: str) -> dict:
     "1_rfdiff/ has some files, 2_mpnn/ doesn't yet") and can never surface
     possible_errors (that's log-line pattern matching, with nothing
     analogous in file presence alone)."""
-    final_dir = os.path.join(task_dir, "final_pdbs")
-    csv_path = os.path.join(task_dir, "final_output.csv")
+    final_dir = resolve_final_pdbs_dir(task_dir)
+    csv_path = resolve_final_csv_path(task_dir)
     if os.path.isdir(final_dir) and os.listdir(final_dir) and os.path.isfile(csv_path):
         return {"stage": "finished", "stage_trigger_line": -1, "possible_errors": []}
     models_dir = os.path.join(task_dir, "3_models")
@@ -1129,8 +1174,8 @@ def load_confidence(path: str) -> dict:
 
 
 def results_summary(output_dir: str) -> dict:
-    final_dir = os.path.join(output_dir, "final_pdbs")
-    csv_path = os.path.join(output_dir, "final_output.csv")
+    final_dir = resolve_final_pdbs_dir(output_dir)
+    csv_path = resolve_final_csv_path(output_dir)
     pdbs = sorted(glob.glob(os.path.join(final_dir, "*.pdb"))) if os.path.isdir(final_dir) else []
     return {
         "final_pdbs": [os.path.basename(p) for p in pdbs],
@@ -1141,7 +1186,8 @@ def results_summary(output_dir: str) -> dict:
 
 
 def load_final_csv(output_dir: str) -> Optional[dict]:
-    """Reads output_dir/final_output.csv and returns it completely as-is -
+    """Reads output_dir's output.csv (see resolve_final_csv_path() for the
+    final_output.csv fallback) and returns it completely as-is -
     {"columns": [...], "rows": [[...], ...]}, or None if the file doesn't
     exist. Deliberately does NOT rewrite anything: every value here,
     including any path columns (model_path, path_rfdiff, and whichever
@@ -1167,7 +1213,7 @@ def load_final_csv(output_dir: str) -> Optional[dict]:
     created" are different states a caller (see api_final_csv() in
     app.py) may want to tell apart.
     """
-    csv_path = os.path.join(output_dir, "final_output.csv")
+    csv_path = resolve_final_csv_path(output_dir)
     if not os.path.isfile(csv_path):
         return None
     with open(csv_path, newline="", errors="replace") as f:
@@ -1176,6 +1222,115 @@ def load_final_csv(output_dir: str) -> Optional[dict]:
         return {"columns": [], "rows": []}
     columns, data_rows = rows[0], rows[1:]
     return {"columns": columns, "rows": data_rows}
+
+
+# ---------------------------------------------------------------------------
+# Filtered results - prosculpt's own filtering stage (`filtering:` in the job
+# config), not the ad-hoc client-side row filters the Results tab already had.
+# ---------------------------------------------------------------------------
+
+
+def filtered_results_summary(output_dir: str) -> dict:
+    """Mirrors results_summary(), but for output_dir/filtered_pdbs and
+    output_dir/filtered_output.csv."""
+    filtered_dir = os.path.join(output_dir, "filtered_pdbs")
+    csv_path = os.path.join(output_dir, "filtered_output.csv")
+    pdbs = sorted(glob.glob(os.path.join(filtered_dir, "*.pdb"))) if os.path.isdir(filtered_dir) else []
+    return {
+        "final_pdbs": [os.path.basename(p) for p in pdbs],
+        "csv_exists": os.path.isfile(csv_path),
+        "csv_path": csv_path if os.path.isfile(csv_path) else None,
+        "finished": bool(pdbs) and os.path.isfile(csv_path),
+    }
+
+
+def load_filtered_csv(output_dir: str) -> Optional[dict]:
+    """Mirrors load_final_csv(), but reads output_dir/filtered_output.csv."""
+    csv_path = os.path.join(output_dir, "filtered_output.csv")
+    if not os.path.isfile(csv_path):
+        return None
+    with open(csv_path, newline="", errors="replace") as f:
+        rows = list(csv.reader(f))
+    if not rows:
+        return {"columns": [], "rows": []}
+    columns, data_rows = rows[0], rows[1:]
+    return {"columns": columns, "rows": data_rows}
+
+
+def _read_csv_header(path: str) -> Optional[list[str]]:
+    """Just the column names of a CSV, without reading the rest of the file.
+    None if the file doesn't exist; [] for a genuinely empty file."""
+    if not os.path.isfile(path):
+        return None
+    with open(path, newline="", errors="replace") as f:
+        try:
+            return next(csv.reader(f))
+        except StopIteration:
+            return []
+
+
+def scoring_job_crash_status(job_dir: str, task_num: int) -> dict:
+    """Crash/cancellation detection for the dependent post-filtering scoring
+    job, mirroring detect_crash()/scan_err_file_for_cancellation() (used for
+    the main job) but scoped to scoring_logs/ instead of logs/. No log found
+    yet just means the scoring job hasn't started/produced output yet - not
+    a crash."""
+    log = find_scoring_task_log(job_dir, task_num)
+    crashed = False
+    if log["out_path"]:
+        try:
+            with open(log["out_path"], "r", errors="replace") as f:
+                lines = f.readlines()
+            crashed = detect_crash(lines)["crashed"]
+        except OSError:
+            pass
+    cancel = scan_err_file_for_cancellation(log["err_path"]) if log["err_path"] else {
+        "cancelled": False,
+        "cancelled_line": None,
+    }
+    return {
+        "crashed": crashed or cancel["cancelled"],
+        "cancelled": cancel["cancelled"],
+        "cancelled_line": cancel["cancelled_line"],
+        "err_path": log["err_path"],
+        "err_exists": bool(log["err_path"]),
+    }
+
+
+def post_filtering_scoring_status(job_dir: str, task_num: int, task_dir: str, cfg: dict) -> dict:
+    """Whether this task's post_filtering_scoring_script is configured, and
+    if so which of four states it's in:
+    - "not_ready": filtering hasn't produced filtered_output.csv yet, so the
+      dependent scoring job (which only starts once this task's own main
+      job finishes - see slurm_runner.py's aftercorr dependency) can't have
+      started either. Distinct from "running" so the UI doesn't claim
+      scoring is in progress before there's even anything for it to run on.
+    - "running": filtered_output.csv exists, no crash detected in
+      scoring_logs/, but it hasn't gained columns beyond output.csv yet.
+    - "crashed": a crash or cancellation was detected in scoring_logs/.
+    - "finished": filtered_output.csv has gained columns beyond output.csv.
+    `pending` (still used for the "not done yet, keep polling" checks
+    elsewhere) is true for "not_ready"/"running" only - "crashed" is a
+    terminal state just like "finished", just not a successful one.
+    """
+    filtering_cfg = cfg.get("filtering") if isinstance(cfg, dict) else None
+    script = filtering_cfg.get("post_filtering_scoring_script") if isinstance(filtering_cfg, dict) else None
+    if not script:
+        return {"configured": False, "state": "not_configured", "pending": False}
+
+    filtered_columns = _read_csv_header(os.path.join(task_dir, "filtered_output.csv"))
+    if filtered_columns is None:
+        return {"configured": True, "state": "not_ready", "pending": True}
+
+    output_columns = _read_csv_header(resolve_final_csv_path(task_dir))
+    if output_columns is not None and set(filtered_columns) - set(output_columns):
+        return {"configured": True, "state": "finished", "pending": False}
+
+    crash = scoring_job_crash_status(job_dir, task_num)
+    if crash["crashed"]:
+        return {"configured": True, "state": "crashed", "pending": False, "crash": crash}
+
+    return {"configured": True, "state": "running", "pending": True, "crash": crash}
 
 
 # ---------------------------------------------------------------------------
@@ -1253,6 +1408,7 @@ def _get_task_status(job_dir: str, task_num: int, task_dir: str) -> dict:
 
     payload["modeling"] = modeling_progress(lines, task_dir, cfg, mp)
     payload["scoring"] = results_summary(task_dir)
+    payload["post_filtering_scoring"] = post_filtering_scoring_status(job_dir, task_num, task_dir, cfg)
 
     return payload
 
@@ -1283,6 +1439,14 @@ def get_job_status(job_dir: str) -> dict:
             "finished": False,
             "crashed": False,
             "cancelled": False,
+            # No 01/02/... yet - but a logs/ directory already existing means
+            # slurm_runner.py has genuinely been invoked here (it creates
+            # that before any array task starts), so this really is an
+            # output directory, just too early for any task to have written
+            # anything yet - distinct from being pointed at a directory
+            # that was never a prosculpt output_dir at all (see the
+            # frontend's two different messages for this).
+            "looks_like_output_dir": os.path.isdir(os.path.join(job_dir, "logs")),
         }
 
     tasks = [_get_task_status(job_dir, task_num, task_dir) for task_num, task_dir in task_dirs]
@@ -1301,7 +1465,12 @@ def get_job_status(job_dir: str) -> dict:
         "config": config,
         "any_log_found": any(t["log_found"] for t in tasks),
         "all_logs_found": all(t["log_found"] for t in tasks),
-        "finished": all(t["scoring"]["finished"] for t in tasks),
-        "crashed": any(t["crash"]["crashed"] for t in tasks),
+        # A task isn't finished if its post_filtering_scoring is still pending.
+        "finished": all(t["scoring"]["finished"] for t in tasks)
+        and not any(t["post_filtering_scoring"]["pending"] for t in tasks),
+        # A crashed post-filtering scoring job is just as terminal (and just
+        # as much a "crashed" job) as a crash in the main pipeline itself.
+        "crashed": any(t["crash"]["crashed"] for t in tasks)
+        or any(t["post_filtering_scoring"].get("state") == "crashed" for t in tasks),
         "cancelled": any(t["cancelled"] for t in tasks),
     }

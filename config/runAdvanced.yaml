@@ -22,6 +22,7 @@ a3m_dir: /home/folivieri/prosculpt/uPar_epitope/alignments/ #Location of the ali
 model_monomer: False #Whether to compare designed chains to a model of itself in abscense of other proteins.
 
 only_run_analysis: False  #Only run final operations. This is good if a previous run failed to run final ops. Default: False
+only_run_post_filtering_scoring: False  #Only run the post_filtering_scoring_script against this run's filtered_output.csv (see `filtering:` below). Default: False
 
 
 defaults:
@@ -40,6 +41,10 @@ pass_to_mpnn: # additional arguments and values to pass to ProteinMPNN
 pass_to_af: # additional arguments and values to pass to AlphaFold
   --templates: ""
   --custom-template-path: /home/user/mhc/
+
+#scoring_script: scripts/scoring_script.py   # optional; pre-filtering scoring script run on every model. Defaults to scripts/scoring_script.py.
+#scoring_script_arguments: # optional; extra arguments passed to scoring_script, same shape as pass_to_mpnn/pass_to_af above
+#  --some_flag: some_value
 
 # Symmetry to sample
 # Available symmetries:
@@ -82,3 +87,24 @@ rfdiff_backbone_filters:
     base_pdb: "/home/d12-studenti/Kiyan/prosculpt_projects/Fibers/Roller_fuse/input_structures/2B12.pdb" #Change this to location of base oligomer
     residues_to_align: 85
     skip_last_residues: 200
+
+# Filtering applied to output.csv's metrics (e.g. RMSD/plddt), plus an
+# optional post-filtering scoring pass on the survivors. Optional - omitting
+# this still creates filtered_pdbs/filtered_output.csv as a straight copy of
+# everything.
+#filtering:
+#  filtering_parameters:      # optional; any key not found in output.csv is skipped with a warning in the log
+#    RMSD:
+#      min: 0.5               # min and max are independently optional and can be combined
+#      max: 2.0
+#    plddt:
+#      min: 76
+#  ranking_parameters:        # optional as a whole; if present, all three keys below are mandatory
+#    metric: plddt
+#    higher_better: true      # true for a "higher is better" metric like plddt, false for a "lower is better" one like RMSD
+#    max_results: 50          # caps passing models to the best max_results by metric/higher_better
+#  post_filtering_scoring_script: scripts/post_filtering_scoring_script.py   # optional; omit to skip post-filtering scoring entirely
+#  post_filtering_scoring_script_arguments: # optional; extra arguments passed to post_filtering_scoring_script, same shape as pass_to_mpnn/pass_to_af above
+#    --chain_pairs: "AB,AC"    # overrides the script's default CHAIN_PAIRS; "all" scores every pairwise combination
+#  filtering_slurm:           # optional; same shape as the top-level slurm: block. cpus-per-task controls the scoring script's parallelism.
+#    cpus-per-task: 8
