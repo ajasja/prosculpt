@@ -1052,7 +1052,10 @@ def do_cycling(cfg):
                                 )
                             else:
                                 mpnn_seq = line
-
+                                if "monomer" in os.path.basename(fasta_file):
+                                    monomer_models=True
+                                else:
+                                    monomer_models=False
                                 custom_yaml_path = prosculpt.make_boltz_input_yaml(
                                     cfg,
                                     sequence_id,
