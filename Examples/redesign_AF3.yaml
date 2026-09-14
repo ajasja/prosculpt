@@ -23,7 +23,7 @@ num_models: 1 # Choose specific models to cycle in af2-mpnn
 chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 
 skipRfDiff: True  #(This tells Prosculpt to skip making a backbone and go straight to mpnn)
-designable_residues: [A49, A50, A53, A56, A57, B] #
+designable_residues: [A49, A50, A53, A56, A57, B] #Include residues that are to be redesigned. Chains that are *NOT* to be redesigned but should be included in the final model should be named by letter only (such as chain B, in this example)
 
 sampling_temp: 0.1
 backbone_noise: 0.0
