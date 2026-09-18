@@ -118,7 +118,19 @@ def general_config_prep(cfg):
         ):  # If not specified, use default order 1,2,...num_models
             cfg.model_order = ",".join(str(i) for i in range(1, cfg.num_models + 1))
 
+        if cfg.get("designable_residues", None) is not None:
+            # Ranges are expanded once here so every later consumer sees
+            # plain per-residue tokens.
+            cfg.designable_residues = prosculpt.parse_designable_residues(
+                cfg.designable_residues
+            )
+
         if cfg.get("skipRfDiff", False):
+            if not cfg.get("designable_residues", None):
+                raise ValueError(
+                    "skipRfDiff requires designable_residues: the residues ProteinMPNN may redesign, "
+                    "plus the bare chain letter of every other chain to keep in the final model."
+                )
             # We only need to redesign the chains specified in designable_residues
             cfg.chains_to_design = " ".join(
                 sorted({_[0] for _ in cfg.designable_residues})

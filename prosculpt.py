@@ -1969,9 +1969,68 @@ class NumpyInt64Encoder(json.JSONEncoder):
         return super(NumpyInt64Encoder, self).default(obj)
 
 
+_warned_unmatched_designable = set()
+
+DESIGNABLE_RESIDUE_RE = re.compile(r"^([A-Za-z])(-?\d+)?$")
+DESIGNABLE_RANGE_RE = re.compile(r"^([A-Za-z])(\d+)-([A-Za-z]?)(\d+)$")
+
+
+def parse_designable_residues(designable_residues):
+    """
+    Expand a designable_residues config value into the flat list of
+    per-residue tokens the pipeline matches against (see
+    getChainResidOffsets, which compares f"{chain}{resnum}" by equality).
+
+    Accepts single residues ("A49"), ranges ("A49-57" or "A49-A57") and
+    bare chain letters ("B": chain kept in the model, never redesigned).
+    Must be a list: a string is iterated character by character when
+    chains_to_design is derived from it, turning punctuation into chain
+    names. Raises ValueError on a string or an unreadable entry.
+    """
+    if designable_residues is None:
+        return None
+    if isinstance(designable_residues, str):
+        raise ValueError(
+            f"designable_residues must be a YAML list, not a string (got {designable_residues!r}). "
+            "Write it unquoted, e.g.  designable_residues: [A49, A50-57, B]"
+        )
+
+    expanded = []
+    invalid = []
+    for entry in designable_residues:
+        token = str(entry).strip()
+        range_match = DESIGNABLE_RANGE_RE.match(token)
+        if range_match:
+            chain, start, end_chain, end = range_match.groups()
+            if (end_chain and end_chain != chain) or int(end) < int(start):
+                invalid.append(token)
+                continue
+            expanded.extend(f"{chain}{i}" for i in range(int(start), int(end) + 1))
+        elif DESIGNABLE_RESIDUE_RE.match(token):
+            expanded.append(token)
+        else:
+            invalid.append(token)
+
+    if invalid:
+        raise ValueError(
+            f"Could not read designable_residues entries {invalid}. "
+            "Use a residue (A49), a range (A49-57) or a bare chain letter (B)."
+        )
+    return list(dict.fromkeys(expanded))
+
+
 def getChainResidOffsets(pdb_file, designable_residues):
+    """
+    Returns the global 0-based index each chain starts at, and the
+    non-designable residues as (chain, position) with position 1-based
+    within its own chain - the numbering ProteinMPNN's fixed_positions and
+    every "x + chainResidOffset[chain] - 1" call site expect, which is NOT
+    the PDB residue number when a chain does not start at 1.
+    designable_residues itself is matched on PDB numbering.
+    """
     chainResidOffset = {}
     con_hal_idx = []
+    matched_designable = set()
 
     parser = PDBParser(QUIET=True)
     structure = parser.get_structure("protein", pdb_file)
@@ -1982,8 +2041,14 @@ def getChainResidOffsets(pdb_file, designable_residues):
         chain_id = chain.get_id()
 
         first_residue_seen = False
+        chain_position = 0
 
         for residue in chain.get_residues():
+            # Waters/ligands (hetflag "W", "H_...") are not residues to
+            # ProteinMPNN, so they must not take up a position either.
+            if residue.get_id()[0].strip() != "":
+                continue
+            chain_position += 1
 
             # Store the global index of the first residue in this chain
             if not first_residue_seen:
@@ -1991,10 +2056,29 @@ def getChainResidOffsets(pdb_file, designable_residues):
                 first_residue_seen = True
 
             if designable_residues:
-                if f"{chain_id}{residue.get_id()[1]}" not in designable_residues:
-                    con_hal_idx.append((chain_id, residue.get_id()[1]))
+                token = f"{chain_id}{residue.get_id()[1]}"
+                if token not in designable_residues:
+                    con_hal_idx.append((chain_id, chain_position))
+                else:
+                    matched_designable.add(token)
 
             global_residue_index += 1
+
+    if designable_residues:
+        # Bare chain letters are meant to stay fixed, so only numbered
+        # entries are expected to match a residue in the PDB.
+        unmatched = [
+            str(r)
+            for r in designable_residues
+            if any(c.isdigit() for c in str(r)) and str(r) not in matched_designable
+        ]
+        # getChainResidOffsets runs once per model, so warn only once per case.
+        warn_key = (str(pdb_file), tuple(unmatched))
+        if unmatched and warn_key not in _warned_unmatched_designable:
+            _warned_unmatched_designable.add(warn_key)
+            log.warning(
+                f"designable_residues entries not found in {pdb_file} (they will not be redesigned): {unmatched}"
+            )
 
     return chainResidOffset, con_hal_idx
 
@@ -2142,22 +2226,14 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
         if not skipRfDiff:
             con_ref_idx0 = trb_data.get('con_ref_idx0', []) 
             complex_con_ref_idx0 = trb_data.get('complex_con_ref_idx0', con_ref_idx0)
-        else:
-            con_set = set(con_hal_idx)
+            complex_con_ref_idx0 = copy.deepcopy(sorted(list(complex_con_ref_idx0) + list(provide_seq_residues)))
+            #print(f"DEBUG: complex_con_ref_idx0 (combined con_ref_idx0 and provide_seq_residues): {complex_con_ref_idx0}")
+            complex_con_ref_pdb_idx = []
+            for id0 in complex_con_ref_idx0:  # Just define con_hal_idx from inpaint_seq and ignore everything else. This should work
+                complex_con_ref_pdb_idx.append(all_residues_reference[id0])
+            #print(f"DEBUG complex_con_ref_pdb_idx: {complex_con_ref_pdb_idx}")
 
-            complex_con_ref_idx0 = [
-                i for i, res in enumerate(all_residue_indices_reference)
-                if res not in con_set
-            ]
-        complex_con_ref_idx0 = copy.deepcopy(sorted(list(complex_con_ref_idx0) + list(provide_seq_residues)))
-        #print(f"DEBUG: complex_con_ref_idx0 (combined con_ref_idx0 and provide_seq_residues): {complex_con_ref_idx0}")
-        complex_con_ref_pdb_idx = []
-        for id0 in complex_con_ref_idx0:  # Just define con_hal_idx from inpaint_seq and ignore everything else. This should work
-            complex_con_ref_pdb_idx.append(all_residues_reference[id0])
-        #print(f"DEBUG complex_con_ref_pdb_idx: {complex_con_ref_pdb_idx}")
-
-        for (chain, idx), (chain_from_input, idx_from_input) in zip(con_hal_idx, complex_con_ref_pdb_idx):
-            if not skipRfDiff:
+            for (chain, idx), (chain_from_input, idx_from_input) in zip(con_hal_idx, complex_con_ref_pdb_idx):
                 #print(f"DEBUG: {(chain, idx), (chain_from_input, idx_from_input)} in con_hal_idx and complex_con_ref_pdb_idx")
                 if trb_data["inpaint_seq"][
                     idx - 1
@@ -2166,11 +2242,13 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
                     fixed_res.setdefault(chain, list()).append(
                         idx - chainResidOffset[chain]
                     )
-            else:
-                fixed_res.setdefault(chain, list()).append(
-                    idx
-                )
-            # RfDiff outputs multiple chains if contig has /0 (chain break)
+                # RfDiff outputs multiple chains if contig has /0 (chain break)
+        else:
+            # con_hal_idx already lists every non-designable residue as
+            # (chain, 1-based position within that chain), which is the
+            # numbering ProteinMPNN wants - nothing to look up or convert.
+            for chain, idx in con_hal_idx:
+                fixed_res.setdefault(chain, list()).append(idx)
 
         print(f"Fixed res: ${fixed_res}")
 
