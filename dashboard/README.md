@@ -106,6 +106,14 @@ start_dashboard.sh    Linux: launch under `screen` on a headnode
 watchdog.sh           Linux: wraps start_dashboard.sh in a restart loop
 ```
 
+## Screenshots
+
+![Screenshot1](Screenshots/Overview.png)
+
+![Screenshot2](Screenshots/Run_job.png)
+
+![Screenshot3](Screenshots/Results.png)
+
 ## Troubleshooting
 
 - **"No output has been generated yet"** - the directory looks right (it has a `logs/`) but no `01/`, `02/`, ... task directory exists yet. Normal for a job that's queued or still in its first step.
