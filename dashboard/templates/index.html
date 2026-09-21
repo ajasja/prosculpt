@@ -147,10 +147,6 @@
     <div id="allUnfilteredResultsTablePager" class="pager-bar"></div>
   </div>
 
-  <div class="card" id="allUnfilteredResultsAlignCard">
-    <h3>Sequence alignment</h3>
-    <div id="allUnfilteredResultsAlignContent"><p class="muted">Not available yet.</p></div>
-  </div>
 </section>
 
 <section id="tab-all-results" class="hidden">
@@ -248,10 +244,6 @@
     <div id="allResultsTablePager" class="pager-bar"></div>
   </div>
 
-  <div class="card" id="allResultsAlignCard">
-    <h3>Sequence alignment</h3>
-    <div id="allResultsAlignContent"><p class="muted">Not available yet.</p></div>
-  </div>
 </section>
 
 <div id="jobView">
@@ -265,6 +257,11 @@
   <button class="tab-btn" data-tab="filtered-results">Filtered Results</button>
   <button class="tab-btn" data-tab="error" id="errorTabBtn">Error log</button>
   <button class="tab-btn" data-tab="outputlog">Output log</button>
+  <!-- The dependent post-filtering scoring job's own logs (scoring_logs/).
+       Hidden unless that job is configured - see
+       renderScoringLogTabAvailability() in app.js. -->
+  <button class="tab-btn scoring-log-tab" data-tab="scoringerror" id="scoringErrorTabBtn">Scoring error log</button>
+  <button class="tab-btn scoring-log-tab" data-tab="scoringlog" id="scoringLogTabBtn">Scoring output log</button>
   <!-- Deliberately not a .tab-btn (no data-tab/panel of its own - it does
        something rather than navigating somewhere) - pushed to the far
        right of the bar via margin-left:auto in CSS. Opens #cancelJobModal;
@@ -362,6 +359,10 @@
 
   <section id="tab-sequences" class="tab-panel">
     <div class="card" id="sequencesToolbar">
+      <label class="toolbar-label">Backbone
+        <select id="sequenceBackboneSelect" style="max-width:460px"></select>
+      </label>
+      <input id="sequenceBackboneFilter" type="text" placeholder="filter backbones…" style="width:150px" />
       <label class="toggle-label"><input type="checkbox" id="conservationToggle"> Highlight conserved residues</label>
       <label class="toolbar-label">Threshold <input type="number" id="conservationThreshold" min="1" max="100" value="90" style="width:56px"> %</label>
     </div>
@@ -372,6 +373,10 @@
     <div id="modelsCycleNote" class="cycle-note hidden"></div>
     <div class="split-view">
       <div class="list-pane">
+        <label class="toolbar-label" style="display:block;margin-bottom:6px">Backbone
+          <select id="modelBackboneSelect" style="width:100%"></select>
+        </label>
+        <input id="modelBackboneFilter" type="text" placeholder="filter backbones…" style="margin-bottom:6px" />
         <input id="modelsFilter" type="text" placeholder="filter by name…" />
         <div id="modelsList"><p class="muted">Load a job first.</p></div>
         <div id="modelsListPager" class="pager-bar"></div>
@@ -520,10 +525,6 @@
       <div id="resultsTablePager" class="pager-bar"></div>
     </div>
 
-    <div class="card" id="resultsAlignCard">
-      <h3>Sequence alignment</h3>
-      <div id="resultsAlignContent"><p class="muted">Not available yet.</p></div>
-    </div>
   </section>
 
   <!-- Filtered Results: prosculpt's filtering-stage output (filtered_pdbs/filtered_output.csv). -->
@@ -623,14 +624,18 @@
       <div id="filteredResultsTablePager" class="pager-bar"></div>
     </div>
 
-    <div class="card" id="filteredResultsAlignCard">
-      <h3>Sequence alignment</h3>
-      <div id="filteredResultsAlignContent"><p class="muted">Not available yet.</p></div>
-    </div>
   </section>
 
   <section id="tab-outputlog" class="tab-panel">
     <div id="outputLogContent"><p class="muted">Load a job first.</p></div>
+  </section>
+
+  <section id="tab-scoringerror" class="tab-panel">
+    <div id="scoringErrorLogContent"><p class="muted">Load a job first.</p></div>
+  </section>
+
+  <section id="tab-scoringlog" class="tab-panel">
+    <div id="scoringLogContent"><p class="muted">Load a job first.</p></div>
   </section>
 </div>
 </main>

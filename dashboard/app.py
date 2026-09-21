@@ -270,13 +270,36 @@ def api_sequences():
     tagged with task_num so num_tasks>1 shows all tasks together (see
     /api/backbones's docstring for the same pattern)."""
     job_dir = _require_job_dir()
+    # Three modes:
+    #   ?index=1                  -> names and sample counts only, no sequences
+    #   ?task=<n>&backbone=<name> -> just that one backbone's sequences
+    #   neither                   -> every backbone's sequences
+    want_index = request.args.get("index") in ("1", "true")
+    want_backbone = request.args.get("backbone")
+    want_task = request.args.get("task")
+    try:
+        want_task = int(want_task) if want_task not in (None, "") else None
+    except ValueError:
+        abort(400, description="task must be an integer")
+
     out = {"backbones": [], "monomers": []}
     for task_num, task_dir in P.discover_tasks(job_dir):
+        if want_task is not None and task_num != want_task:
+            continue
         mp = P.list_sequences(task_dir)
         for key in ("backbones", "monomers"):
             for entry in mp[key]:
-                entry["task_num"] = task_num
-                out[key].append(entry)
+                if want_backbone is not None and entry.get("backbone") != want_backbone:
+                    continue
+                if want_index:
+                    out[key].append({
+                        "task_num": task_num,
+                        "backbone": entry.get("backbone"),
+                        "num_samples": entry.get("num_samples"),
+                    })
+                else:
+                    entry["task_num"] = task_num
+                    out[key].append(entry)
     return jsonify(out)
 
 
@@ -290,10 +313,32 @@ def api_models():
     """Every task's models, concatenated and tagged with task_num (same
     pattern as /api/backbones/api/sequences above)."""
     job_dir = _require_job_dir()
+    # Three modes:
+    #   ?index=1                -> the model_N list per task, no scan at all
+    #   ?task=<n>&model=<name>  -> just that backbone's models
+    #   neither                 -> every model
+    want_index = request.args.get("index") in ("1", "true")
+    want_model = request.args.get("model")
+    want_task = request.args.get("task")
+    try:
+        want_task = int(want_task) if want_task not in (None, "") else None
+    except ValueError:
+        abort(400, description="task must be an integer")
+
     out = []
     for task_num, task_dir in P.discover_tasks(job_dir):
+        if want_task is not None and task_num != want_task:
+            continue
+        if want_index:
+            out.extend(
+                {"task_num": task_num, "model": name}
+                for name in P.list_model_dirs(task_dir)
+            )
+            continue
         cfg = P.extract_config(None, task_dir)
-        for m in P.list_models(task_dir, model_monomer=bool(cfg.get("model_monomer"))):
+        for m in P.list_models(
+            task_dir, model_monomer=bool(cfg.get("model_monomer")), model_name=want_model
+        ):
             m["task_num"] = task_num
             out.append(m)
     return jsonify(out)
@@ -303,7 +348,12 @@ def _resolve_within_output_dir(output_dir: str, path: str) -> str:
     """`path` is normally an absolute path already under output_dir (as
     returned by list_models/list_backbones); re-validate it stays inside
     output_dir regardless of whether it arrived absolute or relative."""
-    rel = os.path.relpath(path, output_dir) if os.path.isabs(path) else path
+    try:
+        rel = os.path.relpath(path, output_dir) if os.path.isabs(path) else path
+    except ValueError:
+        # Windows raises when the two paths are on different drives. Treated
+        # as a rejected path (400), not a server error.
+        abort(400, description="Path is not inside this task's output directory")
     return _safe_join(output_dir, rel)
 
 
@@ -863,6 +913,34 @@ def api_output_log():
     if not out_path or not os.path.isfile(out_path):
         return jsonify({"log_found": False})
     return jsonify({"log_found": True, **P.read_text_file(out_path)})
+
+
+@app.route("/api/scoring_log")
+def api_scoring_log():
+    """Same as /api/output_log, but for the dependent post-filtering scoring
+    job's own .out under scoring_logs/ (see find_scoring_task_log())."""
+    job_dir = _require_job_dir()
+    _get_task_dir(job_dir, request.args.get("task"))
+    task_num = int(request.args.get("task"))
+    log_info = P.find_scoring_task_log(job_dir, task_num)
+    out_path = log_info["out_path"]
+    if not out_path or not os.path.isfile(out_path):
+        return jsonify({"log_found": False, "log_path": out_path})
+    return jsonify({"log_found": True, "log_path": out_path, **P.read_text_file(out_path)})
+
+
+@app.route("/api/scoring_error_log")
+def api_scoring_error_log():
+    """Same as /api/error_log, but for the post-filtering scoring job's own
+    .err under scoring_logs/."""
+    job_dir = _require_job_dir()
+    _get_task_dir(job_dir, request.args.get("task"))
+    task_num = int(request.args.get("task"))
+    log_info = P.find_scoring_task_log(job_dir, task_num)
+    err_path = log_info["err_path"]
+    if not err_path or not os.path.isfile(err_path):
+        return jsonify({"err_exists": False, "err_path": err_path})
+    return jsonify({"err_exists": True, "err_path": err_path, **P.read_text_file(err_path)})
 
 
 # ---------------------------------------------------------------------------

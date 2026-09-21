@@ -204,6 +204,14 @@ button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
 .tab-btn#errorTabBtn.alert.active { border-bottom-color: var(--danger); }
 .tab-btn#errorTabBtn.alert::before { content: "⚠ "; }
 
+/* Scoring log tabs: same treatment, hidden unless this job actually has a
+   post-filtering scoring job configured. */
+.tab-btn.scoring-log-tab { display: none; }
+.tab-btn.scoring-log-tab.visible { display: inline-block; }
+.tab-btn#scoringErrorTabBtn.alert { color: var(--danger); }
+.tab-btn#scoringErrorTabBtn.alert.active { border-bottom-color: var(--danger); }
+.tab-btn#scoringErrorTabBtn.alert::before { content: "⚠ "; }
+
 /* Cancel job: the one button on the per-job tab bar that does something
    rather than switching tabs, so it's deliberately not a .tab-btn (see
    index.html) and gets its own look - a red outline rather than a filled
@@ -413,6 +421,7 @@ main { padding: 20px; }
 }
 .step.done { color: var(--accent-2); border-color: var(--accent-2); }
 .step.active { color: white; background: var(--accent); border-color: var(--accent); }
+.step.failed { color: white; background: var(--danger); border-color: var(--danger); }
 .step-arrow { color: var(--border); padding: 0 6px; font-size: 16px; }
 
 /* Stage card: sits directly under the stepper and shows what's happening

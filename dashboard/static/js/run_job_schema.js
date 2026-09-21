@@ -128,8 +128,10 @@ const MODULES = {
     fields: [
       { key: "designable_residues", label: "Designable residues", type: "text",
         help: "Residues MPNN may redesign; everything else stays fixed.",
-        tooltip: "Example: [A49, A50, A53, A56, A57, B]. Any chain that should stay entirely fixed (not redesigned) " +
-          "must still be listed here too, given as just its chain letter (e.g. B) - not a residue range." },
+        tooltip: "Example: A49, A50, A53-57, B. Ranges are expanded for you (A53-57 becomes A53 A54 A55 A56 A57) " +
+          "because prosculpt itself matches residues one by one and would ignore an unexpanded range. " +
+          "Any chain that should stay entirely fixed (not redesigned) must still be listed here too, " +
+          "given as just its chain letter (e.g. B) - not a residue range." },
     ],
   },
   partial_diffusion: {

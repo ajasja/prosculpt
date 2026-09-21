@@ -14,6 +14,7 @@ const STAGE_LABEL = {
   mpnn: "ProteinMPNN",
   modeling: "Modeling",
   scoring: "Scoring and filtering",
+  post_filtering_scoring: "Post-filtering scoring",
   finished: "Finished",
 };
 
@@ -77,6 +78,10 @@ let state = {
   backboneColorMode: "chain", // "chain" | "provenance"
 
   sequencesCache: null,
+  sequencesIndex: null,
+  modelsIndex: null,
+  modelsSelection: null,
+  sequencesSelection: null,
 
   modelsCache: [],
   selectedModelKey: null,
@@ -324,8 +329,12 @@ function resetPerJobViewState() {
   state.loadedBackboneKey = null;
 
   state.sequencesCache = null;
+  state.sequencesIndex = null;
+  state.sequencesSelection = null;
 
   state.modelsCache = [];
+  state.modelsIndex = null;
+  state.modelsSelection = null;
   state.selectedModelKey = null;
   state.loadedModelStructureKey = null;
   state.loadedModelConfKey = null;
@@ -872,12 +881,22 @@ async function fetchJobStatus(jobDir) {
   if (state.topView === "all-overview") renderAllOverview();
 }
 
-function refreshAllJobStatuses() {
-  state.jobs.forEach((jobDir) => {
+let sweepInFlight = false;
+
+async function refreshAllJobStatuses() {
+  // Overlap guard for the all-jobs sweep, which fans out to every tracked job.
+  if (sweepInFlight) return;
+  const pending = state.jobs.filter((jobDir) => {
     const entry = state.jobStatuses[jobDir];
-    if (entry && entry.terminal) return;
-    fetchJobStatus(jobDir);
+    return !(entry && entry.terminal);
   });
+  if (!pending.length) return;
+  sweepInFlight = true;
+  try {
+    await Promise.all(pending.map((jobDir) => fetchJobStatus(jobDir)));
+  } finally {
+    sweepInFlight = false;
+  }
 }
 
 function startJobStatusPolling() {
@@ -913,6 +932,8 @@ function refreshActiveTabData(showLoadingState) {
   else if (state.activeTab === "filtered-results") filteredResultsView.load(showLoadingState);
   else if (state.activeTab === "error") loadErrorTab();
   else if (state.activeTab === "outputlog") loadOutputLog();
+  else if (state.activeTab === "scoringlog") loadScoringLogTab();
+  else if (state.activeTab === "scoringerror") loadScoringErrorTab();
 }
 
 // ---------------------------------------------------------------------
@@ -1055,13 +1076,26 @@ async function doCancelJob() {
 // Polling
 // ---------------------------------------------------------------------
 
+// True while a polled refresh is still running. Ticks arriving during one are
+// dropped rather than queued, so polls never overlap.
+let pollInFlight = false;
+
 function startPolling() {
   stopPolling();
-  state.pollTimer = setInterval(() => refreshAll(false), POLL_MS);
+  state.pollTimer = setInterval(async () => {
+    if (pollInFlight) return;
+    pollInFlight = true;
+    try {
+      await refreshAll(false);
+    } finally {
+      pollInFlight = false;
+    }
+  }, POLL_MS);
 }
 function stopPolling() {
   if (state.pollTimer) clearInterval(state.pollTimer);
   state.pollTimer = null;
+  pollInFlight = false;
 }
 
 // Accepts either shape: a raw job-level payload (top-level finished/
@@ -1119,7 +1153,9 @@ function activeTaskView(status) {
   let task = status.tasks.find((t) => t.task_num === state.selectedTaskNum);
   if (!task) {
     task = status.tasks[0];
-    state.selectedTaskNum = task.task_num;
+    // Returns the first task when no specific one is selected, but leaves an
+    // "all" selection in place.
+    if (state.selectedTaskNum !== "all") state.selectedTaskNum = task.task_num;
   }
   return {
     ...task,
@@ -1156,7 +1192,11 @@ function renderPostFilteringScoringBanner() {
   }
   if (pfsState === "running") {
     el.className = "info-banner";
-    el.innerHTML = `<span class="banner-icon"><span class="spinner"></span></span><span>Post-filtering scoring is still running. When it's finished, results will be added to the metrics table automatically.</span>`;
+    // The count exists only once the scoring log reports a total; until then
+    // the bare sentence is shown.
+    const phrase = pfsScoredPhrase(pfs);
+    const progress = phrase ? ` — ${phrase}` : "";
+    el.innerHTML = `<span class="banner-icon"><span class="spinner"></span></span><span>Post-filtering scoring is still running${progress}. When it's finished, results will be added to the metrics table automatically.</span>`;
     return;
   }
   // "not_ready" (filtering itself hasn't finished yet - nothing running to
@@ -1206,8 +1246,21 @@ async function loadStatus(showLoadingState) {
     const status = await apiGet("/api/status");
     if (jobSwitchedAwayFrom(requestedJobDir)) return;
     state.lastStatus = status;
+    renderStatus(status, errBanner);
+  } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    errBanner.textContent = err.message;
+    errBanner.classList.remove("hidden");
+  }
+}
+
+// Renders an already-fetched /api/status payload. Callers that already hold a
+// payload (such as the task switcher) re-render through this without refetching.
+function renderStatus(status, errBanner) {
+  {
     renderPostFilteringScoringBanner();
     renderFilteredResultsTabAvailability();
+    renderScoringLogTabAvailability();
     if (status.error) {
       errBanner.textContent = status.error;
       errBanner.classList.remove("hidden");
@@ -1242,10 +1295,6 @@ async function loadStatus(showLoadingState) {
     renderOverview(task);
     renderModelsCycleNote(task);
     if (isTerminalStatus(status)) stopPollingForTerminalState(task);
-  } catch (err) {
-    if (jobSwitchedAwayFrom(requestedJobDir)) return;
-    errBanner.textContent = err.message;
-    errBanner.classList.remove("hidden");
   }
 }
 
@@ -1276,7 +1325,13 @@ function renderTaskSwitcher(status) {
   qsa("button[data-task]", el).forEach((btn) => {
     btn.addEventListener("click", () => {
       state.selectedTaskNum = btn.dataset.task === "all" ? "all" : parseInt(btn.dataset.task, 10);
-      loadStatus(false);
+      // Pure re-render from the cached payload; falls back to a real load
+      // when nothing is cached yet.
+      if (state.lastStatus && !state.lastStatus.error) {
+        renderStatus(state.lastStatus, qs("#errorBanner"));
+      } else {
+        loadStatus(true);
+      }
     });
   });
 }
@@ -1331,15 +1386,72 @@ function renderAllTasksOverview(status) {
   });
 }
 
+// Body of the Overview stage card while post-filtering scoring is pending. The
+// ETA comes from wall-clock throughput (post_filtering_scoring_progress() in
+// parser.py), not from summing the per-model times in the log.
+function postFilteringScoringMessage(pfs) {
+  const p = (pfs && pfs.progress) || {};
+  if (pfs.state === "not_ready") {
+    return `Post-filtering scoring is queued — it starts once this task's main job has finished and <code>filtered_output.csv</code> exists.`;
+  }
+  if (p.total == null) {
+    return `Post-filtering scoring is being conducted. Follow it in the <b>Scoring output log</b> tab.`;
+  }
+  const bits = [`Post-filtering scoring: <b>${p.scored}</b> of <b>${p.total}</b> filtered model(s) scored`];
+  if (p.eta_seconds != null) bits.push(`about ${fmtSeconds(p.eta_seconds)} left`);
+  if (p.avg_seconds_per_model != null) bits.push(`${fmtSeconds(p.avg_seconds_per_model)} per model`);
+  return `${bits.join(" — ")}. Follow it in the <b>Scoring output log</b> tab.`;
+}
+
+// "<b>0 of 3</b> filtered model(s) scored (0%)" - the shared wording used by
+// both the Filtered Results banner and the Scoring output log banner. Empty
+// string until the scoring log reports a total.
+function pfsScoredPhrase(pfs) {
+  const p = (pfs && pfs.progress) || {};
+  if (p.total == null) return "";
+  const pct = p.total ? Math.round((p.scored / p.total) * 100) : 0;
+  return `<b>${p.scored} of ${p.total}</b> filtered model(s) scored (${pct}%)`;
+}
+
+// "N / M" for the post-filtering scoring step, once its log says how many
+// models there are to score. Empty string until then.
+function pfsCountLabel(pfs) {
+  const p = pfs && pfs.progress;
+  if (!p || p.total == null) return "";
+  return ` ${p.scored} / ${p.total}`;
+}
+
+// Post-filtering scoring is a separate SLURM job and is not covered by the
+// backend's `stage`. When configured it is spliced in here as an extra step
+// before "Finished", driven by post_filtering_scoring.state.
+function stepperSteps(status) {
+  const pfs = status.post_filtering_scoring;
+  if (!pfs || !pfs.configured) return STAGE_ORDER;
+  const steps = STAGE_ORDER.slice();
+  steps.splice(steps.indexOf("finished"), 0, "post_filtering_scoring");
+  return steps;
+}
+
 function renderStepper(status) {
-  const stage = status.stage;
-  const idx = STAGE_ORDER.indexOf(stage);
-  const html = STAGE_ORDER.map((s, i) => {
+  const steps = stepperSteps(status);
+  const pfs = status.post_filtering_scoring;
+  const pfsConfigured = !!(pfs && pfs.configured);
+  // While scoring is pending, the scoring step is the current one, not
+  // "finished".
+  let stage = status.stage;
+  if (pfsConfigured && stage === "finished" && pfs.state !== "finished") stage = "post_filtering_scoring";
+  const idx = steps.indexOf(stage);
+  const html = steps.map((s, i) => {
     let cls = "step";
     if (i < idx) cls += " done";
     else if (i === idx) cls += " active";
-    const arrow = i < STAGE_ORDER.length - 1 ? '<span class="step-arrow">→</span>' : "";
-    return `<div class="${cls}">${STAGE_LABEL[s]}</div>${arrow}`;
+    const arrow = i < steps.length - 1 ? '<span class="step-arrow">→</span>' : "";
+    let label = STAGE_LABEL[s];
+    if (s === "post_filtering_scoring") {
+      if (pfs.state === "crashed") cls += " failed";
+      label += pfsCountLabel(pfs);
+    }
+    return `<div class="${cls}">${label}</div>${arrow}`;
   }).join("");
   qs("#stepper").innerHTML = html;
 }
@@ -1378,7 +1490,7 @@ function renderStageBlock(status, cycleSuffix) {
       return simpleStageMessage("⚠", `Post-filtering scoring crashed. Check the <b>Filtered Results</b> tab / <code>scoring_logs/</code> for details.`);
     }
     if (pfs && pfs.pending) {
-      return simpleStageMessage(`<span class="spinner"></span>`, `Post-filtering scoring is being conducted.`);
+      return simpleStageMessage(`<span class="spinner"></span>`, postFilteringScoringMessage(pfs));
     }
     const fp = (status.scoring && status.scoring.final_pdbs) || [];
     return simpleStageMessage("✅", `Job finished with <b>${fp.length}</b> final model(s). See the <b>Results</b> tab.`);
@@ -1415,7 +1527,7 @@ function renderOverview(status) {
   const stagePendingPostFiltering = status.stage === "finished"
     && status.post_filtering_scoring && status.post_filtering_scoring.pending;
   const currentStageLabel = stagePendingPostFiltering
-    ? "Post-filtering scoring"
+    ? "Post-filtering scoring" + pfsCountLabel(status.post_filtering_scoring)
     : (STAGE_LABEL[status.stage] || status.stage);
 
   card.innerHTML = `
@@ -1689,6 +1801,98 @@ async function loadOutputLog() {
 }
 
 // ---------------------------------------------------------------------
+// Post-filtering scoring log tabs (scoring_logs/)
+// ---------------------------------------------------------------------
+
+// Shared loader for both scoring tabs, which differ only in endpoint and target
+// element. `follow` keeps the tab tailing new output.
+async function loadScoringLogPane(opts) {
+  const requestedJobDir = state.jobDir;
+  const el = qs(opts.elementId);
+  const task = activeTaskView(state.lastStatus);
+  if (!task) { el.innerHTML = `<p class="muted">Load a job first.</p>`; return; }
+  const pfs = task.post_filtering_scoring;
+  if (!pfs || !pfs.configured) {
+    el.innerHTML = `<p class="muted">This run has no <code>post_filtering_scoring_script</code> configured.</p>`;
+    return;
+  }
+  const prevPre = qs("pre", el);
+  const wasAtBottom = !prevPre || (prevPre.scrollTop + prevPre.clientHeight >= prevPre.scrollHeight - 20);
+  const prevScrollTop = prevPre ? prevPre.scrollTop : 0;
+  try {
+    const data = await apiGet(opts.endpoint, { task: task.task_num });
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    if (data.error) throw new Error(data.error);
+    if (!(data.log_found || data.err_exists)) {
+      el.innerHTML = `<p class="muted">No scoring ${opts.kind} file yet${data.log_path || data.err_path ? ` (looked in <code>${escapeHtml(dirnameOf(data.log_path || data.err_path))}</code>)` : ""}. The scoring job starts once this task's main job has finished.</p>`;
+      return;
+    }
+    const path = data.log_path || data.err_path;
+    const trunc = data.truncated
+      ? `<p class="muted">(truncated — showing the first ${data.content.length.toLocaleString()} of ${data.size.toLocaleString()} bytes)</p>`
+      : "";
+    el.innerHTML = `
+      ${opts.banner ? opts.banner(pfs) : ""}
+      <p class="muted">Contents of <code>${escapeHtml(path)}</code>:</p>
+      ${trunc}
+      <pre class="log-pre">${escapeHtml(data.content)}</pre>
+    `;
+    const pre = qs("pre", el);
+    if (opts.follow && pre) pre.scrollTop = wasAtBottom ? pre.scrollHeight : prevScrollTop;
+  } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+// Directory part of a path, for "looked in ..." messages.
+function dirnameOf(p) {
+  return (p || "").replace(/[\\/][^\\/]*$/, "");
+}
+
+function scoringProgressBanner(pfs) {
+  const p = (pfs && pfs.progress) || {};
+  if (p.total == null) return "";
+  const done = p.done || pfs.state === "finished";
+  const extra = !done && p.eta_seconds != null ? ` — about ${fmtSeconds(p.eta_seconds)} left` : "";
+  return `<div class="info-banner"><span class="banner-icon">${done ? "✅" : `<span class="spinner"></span>`}</span><span>${pfsScoredPhrase(pfs)}${extra}.</span></div>`;
+}
+
+function loadScoringLogTab() {
+  return loadScoringLogPane({
+    elementId: "#scoringLogContent",
+    endpoint: "/api/scoring_log",
+    kind: "output log",
+    follow: true,
+    banner: scoringProgressBanner,
+  });
+}
+
+function loadScoringErrorTab() {
+  return loadScoringLogPane({
+    elementId: "#scoringErrorLogContent",
+    endpoint: "/api/scoring_error_log",
+    kind: "error log",
+    follow: false,
+  });
+}
+
+// Shows the two scoring log tabs only for runs that configure a
+// post_filtering_scoring_script.
+function renderScoringLogTabAvailability() {
+  const task = activeTaskView(state.lastStatus);
+  const pfs = task && task.post_filtering_scoring;
+  const configured = !!(pfs && pfs.configured);
+  qsa(".tab-btn.scoring-log-tab").forEach((btn) => btn.classList.toggle("visible", configured));
+  const errBtn = qs("#scoringErrorTabBtn");
+  if (errBtn) errBtn.classList.toggle("alert", configured && pfs.state === "crashed");
+  // Leave a tab that is no longer available.
+  if (!configured && (state.activeTab === "scoringlog" || state.activeTab === "scoringerror")) {
+    qs('.tab-btn[data-tab="overview"]').click();
+  }
+}
+
+// ---------------------------------------------------------------------
 // Backbones tab
 // ---------------------------------------------------------------------
 
@@ -1775,7 +1979,12 @@ function renderBackbonesList() {
 async function loadBackbones(showLoadingState) {
   const requestedJobDir = state.jobDir;
   const listEl = qs("#backbonesList");
-  if (showLoadingState) listEl.innerHTML = loadingPlaceholder("backbones");
+  // The placeholder wipes the list, so the fingerprint no longer describes
+  // what is on screen and must be cleared for the next render to rebuild it.
+  if (showLoadingState) {
+    listEl.innerHTML = loadingPlaceholder("backbones");
+    lastBackbonesListFingerprint = null;
+  }
   try {
     const data = await apiGet("/api/backbones");
     if (jobSwitchedAwayFrom(requestedJobDir)) return;
@@ -2723,18 +2932,111 @@ function renderSeqGroup(title, backbones) {
   return html;
 }
 
+// Narrows a selector's option list as you type. The selected entry is always
+// kept in the list even when it does not match, so filtering never changes what
+// is loaded; only an actual pick does.
+function filterSelectorEntries(entries, query, labelOf, selectedKey, keyOf) {
+  const q = (query || "").trim().toLowerCase();
+  if (!q) return entries;
+  return entries.filter(
+    (e) => labelOf(e).toLowerCase().includes(q) || keyOf(e) === selectedKey
+  );
+}
+
+function seqEntryKey(group, entry) {
+  return `${group}:${entry.task_num}:${entry.backbone}`;
+}
+
+function renderSequenceSelector() {
+  const sel = qs("#sequenceBackboneSelect");
+  if (!sel) return;
+  const index = state.sequencesIndex;
+  const groups = [
+    ["backbones", "Designed sequences"],
+    ["monomers", "Monomer sequences"],
+  ];
+  const multiTask = new Set(
+    ["backbones", "monomers"].flatMap((g) => ((index && index[g]) || []).map((e) => e.task_num))
+  ).size > 1;
+
+  let html = "";
+  let firstKey = null;
+  let selectionStillThere = false;
+  const query = (qs("#sequenceBackboneFilter") || {}).value || "";
+  for (const [g, label] of groups) {
+    const all = (index && index[g]) || [];
+    const entries = filterSelectorEntries(
+      all,
+      query,
+      (e) => `T${e.task_num} ${e.backbone}`,
+      state.sequencesSelection,
+      (e) => seqEntryKey(g, e)
+    );
+    if (!entries.length) continue;
+    const shown = entries.length === all.length ? `${all.length}` : `${entries.length} of ${all.length}`;
+    html += `<optgroup label="${escapeHtml(label)} (${shown})">`;
+    for (const e of entries) {
+      const key = seqEntryKey(g, e);
+      if (firstKey === null) firstKey = key;
+      if (key === state.sequencesSelection) selectionStillThere = true;
+      const taskLabel = multiTask ? `T${e.task_num} ` : "";
+      const n = e.num_samples;
+      html += `<option value="${escapeHtml(key)}">${escapeHtml(taskLabel + e.backbone)} (${n} sequence${n === 1 ? "" : "s"})</option>`;
+    }
+    html += `</optgroup>`;
+  }
+  sel.innerHTML = html;
+  if (!selectionStillThere) state.sequencesSelection = firstKey;
+  if (state.sequencesSelection) sel.value = state.sequencesSelection;
+}
+
 function renderSequencesContent() {
   const el = qs("#sequencesContent");
-  const data = state.sequencesCache;
-  if (!data) {
+  const index = state.sequencesIndex;
+  if (!index) {
     el.innerHTML = `<p class="muted">Load a job first.</p>`;
     return;
   }
-  if (!data.backbones.length && !data.monomers.length) {
+  if (!index.backbones.length && !index.monomers.length) {
     el.innerHTML = `<p class="muted">No sequences generated yet.</p>`;
     return;
   }
-  el.innerHTML = renderSeqGroup("Designed sequences", data.backbones) + renderSeqGroup("Monomer sequences", data.monomers);
+  const data = state.sequencesCache;
+  if (!data) {
+    el.innerHTML = `<p class="muted">Select a backbone to see its sequences.</p>`;
+    return;
+  }
+  el.innerHTML = renderSeqGroup("Designed sequences", data.backbones)
+    + renderSeqGroup("Monomer sequences", data.monomers);
+}
+
+// Fetches just the selected backbone's sequences.
+async function loadSelectedSequence() {
+  const requestedJobDir = state.jobDir;
+  const el = qs("#sequencesContent");
+  const key = state.sequencesSelection;
+  if (!key) {
+    state.sequencesCache = null;
+    renderSequencesContent();
+    return;
+  }
+  const [group, taskNum, ...rest] = key.split(":");
+  const backbone = rest.join(":");   // a backbone name could contain ":"
+  el.innerHTML = loadingPlaceholder("sequences");
+  try {
+    const data = await apiGet("/api/sequences", { task: taskNum, backbone });
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    // Only the group the selection came from, so a backbone and its monomer
+    // counterpart (same name) do not both appear.
+    state.sequencesCache = {
+      backbones: group === "backbones" ? data.backbones : [],
+      monomers: group === "monomers" ? data.monomers : [],
+    };
+    renderSequencesContent();
+  } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
 }
 
 async function loadSequences(showLoadingState) {
@@ -2742,10 +3044,18 @@ async function loadSequences(showLoadingState) {
   const el = qs("#sequencesContent");
   if (showLoadingState) el.innerHTML = loadingPlaceholder("sequences");
   try {
-    const data = await apiGet("/api/sequences");
+    // Index only - names and counts, no sequence data.
+    const index = await apiGet("/api/sequences", { index: 1 });
     if (jobSwitchedAwayFrom(requestedJobDir)) return;
-    state.sequencesCache = data;
-    renderSequencesContent();
+    state.sequencesIndex = index;
+    const previous = state.sequencesSelection;
+    renderSequenceSelector();
+    // Refetch only when the selection changed, or nothing is loaded yet.
+    if (!state.sequencesCache || previous !== state.sequencesSelection) {
+      await loadSelectedSequence();
+    } else {
+      renderSequencesContent();
+    }
   } catch (err) {
     if (jobSwitchedAwayFrom(requestedJobDir)) return;
     el.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
@@ -2836,15 +3146,87 @@ function renderModelsList() {
   if (current) selectModel(current.m);
   else if (visible.length) selectModel(visible[0].m);
 }
-async function loadModels(showLoadingState) {
+// One backbone's models at a time, as the Sequences tab does. The selector's
+// own list costs one readdir per task (list_model_dirs in parser.py), so
+// opening the tab triggers no scan.
+function modelEntryKey(entry) {
+  return `${entry.task_num}:${entry.model}`;
+}
+
+function renderModelBackboneSelector() {
+  const sel = qs("#modelBackboneSelect");
+  if (!sel) return;
+  const all = state.modelsIndex || [];
+  const multiTask = new Set(all.map((e) => e.task_num)).size > 1;
+  const index = filterSelectorEntries(
+    all,
+    (qs("#modelBackboneFilter") || {}).value,
+    (e) => `T${e.task_num} ${e.model}`,
+    state.modelsSelection,
+    modelEntryKey
+  );
+  let firstKey = null;
+  let selectionStillThere = false;
+  let html = "";
+  for (const entry of index) {
+    const key = modelEntryKey(entry);
+    if (firstKey === null) firstKey = key;
+    if (key === state.modelsSelection) selectionStillThere = true;
+    const label = (multiTask ? `T${entry.task_num} ` : "") + entry.model;
+    html += `<option value="${escapeHtml(key)}">${escapeHtml(label)}</option>`;
+  }
+  sel.innerHTML = html;
+  if (!selectionStillThere) state.modelsSelection = firstKey;
+  if (state.modelsSelection) sel.value = state.modelsSelection;
+}
+
+async function loadSelectedModels() {
   const requestedJobDir = state.jobDir;
   const listEl = qs("#modelsList");
-  if (showLoadingState) listEl.innerHTML = loadingPlaceholder("models");
+  const key = state.modelsSelection;
+  if (!key) {
+    state.modelsCache = [];
+    lastModelsListFingerprint = null;
+    renderModelsList();
+    return;
+  }
+  const [taskNum, ...rest] = key.split(":");
+  const model = rest.join(":");
+  listEl.innerHTML = loadingPlaceholder("models");
+  lastModelsListFingerprint = null;
   try {
-    const data = await apiGet("/api/models");
+    const data = await apiGet("/api/models", { task: taskNum, model });
     if (jobSwitchedAwayFrom(requestedJobDir)) return;
     state.modelsCache = data;
     renderModelsList();
+  } catch (err) {
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function loadModels(showLoadingState) {
+  const requestedJobDir = state.jobDir;
+  const listEl = qs("#modelsList");
+  // The placeholder wipes the list, so the fingerprint no longer describes
+  // what is on screen and must be cleared for the next render to rebuild it.
+  if (showLoadingState) {
+    listEl.innerHTML = loadingPlaceholder("models");
+    lastModelsListFingerprint = null;
+  }
+  try {
+    // Index only - the model_N list per task, no scan.
+    const index = await apiGet("/api/models", { index: 1 });
+    if (jobSwitchedAwayFrom(requestedJobDir)) return;
+    state.modelsIndex = index;
+    const previous = state.modelsSelection;
+    renderModelBackboneSelector();
+    // Refetch only when the selection changed, or nothing is loaded yet.
+    if (!state.modelsCache || !state.modelsCache.length || previous !== state.modelsSelection) {
+      await loadSelectedModels();
+    } else {
+      renderModelsList();
+    }
   } catch (err) {
     if (jobSwitchedAwayFrom(requestedJobDir)) return;
     listEl.innerHTML = `<p class="muted">${escapeHtml(err.message)}</p>`;
@@ -3072,9 +3454,7 @@ function setupSequencePanelInteraction(container, selector) {
 // at once (as this used to do) freezes the tab for minutes. Bounding how
 // many rows are actually in the DOM at a time keeps each render fast
 // regardless of how big the underlying job is.
-const RESULTS_PAGE_SIZE = 200;
-// Per sequence-length group in the alignment view - see renderAlignment().
-const ALIGN_GROUP_ROW_CAP = 100;
+const RESULTS_PAGE_SIZE = 50;
 
 // Same idea, same RESULTS_PAGE_SIZE cap, as the results list/table above
 // (see that comment) - applied to the Backbones and Models lists too.
@@ -3131,7 +3511,7 @@ function createResultsView(cfg) {
   let loadedPdbKey = null;
   // Set to a fingerprint of the last data load() actually processed - see
   // load()'s own comment. Guards the *whole* ingest+render pipeline
-  // (ingestCsv + renderList/renderAlignment/renderCsvTableFn), not just
+  // (ingestCsv + renderList/renderCsvTableFn), not just
   // one of the three - pagination bounds each of them to a fixed number
   // of rows already, but "fixed and fairly large" (RESULTS_PAGE_SIZE
   // rows x every column, or one <span> per residue in the alignment view)
@@ -3140,8 +3520,6 @@ function createResultsView(cfg) {
   let lastDataFingerprint = null;
   let colorMode = "chain"; // "chain" | "provenance"
   // Per sequence-length group in the alignment view (keyed by the group's
-  // length) - which ALIGN_GROUP_ROW_CAP-sized page is currently shown.
-  let expandedAlignGroups = new Map();
 
   function ingestCsv(csv) {
     const { columns, rows, rowMeta } = csv;
@@ -3175,7 +3553,6 @@ function createResultsView(cfg) {
       // whatever page the user was on no longer means anything reliable.
       listPage: 0, tablePage: 0,
     };
-    expandedAlignGroups = new Map();
     // drop filters/colorField/sortField that no longer refer to a real column
     Object.keys(results.filters).forEach((c) => { if (!numericColumns.includes(c)) delete results.filters[c]; });
     if (results.colorField && !numericColumns.includes(results.colorField)) results.colorField = "";
@@ -3297,7 +3674,6 @@ function createResultsView(cfg) {
             listEl.appendChild(div);
           });
         }
-        qs(cfg.ids.alignContent).innerHTML = `<p class="muted">Not available yet.</p>`;
         qs(cfg.ids.csvWrap).innerHTML = `<p class="muted">${cfg.emptyCsvMessage}</p>`;
         qs(cfg.ids.count).textContent = "";
         populateColorBySelect();
@@ -3322,7 +3698,6 @@ function createResultsView(cfg) {
     const shown = getFilteredRows().length;
     qs(cfg.ids.count).textContent = total ? `Showing ${shown} / ${total} model${total === 1 ? "" : "s"}` : "";
     renderList();
-    renderAlignment();
     renderCsvTableFn();
   }
 
@@ -3464,66 +3839,6 @@ function createResultsView(cfg) {
     qsa("tbody tr", wrap).forEach((tr) => {
       const rid = parseInt(tr.dataset.rowId, 10);
       tr.classList.toggle("selected", rid === results.selectedRowId);
-    });
-  }
-
-  function renderAlignment() {
-    const el = qs(cfg.ids.alignContent);
-    if (!results.rows.length) {
-      el.innerHTML = `<p class="muted">Not available yet.</p>`;
-      return;
-    }
-    const rows = getFilteredRows();
-    if (!rows.length) {
-      el.innerHTML = `<p class="muted">No models match the current filters.</p>`;
-      return;
-    }
-    if (!results.columns.includes("sequence")) {
-      el.innerHTML = `<p class="muted">This results table has no "sequence" column.</p>`;
-      return;
-    }
-    const scale = computeColorScale(rows);
-
-    // Group by sequence length: unrelated designs won't be the same length,
-    // but this keeps each group's residues lined up in one shared scrollbar.
-    const groups = new Map();
-    rows.forEach((row) => {
-      const seq = row.sequence || "";
-      const key = seq.length;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(row);
-    });
-
-    // Each group already only shows 5 rows at a time (CSS-scrolled), but
-    // that scroll cap alone doesn't stop the browser from having to build
-    // one <span> per residue for *every* row in an oversized group up
-    // front - a group with thousands of same-length designs was exactly
-    // what made this view freeze the tab. Each group gets its own pager
-    // (same ALIGN_GROUP_ROW_CAP-sized pages as the list/table use) rather
-    // than an unbounded "show everything" escape hatch - a "show all"
-    // button on a 15,000-row group would just recreate the same freeze
-    // for whoever clicked it.
-    const html = [...groups.keys()].sort((a, b) => b - a).map((len) => {
-      const groupRows = groups.get(len);
-      const groupPage = expandedAlignGroups.get(len) || 0;
-      const { pageRows: shown, clamped } = pageOf(groupRows, groupPage, ALIGN_GROUP_ROW_CAP);
-      expandedAlignGroups.set(len, clamped);
-      const alignRows = shown.map((row) => {
-        const color = colorForRow(row, scale);
-        let label = String(row[results.idCol] || basename(row.model_path) || `row ${row.__rowId}`);
-        if (cfg.isMulti && row.job) label = `${row.job} / ${label}`;
-        return { label, chains: String(row.sequence || "").split(":"), swatch: color ? color.accent : null };
-      });
-      return `<div class="backbone-block"><h4>${len} residues <span class="muted" style="font-size:12px;font-weight:400">(${groupRows.length} model${groupRows.length === 1 ? "" : "s"})</span></h4>${renderAlignmentBlock(alignRows)}<div class="pager-bar align-group-pager" data-len="${len}"></div></div>`;
-    }).join("");
-    el.innerHTML = html;
-    qsa(".align-group-pager", el).forEach((pagerEl) => {
-      const len = parseInt(pagerEl.dataset.len, 10);
-      const groupRows = groups.get(len);
-      renderPagerControls(pagerEl, expandedAlignGroups.get(len) || 0, ALIGN_GROUP_ROW_CAP, groupRows.length, (newPage) => {
-        expandedAlignGroups.set(len, newPage);
-        renderAlignment();
-      });
     });
   }
 
@@ -3834,7 +4149,6 @@ function createResultsView(cfg) {
       sortField: "", sortDir: 1,
       listPage: 0, tablePage: 0,
     };
-    expandedAlignGroups = new Map();
     loadedPdbKey = null;
     lastDataFingerprint = null;
     colorMode = "chain";
@@ -3918,7 +4232,7 @@ async function fetchAllJobsResults() {
 const allUnfilteredResultsView = createResultsView({
   ids: {
     list: "#allUnfilteredFinalPdbsList", viewer: "#allUnfilteredResultViewer", viewerLegend: "#allUnfilteredResultsColorLegend",
-    seqContent: "#allUnfilteredResultsSequenceContent", csvWrap: "#allUnfilteredCsvTableWrap", alignContent: "#allUnfilteredResultsAlignContent",
+    seqContent: "#allUnfilteredResultsSequenceContent", csvWrap: "#allUnfilteredCsvTableWrap",
     count: "#allUnfilteredResultsCount", colorByField: "#allUnfilteredColorByField", colorByDirection: "#allUnfilteredColorByDirection",
     sortByField: "#allUnfilteredSortByField", sortByDirection: "#allUnfilteredSortByDirection",
     filtersBtn: "#allUnfilteredFiltersBtn", filtersPanel: "#allUnfilteredFiltersPanel", filtersList: "#allUnfilteredFiltersList",
@@ -3939,7 +4253,7 @@ const allUnfilteredResultsView = createResultsView({
 const resultsView = createResultsView({
   ids: {
     list: "#finalPdbsList", viewer: "#resultViewer", viewerLegend: "#resultsColorLegend",
-    seqContent: "#resultsSequenceContent", csvWrap: "#csvTableWrap", alignContent: "#resultsAlignContent",
+    seqContent: "#resultsSequenceContent", csvWrap: "#csvTableWrap",
     count: "#resultsCount", colorByField: "#colorByField", colorByDirection: "#colorByDirection",
     sortByField: "#sortByField", sortByDirection: "#sortByDirection",
     filtersBtn: "#filtersBtn", filtersPanel: "#filtersPanel", filtersList: "#filtersList",
@@ -4011,7 +4325,7 @@ async function fetchAllJobsFilteredResults() {
 const filteredResultsView = createResultsView({
   ids: {
     list: "#filteredPdbsList", viewer: "#filteredResultViewer", viewerLegend: "#filteredResultsColorLegend",
-    seqContent: "#filteredResultsSequenceContent", csvWrap: "#filteredCsvTableWrap", alignContent: "#filteredResultsAlignContent",
+    seqContent: "#filteredResultsSequenceContent", csvWrap: "#filteredCsvTableWrap",
     count: "#filteredResultsCount", colorByField: "#filteredColorByField", colorByDirection: "#filteredColorByDirection",
     sortByField: "#filteredSortByField", sortByDirection: "#filteredSortByDirection",
     filtersBtn: "#filteredFiltersBtn", filtersPanel: "#filteredFiltersPanel", filtersList: "#filteredFiltersList",
@@ -4035,7 +4349,7 @@ const filteredResultsView = createResultsView({
 const allResultsView = createResultsView({
   ids: {
     list: "#allFinalPdbsList", viewer: "#allResultViewer", viewerLegend: "#allResultsColorLegend",
-    seqContent: "#allResultsSequenceContent", csvWrap: "#allCsvTableWrap", alignContent: "#allResultsAlignContent",
+    seqContent: "#allResultsSequenceContent", csvWrap: "#allCsvTableWrap",
     count: "#allResultsCount", colorByField: "#allColorByField", colorByDirection: "#allColorByDirection",
     sortByField: "#allSortByField", sortByDirection: "#allSortByDirection",
     filtersBtn: "#allFiltersBtn", filtersPanel: "#allFiltersPanel", filtersList: "#allFiltersList",
@@ -4111,6 +4425,17 @@ document.addEventListener("DOMContentLoaded", () => {
       if (entry) { entry.colorMode = "chain"; entry.provenanceSchemeId = null; }
       refreshChainLegendFor("#modelViewer");
     }
+  });
+  qs("#sequenceBackboneFilter").addEventListener("input", renderSequenceSelector);
+  qs("#modelBackboneFilter").addEventListener("input", renderModelBackboneSelector);
+  qs("#modelBackboneSelect").addEventListener("change", (e) => {
+    state.modelsSelection = e.target.value;
+    modelsListPage = 0; // a different backbone means "page 3" means something else
+    loadSelectedModels();
+  });
+  qs("#sequenceBackboneSelect").addEventListener("change", (e) => {
+    state.sequencesSelection = e.target.value;
+    loadSelectedSequence();
   });
   qs("#conservationToggle").addEventListener("change", renderSequencesContent);
   qs("#conservationThreshold").addEventListener("input", () => {

@@ -25,17 +25,28 @@ let runJob = {
   existingConfig: { dir: "", filename: "", loaded: null },
 };
 
+// A select with no explicit default still renders its first option as
+// selected, so that option has to be seeded as the value too - otherwise an
+// untouched dropdown reads as empty and is left out of the config entirely.
+function defaultFieldValue(field) {
+  if (field.default !== undefined) return field.default;
+  if (field.type === "select" && (field.options || []).length) return field.options[0];
+  return undefined;
+}
+
 function initRunJobDefaults() {
   runJob.core = {};
   CORE_FIELDS.forEach((f) => {
-    if (f.default !== undefined) runJob.core[f.key] = f.default;
+    const v = defaultFieldValue(f);
+    if (v !== undefined) runJob.core[f.key] = v;
   });
   runJob.modules = {};
   Object.keys(MODULES).forEach((key) => {
     const spec = MODULES[key];
     runJob.modules[key] = { enabled: false, values: {}, items: [] };
     (spec.fields || []).forEach((f) => {
-      if (f.default !== undefined) runJob.modules[key].values[f.key] = f.default;
+      const v = defaultFieldValue(f);
+      if (v !== undefined) runJob.modules[key].values[f.key] = v;
     });
   });
   // Extra state for the "filtering" module's bespoke body (see
@@ -719,6 +730,45 @@ function normalizeContig(value) {
   return `[${trimmed}]`;
 }
 
+// Parses the designable residues field into the YAML *list* prosculpt
+// requires (a string there is read character by character as chain names -
+// hence NOT normalizeContig() like the contig-shaped fields above).
+// Accepts residues (A49), ranges (A49-57, A49-A57) and bare chain letters
+// (B: kept in the model, never redesigned), comma- and/or whitespace-
+// separated, brackets optional. Ranges are expanded because prosculpt
+// matches residues one by one.
+function parseDesignableResidues(value) {
+  const body = (value || "").trim().replace(/^\[/, "").replace(/\]$/, "");
+  const residues = [];
+  const invalid = [];
+  const seen = new Set();
+  const push = (token) => {
+    if (seen.has(token)) return;
+    seen.add(token);
+    residues.push(token);
+  };
+  body.split(/[,\s]+/).filter(Boolean).forEach((token) => {
+    const range = token.match(/^([A-Za-z])(\d+)-([A-Za-z]?)(\d+)$/);
+    if (range) {
+      const [, chain, startStr, endChain, endStr] = range;
+      const start = parseInt(startStr, 10);
+      const end = parseInt(endStr, 10);
+      if ((endChain && endChain !== chain) || end < start) {
+        invalid.push(token);
+        return;
+      }
+      for (let i = start; i <= end; i += 1) push(`${chain}${i}`);
+      return;
+    }
+    if (/^[A-Za-z](-?\d+)?$/.test(token)) {
+      push(token);
+      return;
+    }
+    invalid.push(token);
+  });
+  return { residues, invalid };
+}
+
 // Used as a path segment (currently just output_dir's default) - this ends
 // up unquoted in a shell command line slurm_runner.py/the wrapper script
 // build (see wrapper_slurm_array_job_group.sh's `echo "$CMD" | bash`), so a
@@ -943,7 +993,10 @@ function buildConfigObject() {
   if (mods.redesign && mods.redesign.enabled) {
     cfg.skipRfDiff = true;
     needsDenoiser = true;
-    if (mods.redesign.values.designable_residues) cfg.designable_residues = normalizeContig(mods.redesign.values.designable_residues);
+    if (mods.redesign.values.designable_residues) {
+      const designable = parseDesignableResidues(mods.redesign.values.designable_residues).residues;
+      if (designable.length) cfg.designable_residues = designable;
+    }
   }
 
   if (mods.partial_diffusion && mods.partial_diffusion.enabled) {
@@ -1238,6 +1291,15 @@ function validateBeforeSubmit() {
       const state = runJob.modules[key];
       if (spec.requiresPdb && state.enabled && !runJob.pdbUpload) {
         return `The "${spec.label}" module requires an input PDB - upload one above.`;
+      }
+    }
+    const redesignMod = runJob.modules.redesign;
+    if (redesignMod && redesignMod.enabled) {
+      const rawResidues = (redesignMod.values.designable_residues || "").trim();
+      if (!rawResidues) return "Designable residues is required when the \"Redesign only\" module is enabled.";
+      const parsedResidues = parseDesignableResidues(rawResidues);
+      if (parsedResidues.invalid.length) {
+        return `Designable residues: could not read ${parsedResidues.invalid.join(", ")} - use a residue (A49), a range (A49-57), or a bare chain letter (B).`;
       }
     }
     const filteringMod = runJob.modules.filtering;

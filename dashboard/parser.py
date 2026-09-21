@@ -33,6 +33,7 @@ import json
 import os
 import pickle
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Optional
 
@@ -43,6 +44,7 @@ from typing import Any, Optional
 # configured. Degrades to a no-op with no config file at all, so this
 # module's "test/reuse standalone" promise still holds.
 import run_targets as RT
+import cache as C
 
 try:
     import yaml
@@ -101,6 +103,35 @@ def discover_tasks(job_dir: str) -> list[tuple[int, str]]:
 _TASK_LOG_RE = re.compile(r"^slurm-(\d+)_(\d+)_")
 
 
+def _pick_task_log(logs_dir: str, task_num: int) -> dict:
+    """This task's .out/.err, taken from the most recent submission.
+
+    One logs/ directory can hold several submissions of the same job. Files
+    are grouped by SLURM array job id and the newest group wins, by mtime with
+    the job id as tie-break. Both returned paths come from that one submission.
+    """
+    groups = {}
+    if os.path.isdir(logs_dir):
+        for name in os.listdir(logs_dir):
+            m = _TASK_LOG_RE.match(name)
+            if not m or int(m.group(2)) != task_num:
+                continue
+            if not name.endswith(".out") and not name.endswith(".err"):
+                continue
+            full = os.path.join(logs_dir, name)
+            try:
+                mtime = os.path.getmtime(full)
+            except OSError:
+                mtime = 0.0
+            group = groups.setdefault(m.group(1), {"out_path": None, "err_path": None, "mtime": 0.0})
+            group["out_path" if name.endswith(".out") else "err_path"] = full
+            group["mtime"] = max(group["mtime"], mtime)
+    if not groups:
+        return {"out_path": None, "err_path": None}
+    best = max(groups.items(), key=lambda kv: (kv[1]["mtime"], int(kv[0])))[1]
+    return {"out_path": best["out_path"], "err_path": best["err_path"]}
+
+
 def find_task_log(job_dir: str, task_num: int) -> dict:
     """Looks for this task's own .out/.err under job_dir/logs/ (where
     slurm_runner.py now puts them by default - see its own comments).
@@ -109,42 +140,90 @@ def find_task_log(job_dir: str, task_num: int) -> dict:
     1's folder is "01", but its log is named "..._1_...", not "..._01_...")
     - matched here by parsing the integer task id out of the filename and
     comparing as int, never by string equality against the folder name."""
-    logs_dir = os.path.join(job_dir, "logs")
-    out_path = None
-    err_path = None
-    if os.path.isdir(logs_dir):
-        for name in os.listdir(logs_dir):
-            m = _TASK_LOG_RE.match(name)
-            if not m or int(m.group(2)) != task_num:
-                continue
-            full = os.path.join(logs_dir, name)
-            if name.endswith(".out"):
-                out_path = full
-            elif name.endswith(".err"):
-                err_path = full
-    return {"out_path": out_path, "err_path": err_path}
+    return _pick_task_log(os.path.join(job_dir, "logs"), task_num)
 
 
 def find_scoring_task_log(job_dir: str, task_num: int) -> dict:
     """Mirrors find_task_log(), but under job_dir/scoring_logs/ - the
     dependent post-filtering scoring job's own logs (see slurm_runner.py).
     It's a separate SLURM submission with its own job id, but the same
-    task-id-only matching applies (the job id in the filename is never
-    checked here either)."""
-    logs_dir = os.path.join(job_dir, "scoring_logs")
-    out_path = None
-    err_path = None
-    if os.path.isdir(logs_dir):
-        for name in os.listdir(logs_dir):
-            m = _TASK_LOG_RE.match(name)
-            if not m or int(m.group(2)) != task_num:
-                continue
-            full = os.path.join(logs_dir, name)
-            if name.endswith(".out"):
-                out_path = full
-            elif name.endswith(".err"):
-                err_path = full
-    return {"out_path": out_path, "err_path": err_path}
+    task-id matching (and same newest-submission-wins rule) applies."""
+    return _pick_task_log(os.path.join(job_dir, "scoring_logs"), task_num)
+
+
+# ---------------------------------------------------------------------------
+# Files prosculpt writes as it runs. Both are optional: when either is absent
+# the caller falls back to scanning the output tree.
+# ---------------------------------------------------------------------------
+PROGRESS_FILENAME = "progress.json"
+MODELS_MANIFEST_FILENAME = "models.jsonl"
+PROGRESS_SCHEMA = 1
+
+
+def read_progress(task_dir: str) -> Optional[dict]:
+    """This task's progress.json, or None.
+
+    None means the caller must fall back to scanning: the file is absent,
+    unreadable, half-written, or of an unknown schema.
+    """
+    path = os.path.join(task_dir, PROGRESS_FILENAME)
+    if not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", errors="replace") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("schema") != PROGRESS_SCHEMA:
+        return None
+    return data
+
+
+def progress_matches_log(progress: Optional[dict], job_info: Optional[dict]) -> bool:
+    """Whether a progress.json describes the same run as the log being read.
+
+    False when the two carry different job ids, in which case the caller must
+    ignore the file. True when either side has no job id.
+    """
+    theirs = str((progress or {}).get("job_id") or "")
+    ours = str((job_info or {}).get("job_id") or "")
+    if not theirs or not ours:
+        return True
+    return theirs == ours
+
+
+def read_models_manifest(task_dir: str) -> Optional[list[dict]]:
+    """models.jsonl as list_models()-shaped rows, or None to fall back.
+
+    Covers every backbone predicted so far. A truncated final line is dropped
+    rather than failing the whole read.
+    """
+    path = os.path.join(task_dir, MODELS_MANIFEST_FILENAME)
+    if not os.path.isfile(path):
+        return None
+    rows = []
+    try:
+        with open(path, "r", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue  # partial trailing line from an interrupted run
+                if isinstance(row, dict):
+                    row.pop("cycle", None)  # not part of the row shape the UI uses
+                    # Stored paths are relative to the task directory and are
+                    # re-anchored here. Absolute paths are left alone.
+                    for key in ("structure_path", "confidence_path", "trb_path"):
+                        value = row.get(key)
+                        if value and not os.path.isabs(value):
+                            row[key] = os.path.normpath(os.path.join(task_dir, value))
+                    rows.append(row)
+    except OSError:
+        return None
+    return rows
 
 
 # "final_pdbs"/"final_output.csv" were renamed to "output_pdbs"/"output.csv";
@@ -303,18 +382,25 @@ _DEFAULTS: dict[str, Any] = {
 }
 
 
-def extract_config(log_path: Optional[str], output_dir: Optional[str]) -> dict:
+def extract_config(
+    log_path: Optional[str], output_dir: Optional[str], lines: Optional[list[str]] = None
+) -> dict:
     """log_path is optional now (a task may have no discoverable log at
     all) - when present, its own config dump is tried first (a strict
     superset of the raw input, per the module docstring above); either
     way, input.yaml is read to fill in whatever the log didn't have -
-    becoming the *only* source, not just a fallback, when there's no log."""
+    becoming the *only* source, not just a fallback, when there's no log.
+
+    `lines` lets a caller that has already read the log (see
+    _get_task_status) hand them over rather than have the whole file read a
+    second time on every status poll."""
     cfg: dict[str, Any] = {}
 
-    if log_path and os.path.isfile(log_path):
+    if lines is None and log_path and os.path.isfile(log_path):
         with open(log_path, "r", errors="replace") as f:
             lines = f.readlines()
 
+    if lines:
         block = _extract_yaml_config_block(lines)
         if block and yaml is not None:
             try:
@@ -838,6 +924,26 @@ def _parse_fasta(path: str) -> list[dict]:
 
 
 def list_sequences(output_dir: str) -> dict:
+    """Cached wrapper around _list_sequences_uncached(). Copies each entry for
+    the same reason list_models() does - /api/sequences tags entries with
+    task_num in place."""
+    rows = C.get_or_compute("sequences", output_dir, lambda: _list_sequences_uncached(output_dir))
+    out = {}
+    for key in ("backbones", "monomers"):
+        copied = []
+        for entry in rows.get(key, []):
+            e = dict(entry)
+            if isinstance(e.get("samples"), list):
+                e["samples"] = [dict(x) if isinstance(x, dict) else x for x in e["samples"]]
+            copied.append(e)
+        out[key] = copied
+    for key, value in rows.items():
+        if key not in out:
+            out[key] = value
+    return out
+
+
+def _list_sequences_uncached(output_dir: str) -> dict:
     seqs_dir = os.path.join(output_dir, "2_mpnn", "seqs")
     backbones = []
     if os.path.isdir(seqs_dir):
@@ -938,7 +1044,9 @@ def _boltz_modeling_stats(lines: list[str]) -> dict:
     return {"completed": completed, "current_name": current_name, "avg_seconds": avg, "unit": "backbone batch"}
 
 
-def modeling_progress(lines: list[str], output_dir: str, cfg: dict, mp: dict) -> dict:
+def modeling_progress(
+    lines: list[str], output_dir: str, cfg: dict, mp: Optional[dict], total_designed: Optional[int] = None
+) -> dict:
     """`mp` is the already-computed list_sequences(output_dir) result (the
     caller has it anyway for the mpnn summary), reused here instead of
     re-scanning the same directory.
@@ -964,7 +1072,9 @@ def modeling_progress(lines: list[str], output_dir: str, cfg: dict, mp: dict) ->
     # cycle 1 onwards MPNN is forced to design exactly one sequence per
     # input regardless of it (see list_sequences()'s note on cycle > 0
     # filenames), so counting actual fasta records sidesteps that entirely.
-    total_designed = sum(len(bb["samples"]) for bb in mp["backbones"])
+    # Recorded by prosculpt at the start of the prediction round.
+    if total_designed is None:
+        total_designed = sum(len(bb["samples"]) for bb in mp["backbones"])
 
     monomer_multiplier = 2 if model_monomer else 1
     # Boltz produces num_models structures per sequence within a single
@@ -972,7 +1082,10 @@ def modeling_progress(lines: list[str], output_dir: str, cfg: dict, mp: dict) ->
     # AF3 produces exactly one structure per sequence, so it has no such
     # multiplier - confirmed against real output directories for both.
     num_models = cfg.get("num_models") or 1
-    per_sequence_multiplier = num_models if is_boltz else 1
+    # AF3 writes one structure per sequence; Boltz (--diffusion_samples) and
+    # Colabfold (ranks 1..num_models) write num_models of them. prediction_model
+    # is unset for Colabfold runs, so AF3 is the case tested for.
+    per_sequence_multiplier = 1 if prediction_model.startswith("AF3") else num_models
 
     expected_total = (
         total_designed * per_sequence_multiplier * monomer_multiplier if total_designed else None
@@ -1002,6 +1115,12 @@ def modeling_progress(lines: list[str], output_dir: str, cfg: dict, mp: dict) ->
     }
 
 
+# Colabfold names every prediction <seq>_scores_rank_<NNN>_<tag>.json, with the
+# structure alongside as <seq>_(un)relaxed_rank_<NNN>_<tag>.pdb, written flat in
+# model_N/ rather than one directory per sequence as AF3 and Boltz do.
+_COLABFOLD_SCORES_RE = re.compile(r"_scores_rank_\d+")
+
+
 def _pick_matching_file(candidates: list[str], conf_filename: str) -> Optional[str]:
     """Given a list of same-extension candidate filenames in a results
     folder, pick the one that actually matches this confidence file (a
@@ -1025,6 +1144,18 @@ def _pick_matching_file(candidates: list[str], conf_filename: str) -> Optional[s
         for p in candidates:
             if p.startswith(prefix):
                 return p
+
+    # Colabfold: <name>_scores_rank_<NNN>_<tag>.json <-> <name>_(un)relaxed_rank_<NNN>_<tag>.<ext>,
+    # matched on exact stem equality. The amber-relaxed file is preferred when
+    # the run produced one.
+    if _COLABFOLD_SCORES_RE.search(conf_filename):
+        stem = os.path.splitext(conf_filename)[0]
+        for replacement in ("_relaxed_rank_", "_unrelaxed_rank_"):
+            expected = stem.replace("_scores_rank_", replacement, 1)
+            for p in candidates:
+                if os.path.splitext(p)[0] == expected:
+                    return p
+        return None  # a rank whose structure isn't written yet - no guessing
 
     return candidates[0]  # fallback: best effort
 
@@ -1063,7 +1194,68 @@ _SEED_SAMPLE_DIR_RE = re.compile(r"^seed-\d+_sample-\d+$")
 _SKIP_DIR_NAMES = {"json_inputs", "yaml_inputs", "alignment_inputs"}
 
 
-def list_models(output_dir: str, model_monomer: bool = False) -> list[dict]:
+# Bounded pool for the per-model_N subtree scans below. Keep it bounded.
+_MODEL_SCAN_WORKERS = 8
+
+# Concurrency for whole tasks (see get_job_status). In-flight filesystem
+# operations total roughly _TASK_SCAN_WORKERS * _MODEL_SCAN_WORKERS; change the
+# two together.
+_TASK_SCAN_WORKERS = 4
+
+
+def list_model_dirs(output_dir: str) -> list[str]:
+    """The model_N directories under 3_models/, in natural order.
+
+    One readdir per task and no walk at all - this is what the Models tab's
+    backbone selector is built from, so opening that tab never costs a scan of
+    the whole tree (which on a real job is ~36,000 directories).
+    """
+    models_dir = os.path.join(output_dir, "3_models")
+    names = []
+    try:
+        with os.scandir(models_dir) as entries:
+            for entry in entries:
+                # One syscall per entry where the filesystem reports the type.
+                if entry.is_dir():
+                    names.append(entry.name)
+    except OSError:
+        return []
+    return sorted(names, key=_natural_key)
+
+
+def list_models(
+    output_dir: str, model_monomer: bool = False, model_name: Optional[str] = None
+) -> list[dict]:
+    """Cached wrapper around _list_models_uncached().
+
+    `model_name` scopes the result to one model_N directory. That is what the
+    Models tab asks for: a job can hold ~14,000 models (an 11.8 MB response,
+    83 s to scan), and showing one backbone's at a time keeps both bounded
+    regardless of job size.
+
+    Returns fresh copies of the rows every call: /api/models tags each row
+    with its own task_num (app.py), and handing out the cached objects
+    themselves would let that mutation leak back into the cache and across
+    tasks.
+    """
+    def compute():
+        # When the manifest is present it replaces the walk entirely. An empty
+        # manifest is a real answer, not a missing one. A job killed mid-round
+        # leaves it short by at most the batch that was in flight.
+        rows = read_models_manifest(output_dir)
+        if rows is not None:
+            return [r for r in rows if model_name is None or r.get("model") == model_name]
+        return _list_models_uncached(
+            output_dir, model_monomer=model_monomer, only_model=model_name
+        )
+
+    rows = C.get_or_compute(f"models:{model_monomer}:{model_name or ''}", output_dir, compute)
+    return [dict(r) for r in rows]
+
+
+def _list_models_uncached(
+    output_dir: str, model_monomer: bool = False, only_model: Optional[str] = None
+) -> list[dict]:
     """Ground-truth scan of 3_models/ on disk. Rather than assuming a
     fixed directory depth (which differs between AF3 and Boltz, and again
     between the multimer and monomers/ variants), this walks the whole
@@ -1097,10 +1289,16 @@ def list_models(output_dir: str, model_monomer: bool = False) -> list[dict]:
             return None
         return os.path.join(output_dir, "1_rfdiff", f"_{m.group(1)}.trb")
 
-    for model_x in sorted(os.listdir(models_dir), key=_natural_key):
+    def _scan_one_model(model_x: str) -> list[dict]:
+        """Every row under one model_N directory. Split out so the subtrees
+        can be walked concurrently - see _MODEL_SCAN_WORKERS. Returns its own
+        list rather than appending to a shared one, so there is no shared
+        mutable state between workers; ordering is restored by the sort below.
+        """
+        rows: list[dict] = []
         model_x_path = os.path.join(models_dir, model_x)
         if not os.path.isdir(model_x_path):
-            continue
+            return rows
         trb_path = _trb_path_for_model(model_x)
 
         for root, dirs, files in os.walk(model_x_path):
@@ -1108,21 +1306,29 @@ def list_models(output_dir: str, model_monomer: bool = False) -> list[dict]:
             conf_files = [
                 f
                 for f in files
-                if f.endswith("summary_confidences.json") or (f.startswith("confidence_") and f.endswith(".json"))
+                if f.endswith("summary_confidences.json")
+                or (f.startswith("confidence_") and f.endswith(".json"))
+                or (f.endswith(".json") and _COLABFOLD_SCORES_RE.search(f))
             ]
             for cf in sorted(conf_files):
                 conf_path = os.path.join(root, cf)
                 structure_path, structure_format = _match_structure_for_confidence(root, cf)
-                seq_name = os.path.basename(root)
+                # Colabfold puts every sequence's files directly in model_N/;
+                # the sequence name comes from the filename prefix. AF3 and
+                # Boltz keep one directory per sequence.
+                cf_match = _COLABFOLD_SCORES_RE.search(cf)
+                seq_name = cf[: cf_match.start()] if cf_match else os.path.basename(root)
                 idx_m = _CONF_MODEL_IDX_RE.search(cf)
-                is_monomer = "monomer" in root.lower()
+                # Relative to model_x_path, so a job whose own output path
+                # contains "monomer" does not mark every model a monomer.
+                is_monomer = "monomer" in os.path.relpath(root, model_x_path).lower()
                 if is_monomer:
                     variant = "monomer"
                 elif model_monomer:
                     variant = "complex"
                 else:
                     variant = None
-                out.append(
+                rows.append(
                     {
                         "model": model_x,
                         "sequence_name": seq_name,
@@ -1134,6 +1340,19 @@ def list_models(output_dir: str, model_monomer: bool = False) -> list[dict]:
                         "trb_path": trb_path,
                     }
                 )
+        return rows
+
+    model_names = sorted(os.listdir(models_dir), key=_natural_key)
+    if only_model is not None:
+        # Scoped to one backbone: walk that subtree only.
+        model_names = [m for m in model_names if m == only_model]
+    if len(model_names) > 1:
+        with ThreadPoolExecutor(max_workers=_MODEL_SCAN_WORKERS) as pool:
+            for rows in pool.map(_scan_one_model, model_names):
+                out.extend(rows)
+    else:
+        for model_x in model_names:
+            out.extend(_scan_one_model(model_x))
 
     out.sort(key=lambda r: (_natural_key(r["model"]), _natural_key(r["sequence_name"]), r["model_index"] or ""))
     return out
@@ -1269,21 +1488,37 @@ def _read_csv_header(path: str) -> Optional[list[str]]:
             return []
 
 
-def scoring_job_crash_status(job_dir: str, task_num: int) -> dict:
+def _read_lines(path: Optional[str]) -> Optional[list[str]]:
+    """Whole-file read used by the scoring-log helpers. None means "no file
+    to read" (or unreadable), which callers treat as "nothing known yet"
+    rather than an error."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        with open(path, "r", errors="replace") as f:
+            return f.readlines()
+    except OSError:
+        return None
+
+
+def scoring_job_crash_status(
+    job_dir: str,
+    task_num: int,
+    log: Optional[dict] = None,
+    out_lines: Optional[list[str]] = None,
+) -> dict:
     """Crash/cancellation detection for the dependent post-filtering scoring
     job, mirroring detect_crash()/scan_err_file_for_cancellation() (used for
     the main job) but scoped to scoring_logs/ instead of logs/. No log found
     yet just means the scoring job hasn't started/produced output yet - not
     a crash."""
-    log = find_scoring_task_log(job_dir, task_num)
-    crashed = False
-    if log["out_path"]:
-        try:
-            with open(log["out_path"], "r", errors="replace") as f:
-                lines = f.readlines()
-            crashed = detect_crash(lines)["crashed"]
-        except OSError:
-            pass
+    # `log`/`out_lines` are supplied by post_filtering_scoring_status() when it
+    # has already read the file; omitted, they are located and read here.
+    if log is None:
+        log = find_scoring_task_log(job_dir, task_num)
+    if out_lines is None:
+        out_lines = _read_lines(log["out_path"])
+    crashed = detect_crash(out_lines)["crashed"] if out_lines else False
     cancel = scan_err_file_for_cancellation(log["err_path"]) if log["err_path"] else {
         "cancelled": False,
         "cancelled_line": None,
@@ -1294,6 +1529,94 @@ def scoring_job_crash_status(job_dir: str, task_num: int) -> dict:
         "cancelled_line": cancel["cancelled_line"],
         "err_path": log["err_path"],
         "err_exists": bool(log["err_path"]),
+    }
+
+
+# Progress lines in scoring_logs/*.out. The "running ... on N model(s)" line is
+# written by prosculpt_run.py and is timestamped; the per-model "Scored ..."
+# lines and the closing summary come from post_filtering_scoring_script.py and
+# are not.
+_PFS_TOTAL_RE = re.compile(r"Post-filtering scoring: running .* on (\d+) filtered model\(s\)\.")
+_PFS_SCORED_RE = re.compile(r"^Scored .+ in ([\d.]+)s \((\d+) interface\(s\)\)\.")
+_PFS_SUMMARY_RE = re.compile(
+    r"Post-filtering scoring: scored (\d+) model\(s\) using (\d+) worker\(s\) in ([\d.]+)s total"
+)
+_PFS_FINAL_RE = re.compile(r"Post-filtering scoring: (\d+) of (\d+) filtered model\(s\) were scored\.")
+
+
+def post_filtering_scoring_progress(
+    out_path: Optional[str], lines: Optional[list[str]] = None
+) -> dict:
+    """How far the dependent scoring job has got, read from its own .out.
+    `scored` counts the per-model lines the scoring script prints as each
+    model completes, so it advances while the job runs; `total` comes from
+    the line prosculpt_run.py logs before starting it. Either may be None
+    when the log doesn't exist or hasn't reached that point yet."""
+    empty = {
+        "total": None,
+        "scored": 0,
+        "workers": None,
+        "avg_seconds_per_model": None,
+        "elapsed_seconds": None,
+        "eta_seconds": None,
+        "done": False,
+    }
+    if lines is None:
+        lines = _read_lines(out_path)
+    if not lines:
+        return empty
+
+    total = None
+    scored = 0
+    workers = None
+    per_model_times: list[float] = []
+    elapsed = None
+    done = False
+    start_ts = None
+
+    for line in lines:
+        m = _PFS_TOTAL_RE.search(line)
+        if m:
+            total = int(m.group(1))
+            start_ts = _parse_ts(line) or start_ts
+            continue
+        m = _PFS_SCORED_RE.match(line)
+        if m:
+            scored += 1
+            per_model_times.append(float(m.group(1)))
+            continue
+        m = _PFS_SUMMARY_RE.search(line)
+        if m:
+            scored = max(scored, int(m.group(1)))
+            workers = int(m.group(2))
+            elapsed = float(m.group(3))
+            done = True
+            continue
+        m = _PFS_FINAL_RE.search(line)
+        if m:
+            total = int(m.group(2))
+            done = True
+
+    if total is not None:
+        scored = min(scored, total)
+
+    # Wall-clock rate, which already accounts for models scored in parallel.
+    eta = None
+    if not done and start_ts is not None:
+        wall_elapsed = (datetime.now() - start_ts).total_seconds()
+        if elapsed is None:
+            elapsed = wall_elapsed
+        if total is not None and scored > 0 and wall_elapsed > 0:
+            eta = (total - scored) * (wall_elapsed / scored)
+
+    return {
+        "total": total,
+        "scored": scored,
+        "workers": workers,
+        "avg_seconds_per_model": (sum(per_model_times) / len(per_model_times)) if per_model_times else None,
+        "elapsed_seconds": elapsed,
+        "eta_seconds": eta,
+        "done": done,
     }
 
 
@@ -1318,19 +1641,30 @@ def post_filtering_scoring_status(job_dir: str, task_num: int, task_dir: str, cf
     if not script:
         return {"configured": False, "state": "not_configured", "pending": False}
 
+    log = find_scoring_task_log(job_dir, task_num)
+    # One read of the scoring .out, shared with the crash detector below.
+    out_lines = _read_lines(log["out_path"])
+    common = {
+        "configured": True,
+        "script": script,
+        "log_path": log["out_path"],
+        "err_path": log["err_path"],
+        "progress": post_filtering_scoring_progress(log["out_path"], lines=out_lines),
+    }
+
     filtered_columns = _read_csv_header(os.path.join(task_dir, "filtered_output.csv"))
     if filtered_columns is None:
-        return {"configured": True, "state": "not_ready", "pending": True}
+        return {**common, "state": "not_ready", "pending": True}
 
     output_columns = _read_csv_header(resolve_final_csv_path(task_dir))
     if output_columns is not None and set(filtered_columns) - set(output_columns):
-        return {"configured": True, "state": "finished", "pending": False}
+        return {**common, "state": "finished", "pending": False}
 
-    crash = scoring_job_crash_status(job_dir, task_num)
+    crash = scoring_job_crash_status(job_dir, task_num, log=log, out_lines=out_lines)
     if crash["crashed"]:
-        return {"configured": True, "state": "crashed", "pending": False, "crash": crash}
+        return {**common, "state": "crashed", "pending": False, "crash": crash}
 
-    return {"configured": True, "state": "running", "pending": True, "crash": crash}
+    return {**common, "state": "running", "pending": True, "crash": crash}
 
 
 # ---------------------------------------------------------------------------
@@ -1360,12 +1694,27 @@ def _get_task_status(job_dir: str, task_num: int, task_dir: str) -> dict:
         with open(log_path, "r", errors="replace") as f:
             lines = f.readlines()
 
-    cfg = extract_config(log_path if log_found else None, task_dir)
+    cfg = extract_config(log_path if log_found else None, task_dir, lines=lines if log_found else None)
 
+    # Always run whenever there is a log: it is the only source of
+    # possible_errors, which progress.json does not carry.
     if log_found:
         stage_info = detect_stage(lines)
     else:
         stage_info = detect_stage_from_files(task_dir)
+
+    progress = read_progress(task_dir)
+    job_info = parse_job_info(lines)
+    if progress is not None and not progress_matches_log(progress, job_info):
+        # Belongs to a different run into this same directory.
+        progress = None
+    # The recorded stage is preferred over the log-derived one. It separates
+    # MPNN from modeling, which the log does not (both sit inside one
+    # "Running do_cycling" step), and reports modeling for Colabfold runs,
+    # which have no modeling trigger in _STAGE_TRIGGERS.
+    if progress and progress.get("stage") in STAGES:
+        stage_info = dict(stage_info)
+        stage_info["stage"] = progress["stage"]
     stage = stage_info["stage"]
 
     err_exists = bool(err_path and os.path.isfile(err_path))
@@ -1382,7 +1731,7 @@ def _get_task_status(job_dir: str, task_num: int, task_dir: str) -> dict:
         "config": cfg,
         "stage": stage,
         "possible_errors": stage_info["possible_errors"],
-        "job_info": parse_job_info(lines),
+        "job_info": job_info,
         "timing": parse_step_durations(lines),
         "cycle": current_cycle_info(lines, cfg),
         "crash": detect_crash(lines),
@@ -1400,13 +1749,31 @@ def _get_task_status(job_dir: str, task_num: int, task_dir: str) -> dict:
         "accepted": sum(1 for b in backbones if b["status"] == "passed") if filtering_done else None,
     }
 
-    mp = list_sequences(task_dir)
-    payload["mpnn"] = {
-        "num_backbones_with_sequences": len(mp["backbones"]),
-        "num_monomer_backbones": len(mp["monomers"]),
-    }
+    # Sequence counts come from progress.json when it has them and describes
+    # this run and this cycle; otherwise every .fa is parsed. 2_mpnn/ is wiped
+    # at each cycle boundary, so counts from an earlier cycle do not apply.
+    counts = (progress or {}).get("counts") or {}
+    recorded_cycle = ((progress or {}).get("cycle") or {}).get("current")
+    cycle_ok = recorded_cycle is None or recorded_cycle == payload["cycle"].get("current_cycle")
+    seq_keys = ("backbones_with_sequences", "monomer_backbones", "sequences_designed")
+    mp = None
+    total_designed = None
+    if cycle_ok and all(counts.get(k) is not None for k in seq_keys):
+        payload["mpnn"] = {
+            "num_backbones_with_sequences": counts["backbones_with_sequences"],
+            "num_monomer_backbones": counts["monomer_backbones"],
+        }
+        total_designed = counts["sequences_designed"]
+    else:
+        mp = list_sequences(task_dir)
+        payload["mpnn"] = {
+            "num_backbones_with_sequences": len(mp["backbones"]),
+            "num_monomer_backbones": len(mp["monomers"]),
+        }
 
-    payload["modeling"] = modeling_progress(lines, task_dir, cfg, mp)
+    payload["modeling"] = modeling_progress(
+        lines, task_dir, cfg, mp, total_designed=total_designed
+    )
     payload["scoring"] = results_summary(task_dir)
     payload["post_filtering_scoring"] = post_filtering_scoring_status(job_dir, task_num, task_dir, cfg)
 
@@ -1449,7 +1816,13 @@ def get_job_status(job_dir: str) -> dict:
             "looks_like_output_dir": os.path.isdir(os.path.join(job_dir, "logs")),
         }
 
-    tasks = [_get_task_status(job_dir, task_num, task_dir) for task_num, task_dir in task_dirs]
+    # Tasks are scanned concurrently and collected back in task order, so the
+    # payload matches the serial version.
+    if len(task_dirs) > 1:
+        with ThreadPoolExecutor(max_workers=min(_TASK_SCAN_WORKERS, len(task_dirs))) as pool:
+            tasks = list(pool.map(lambda t: _get_task_status(job_dir, t[0], t[1]), task_dirs))
+    else:
+        tasks = [_get_task_status(job_dir, task_num, task_dir) for task_num, task_dir in task_dirs]
 
     # Every task in one job shares the same input.yaml content (only
     # output_dir differs per task) - the first task that actually has a
