@@ -23,6 +23,8 @@ import shutil
 from pathlib import Path
 from typing import List
 import pprint
+import json
+import datetime
 
 
 log = logging.getLogger(__name__)
@@ -65,9 +67,157 @@ def run_and_log(command, log_func=log.info, dry_run=False, cfg=None):
 scripts_folder = pathlib.Path(__file__).resolve().parent / "scripts"
 
 
+# ---------------------------------------------------------------------------
+# progress.json - a small per-task file recording the current stage, cycle and
+# counts. The dashboard reads it in place of scanning the output tree, and
+# falls back to scanning when it is absent. See dashboard/parser.py's
+# read_progress().
+# ---------------------------------------------------------------------------
+PROGRESS_FILENAME = "progress.json"
+PROGRESS_SCHEMA = 1
+_PROGRESS_PATH = None
+_PROGRESS_STAGE_LOCKED = False
+
+# dtimelog() step names -> the dashboard's own stage vocabulary (STAGES in
+# dashboard/parser.py). Steps not listed here leave the stage untouched.
+_PROGRESS_STAGES = {
+    "general_config_prep": "setup",
+    "pass_config_to_rfdiff": "setup",
+    "skipping RfDiff": "setup",
+    "run_rfdiff": "rfdiffusion",
+    "plugin_filters": "filtering",
+    "rechain_rfdiff_pdbs": "filtering",
+    "do_cycling": "mpnn",
+    "final_operations": "scoring",
+    "only final_operations": "scoring",
+    "Finished": "finished",
+}
+
+
+def init_progress(cfg):
+    """Point the progress writer at this task's output directory."""
+    global _PROGRESS_PATH, _PROGRESS_STAGE_LOCKED
+    _PROGRESS_PATH = os.path.join(cfg.output_dir, PROGRESS_FILENAME)
+    # Under the partial re-entry points the recorded stage is frozen: stage
+    # arguments to write_progress() are ignored for the rest of the process.
+    _PROGRESS_STAGE_LOCKED = bool(
+        cfg.get("only_run_analysis", False)
+        or cfg.get("only_run_post_filtering_scoring", False)
+    )
+    write_progress(
+        stage=None if _PROGRESS_STAGE_LOCKED else "setup",
+        total_cycles=cfg.get("af2_mpnn_cycles", 1),
+    )
+
+
+def _read_progress():
+    if not _PROGRESS_PATH or not os.path.isfile(_PROGRESS_PATH):
+        return {}
+    try:
+        with open(_PROGRESS_PATH) as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_progress(stage=None, counts=None, cycle=None, total_cycles=None):
+    """Merge fields into <output_dir>/progress.json and rewrite it atomically.
+
+    Deliberately not save_checkpoint(): that writes in place with flush() and
+    no rename, which is fine for a single integer whose reader coerces with
+    `or 0`, but would hand the dashboard a half-written JSON document.
+
+    Writing is best-effort - a failure here must never take down a run that is
+    otherwise fine, so it warns and carries on.
+    """
+    if not _PROGRESS_PATH:
+        return
+    data = _read_progress()
+    data["schema"] = PROGRESS_SCHEMA
+    # Identifies which run wrote this file; the dashboard ignores a
+    # progress.json whose job id does not match the log it is reading.
+    data["job_id"] = os.environ.get("SLURM_JOB_ID") or data.get("job_id")
+    data["array_task_id"] = os.environ.get("SLURM_ARRAY_TASK_ID") or data.get("array_task_id")
+    data["updated_at"] = datetime.datetime.now().astimezone().isoformat(timespec="seconds")
+    if stage is not None and not _PROGRESS_STAGE_LOCKED:
+        data["stage"] = stage
+    if cycle is not None or total_cycles is not None:
+        current = data.get("cycle") or {}
+        if cycle is not None:
+            current["current"] = cycle
+        if total_cycles is not None:
+            current["total"] = total_cycles
+        data["cycle"] = current
+    if counts:
+        merged = data.get("counts") or {}
+        merged.update({k: v for k, v in counts.items() if v is not None})
+        data["counts"] = merged
+    try:
+        tmp = _PROGRESS_PATH + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(data, f, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, _PROGRESS_PATH)
+    except OSError as e:
+        log.warning(f"Could not write {PROGRESS_FILENAME}: {e}")
+
+
+def _manifest_path(cfg):
+    return os.path.join(cfg.output_dir, prosculpt.MANIFEST_FILENAME)
+
+
+def reset_models_manifest(cfg):
+    """3_models/ is wiped before every prediction round, so the manifest that
+    describes it has to be reset in step or it would point at files that no
+    longer exist."""
+    path = _manifest_path(cfg)
+    try:
+        if os.path.isfile(path):
+            os.remove(path)
+    except OSError as e:
+        log.warning(f"Could not reset {prosculpt.MANIFEST_FILENAME}: {e}")
+
+
+def append_models_manifest(cfg, model_dir, model_name, cycle):
+    """Record the predictions this backbone just produced.
+
+    One directory tree listed per backbone, as against the whole 3_models/ tree
+    the dashboard would otherwise walk on every poll. Returns how many rows
+    were written so the caller can keep a running total.
+    """
+    m = re.match(r"model_(\d+)$", model_name)
+    trb_path = (
+        os.path.join(cfg.rfdiff_out_dir, f"_{m.group(1)}.trb") if m else None
+    )
+    try:
+        rows = prosculpt.scan_model_dir(
+            model_dir,
+            model_name,
+            trb_path,
+            model_monomer=cfg.get("model_monomer", False),
+            cycle=cycle,
+            relative_to=cfg.output_dir,
+        )
+        with open(_manifest_path(cfg), "a") as f:
+            for row in rows:
+                f.write(json.dumps(row, cls=prosculpt.NumpyInt64Encoder) + "\n")
+        return len(rows)
+    except OSError as e:
+        log.warning(f"Could not append to {prosculpt.MANIFEST_FILENAME}: {e}")
+        return 0
+
+
 def general_config_prep(cfg):
     log.info("Running generalPrep")
     os.makedirs(cfg.output_dir, exist_ok=True)
+
+    init_progress(cfg)
+
+    # Per-model/per-chain debug output in prosculpt.py, off unless the job
+    # config sets verbose_debug.
+    prosculpt.set_verbose_debug(cfg.get("verbose_debug", False))
 
     # We want to have all the params in the cfg struct. Thus, use we open_dict to be able to write new data.
     with open_dict(cfg):
@@ -240,6 +390,7 @@ def rechain_rfdiff_pdbs(cfg):
     """
     log.info("Running rechainRFdiffPDBs")
     rf_pdbs = glob.glob(os.path.join(cfg.rfdiff_out_path, "*.pdb"))
+    write_progress(counts={"backbones_generated": len(rf_pdbs)})
     for pdb in rf_pdbs:
         run_and_log(
             f'{cfg.pymol_python_path} {scripts_folder / "rechain.py"} "{pdb}" "{pdb}" --chain_break_cutoff_A {cfg.chain_break_cutoff_A}',
@@ -563,6 +714,7 @@ def plugin_filters(cfg):
 
     # Check how many .pdb files remain
     remaining_pdbs = list(rfdiff_output_dir.glob("*.pdb"))
+    write_progress(counts={"backbones_passed_filters": len(remaining_pdbs)})
     if not remaining_pdbs:
         log.error(
             "All RFDiffusion backbones failed the plugin filters. No structures remain."
@@ -723,6 +875,17 @@ def do_cycling(cfg):
 
             run_and_log(proteinMPNN_cmd_str, cfg=cfg)
 
+            # Number of backbones handed to MPNN in this cycle.
+            mpnn_inputs = len(glob.glob(os.path.join(input_mpnn, "*.pdb")))
+            write_progress(
+                stage="mpnn",
+                cycle=cycle,
+                counts={
+                    "sequences_designed": mpnn_inputs
+                    * (cfg.num_seq_per_target_mpnn if cycle == 0 else 1)
+                },
+            )
+
             log.info("Preparing to empty af2 directory.")
 
             # af2 directory must be empty
@@ -771,9 +934,23 @@ def do_cycling(cfg):
         save_checkpoint(cfg.output_dir, "content_status", 4)
         content_status = 4
 
-        fasta_files = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
-        fasta_files += glob.glob(os.path.join(cfg.fasta_dir, "monomers", "*.fa"))
-        fasta_files = sorted(fasta_files)
+        complex_fastas = glob.glob(os.path.join(cfg.fasta_dir, "*.fa"))
+        monomer_fastas = glob.glob(os.path.join(cfg.fasta_dir, "monomers", "*.fa"))
+        fasta_files = sorted(complex_fastas + monomer_fastas)
+
+        # Backbone and monomer counts for this cycle, taken from the fasta
+        # files just collected.
+        write_progress(
+            stage="modeling",
+            cycle=cycle,
+            counts={
+                "models_completed": 0,
+                "backbones_with_sequences": len(complex_fastas),
+                "monomer_backbones": len(monomer_fastas),
+            },
+        )
+        reset_models_manifest(cfg)
+        models_written = 0
 
         print(fasta_files)
 
@@ -1132,6 +1309,14 @@ def do_cycling(cfg):
                     )
                 else:
                     log.error(f"Unsupported prediction model: {cfg.prediction_model}")
+
+            # Record what this backbone produced. Monomer fastas predict into
+            # model_N/monomers/ but are recorded under model_N, so the
+            # backbone's own name is passed here.
+            models_written += append_models_manifest(
+                cfg, model_dir, f"model_{rf_model_num}", cycle
+            )
+            write_progress(counts={"models_completed": models_written})
         save_checkpoint(
             cfg.output_dir, "content_status", 1
         )  ## Content is ok to be copied to cycle_dir
@@ -1257,7 +1442,16 @@ def final_operations(cfg):
     os.remove(rosetta_scores_path)
 
     output_csv_path = os.path.join(cfg.output_dir, "output.csv")
-    prosculpt.apply_filtering(cfg, cfg.output_dir, output_csv_path)
+    write_progress(
+        counts={"final_models": prosculpt.count_csv_rows(output_csv_path)}
+    )
+
+    filtered_csv_path = prosculpt.apply_filtering(cfg, cfg.output_dir, output_csv_path)
+    # apply_filtering returns None when no `filtering:` section is configured.
+    if filtered_csv_path:
+        write_progress(
+            counts={"filtered_models": prosculpt.count_csv_rows(filtered_csv_path)}
+        )
 
 
 def run_post_filtering_scoring(cfg):
@@ -1355,6 +1549,11 @@ def dtimelog(message, final=False):
     dt = round(time.time() - TIMECALC, 1)
 
     log.info(f"* * * {PREVIOUS_MESSAGE} lasted {dt} s. Running {message} * * *")
+
+    # Records the stage for any step named in _PROGRESS_STAGES.
+    progress_stage = _PROGRESS_STAGES.get(message)
+    if progress_stage:
+        write_progress(stage=progress_stage)
 
     TIMEMEASURES[PREVIOUS_MESSAGE] = dt
     PREVIOUS_MESSAGE = message

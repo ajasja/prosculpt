@@ -35,33 +35,51 @@ def find_task_dirs(test_dir):
     return [test_dir]
 
 
-def post_filtering_scoring_configured(task_dir):
-    """Whether this task's input.yaml requested a post_filtering_scoring_script."""
+def load_task_config(task_dir):
+    """The config this task actually ran with, from its own input.yaml.
+    Returns {} when it can't be read, so the checks below then verify only
+    what the output files alone can tell us."""
     input_yaml_path = os.path.join(task_dir, "input.yaml")
     if not os.path.isfile(input_yaml_path):
-        return False
+        return {}
     try:
         with open(input_yaml_path) as f:
-            data = yaml.safe_load(f) or {}
-    except yaml.YAMLError:
-        return False
-    filtering_cfg = data.get("filtering") or {}
-    return bool(filtering_cfg.get("post_filtering_scoring_script"))
+            return yaml.safe_load(f) or {}
+    except (yaml.YAMLError, OSError):
+        return {}
+
+
+def filtering_configured(cfg):
+    """prosculpt only produces filtered_pdbs/filtered_output.csv when
+    `filtering:` is present and non-empty - filter_results() in prosculpt.py
+    logs a skip and returns otherwise, so their absence is correct for every
+    run that doesn't configure filtering, not a failure."""
+    return bool(cfg.get("filtering") or {})
+
+
+def post_filtering_scoring_configured(cfg):
+    """Whether this task's config requested a post_filtering_scoring_script."""
+    return bool((cfg.get("filtering") or {}).get("post_filtering_scoring_script"))
 
 
 def verify_task(task_dir):
     """Returns (passed, message) for one task directory: checks output.csv
-    exists, filtered_output.csv exists, and (if post-filtering scoring was
-    configured) that filtered_output.csv gained columns beyond output.csv."""
+    exists, and - only for a run that configured `filtering:` - that
+    filtered_output.csv exists and (if post-filtering scoring was configured
+    too) that it gained columns beyond output.csv."""
     output_csv_path = os.path.join(task_dir, "output.csv")
     if not os.path.isfile(output_csv_path):
         return False, "Missing output.csv"
+
+    cfg = load_task_config(task_dir)
+    if not filtering_configured(cfg):
+        return True, "passed"
 
     filtered_csv_path = os.path.join(task_dir, "filtered_output.csv")
     if not os.path.isfile(filtered_csv_path):
         return False, "Missing filtered_output.csv (filtering stage did not run/complete)"
 
-    if post_filtering_scoring_configured(task_dir):
+    if post_filtering_scoring_configured(cfg):
         try:
             # nrows=0: just the header.
             output_columns = set(pd.read_csv(output_csv_path, nrows=0).columns)

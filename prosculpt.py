@@ -22,6 +22,27 @@ import logging
 log = logging.getLogger(__name__)
 
 
+# Per-model / per-chain debug output. Enable with `verbose_debug: true` in the
+# job config.
+_VERBOSE_DEBUG = False
+
+
+def set_verbose_debug(enabled):
+    global _VERBOSE_DEBUG
+    _VERBOSE_DEBUG = bool(enabled)
+
+
+def verbose_debug():
+    """For call sites where building the message is itself expensive - guard
+    with this rather than passing the value to debug_print()."""
+    return _VERBOSE_DEBUG
+
+
+def debug_print(*args, **kwargs):
+    if _VERBOSE_DEBUG:
+        print(*args, **kwargs)
+
+
 def make_boltz_input_yaml(
     cfg, model_id, mpnn_sequence, output_dir, input_alignment_dir,monomer_models
 ):
@@ -29,14 +50,14 @@ def make_boltz_input_yaml(
     sequences = []
     letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     # Split multi-chain sequences by colon
-    print(
+    debug_print(
         f"splitting mpnn sequence {mpnn_sequence} by colon for Boltz yaml generation..."
     )
     split_chains = mpnn_sequence.split(":")
     for i, chain_seq in enumerate(split_chains):
         chain_id = f"{letters[i]}"
         chain_ids.append(chain_id)
-        print(f"Chain ID: {chain_id}, Sequence: {chain_seq}")
+        debug_print(f"Chain ID: {chain_id}, Sequence: {chain_seq}")
         sequences.append(chain_seq)
 
     # Make boltz yaml
@@ -49,7 +70,7 @@ def make_boltz_input_yaml(
             chain_id = chain_ids[idxsequence]
             cleaned = "".join(c for c in sequence if c.isalpha())
 
-            print(
+            debug_print(
                 f"Chain ID: {chain_id}, Sequence: {sequence}, Cleaned Sequence: {cleaned}"
             )
 
@@ -72,7 +93,7 @@ def make_boltz_input_yaml(
     else:
         for idxsequence, sequence in enumerate(sequences):
             cleaned = "".join(c for c in sequence if c.isalpha())
-            print(
+            debug_print(
                 f"Chain ID: {chain_ids[idxsequence]}, Sequence: {sequence}, Cleaned Sequence: {cleaned}"
             )
             chain_id = chain_ids[idxsequence]
@@ -111,9 +132,18 @@ def make_boltz_input_yaml(
             return obj
 
     data["templates"] = []
-    if cfg.get("boltz2_templates", None) is not None and monomer_models==False:
-        templates = OmegaConf.to_container(cfg.boltz2_templates, resolve=True)
-        data["templates"].append(flow_list_for_keys(templates, target_keys={"template_id","chain_id"}))
+    # Templates are emitted for the complex only; monomer models get none.
+    if cfg.get("boltz2_templates", None) is not None and not monomer_models:
+        templates = flow_list_for_keys(
+            OmegaConf.to_container(cfg.boltz2_templates, resolve=True),
+            target_keys={"template_id", "chain_id"},
+        )
+        # boltz2_templates may be a single mapping or a list of them; Boltz
+        # is given a list of mappings either way.
+        if isinstance(templates, dict):
+            data["templates"].append(templates)
+        else:
+            data["templates"].extend(templates)
     
 
     with open(f"{output_dir}/{model_id}.yaml", "w") as outfile:
@@ -126,14 +156,14 @@ def make_AF3_input_json(cfg, model_id, mpnn_sequence, output_dir, input_alignmen
     sequences = []
     letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     # Split multi-chain sequences by colon
-    print(
+    debug_print(
         f"splitting mpnn sequence {mpnn_sequence} by colon for AF3 yaml generation..."
     )
     split_chains = mpnn_sequence.split(":")
     for i, chain_seq in enumerate(split_chains):
         chain_id = f"{letters[i]}"
         chain_ids.append(chain_id)
-        print(f"Chain ID: {chain_id}, Sequence: {chain_seq}")
+        debug_print(f"Chain ID: {chain_id}, Sequence: {chain_seq}")
         sequences.append(chain_seq)
 
     # Make boltz yaml
@@ -144,7 +174,7 @@ def make_AF3_input_json(cfg, model_id, mpnn_sequence, output_dir, input_alignmen
         for idxsequence, sequence in enumerate(sequences):
             chain_id = chain_ids[idxsequence]
             cleaned = "".join(c for c in sequence if c.isalpha())
-            print(
+            debug_print(
                 f"Chain ID: {chain_ids[idxsequence]}, Sequence: {sequence}, Cleaned Sequence: {cleaned}"
             )
             data["sequences"].append(
@@ -164,7 +194,7 @@ def make_AF3_input_json(cfg, model_id, mpnn_sequence, output_dir, input_alignmen
     else:
         for idxsequence, sequence in enumerate(sequences):
             cleaned = "".join(c for c in sequence if c.isalpha())
-            print(
+            debug_print(
                 f"Chain ID: {chain_ids[idxsequence]}, Sequence: {sequence}, Cleaned Sequence: {cleaned}"
             )
             chain_id = chain_ids[idxsequence]
@@ -198,6 +228,68 @@ def get_rmsd_from_coords(native_coords, model_coords, rot, tran):
 def extract_chain_letter(filename):
     match = re.search(r"Chain_([A-Z])", filename)
     return match.group(1) if match else ""
+
+
+# AF3 server alignments are named "..._chains_a_b.a3m" (one file per group of
+# identical chains); prosculpt and Colabfold name them "..._Chain_B.a3m" or
+# "..._auth_B.a3m".
+_A3M_CHAINS_RE = re.compile(r"chains?_([a-z](?:_[a-z])*)\.a3m$", re.IGNORECASE)
+_A3M_CHAIN_TOKEN_RE = re.compile(r"(?:Chain|auth)_([A-Za-z])")
+
+
+def alignment_file_chains(filename):
+    """Chain letters an alignment file covers, upper case."""
+    match = _A3M_CHAINS_RE.search(filename)
+    if match:
+        return {token.upper() for token in match.group(1).split("_")}
+    return {c.upper() for c in _A3M_CHAIN_TOKEN_RE.findall(filename)}
+
+
+def find_alignment_file_for_chain(alignment_dir, chain_id):
+    """Path of the alignment file covering chain_id, or None.
+
+    When an unpaired and a paired AF3 server file both cover the chain, the
+    unpaired one is used.
+    """
+    matches = [
+        name
+        for name in sorted(os.listdir(alignment_dir))
+        if name.endswith(".a3m") and chain_id.upper() in alignment_file_chains(name)
+    ]
+    if not matches:
+        return None
+    unpaired = [name for name in matches if "unpaired" in name.lower()]
+    return os.path.join(alignment_dir, (unpaired or matches)[0])
+
+
+def read_a3m(path):
+    """Records of an a3m file as (header, sequence), header keeping its '>'.
+
+    Returns (query_header, query_sequence, hit_records). Accepts files that
+    open with a Colabfold "#<lengths>\t<counts>" cardinality line and files
+    that start directly at the query record, as the AF3 server writes them.
+    Sequences keep their lowercase insertion characters.
+    """
+    records = []
+    header = None
+    parts = []
+    with open(path) as handle:
+        for line in handle:
+            line = line.rstrip("\r\n")
+            if header is None and (not line.strip() or line.startswith("#")):
+                continue
+            if line.startswith(">"):
+                if header is not None:
+                    records.append((header, "".join(parts)))
+                header = line
+                parts = []
+            elif header is not None:
+                parts.append(line.strip())
+    if header is not None:
+        records.append((header, "".join(parts)))
+    if not records:
+        raise ValueError(f"No sequences found in alignment file {path}")
+    return records[0][0], records[0][1], records[1:]
 
 
 def masked_positions(seq1, seq2, min_block=3):
@@ -238,7 +330,7 @@ def masked_positions(seq1, seq2, min_block=3):
 
 
 def calculate_RMSD_linker_len(
-    cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path, symmetry, model_monomer
+    cfg, trb_path, af2_pdb, starting_pdb, rfdiff_pdb_path, symmetry
 ):
     # First calculate RMSD between input protein and AF2 generated protein
     # Second calcualte number of total generated AA by RFDIFF
@@ -256,7 +348,11 @@ def calculate_RMSD_linker_len(
             "skipping rfdiffusion. RMSD_Sculpted is that of the designable residues. RMSD_Motif is that of the non-designable residues"
         )
 
-        if symmetry != None or model_monomer:
+        # homooligomer_rmsd matches each predicted chain against the first
+        # chain of the input, so it applies only to symmetric homooligomers.
+        # Everything else uses the general path below. Monomer structures are
+        # compared by the rename_pdb_create_csv_* functions, not here.
+        if symmetry != None:
             rmsd = homooligomer_rmsd.align_oligomers(
                 starting_pdb, af2_pdb, save_aligned=False
             )
@@ -309,30 +405,38 @@ def calculate_RMSD_linker_len(
                 if ind["CA"] not in rfdiff_all_fixed_res
             ]
 
-            superimposer = SVDSuperimposer()
             rfdiff_all_fixed_coords = np.array([a.coord for a in rfdiff_all_fixed_res])
             af2_all_fixed_coords = np.array([a.coord for a in af2_all_fixed_res])
-            superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)
-            superimposer.run()
-            rmsd_all_fixed = get_rmsd_from_coords(
-                rfdiff_all_fixed_coords,
-                af2_all_fixed_coords,
-                superimposer.rot,
-                superimposer.tran,
-            )
+            # With no fixed residues, or none sculpted, the corresponding RMSD
+            # is UNDEFINED_SENTINEL_VALUE.
+            if len(rfdiff_all_fixed_coords) != 0:
+                superimposer = SVDSuperimposer()
+                superimposer.set(rfdiff_all_fixed_coords, af2_all_fixed_coords)
+                superimposer.run()
+                rmsd_all_fixed = get_rmsd_from_coords(
+                    rfdiff_all_fixed_coords,
+                    af2_all_fixed_coords,
+                    superimposer.rot,
+                    superimposer.tran,
+                )
+            else:
+                # The all-residue superposition above stays in effect for the
+                # sculpted RMSD below.
+                rmsd_all_fixed = UNDEFINED_SENTINEL_VALUE
             # rfdiff_fixed_chain_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_fixed_chains]
             # rfdiff_motif_res=[all_rfdiff_res[ind]['CA'] for ind in selected_residues_in_designed_chains]
-            rfdiff_sculpted_coords = [a.coord for a in rfdiff_sculpted_res]
-            af2_sculpted_coords = [a.coord for a in af2_sculpted_res]
-            rfdiff_sculpted_coords = np.array(rfdiff_sculpted_coords)
-            af2_sculpted_coords = np.array(af2_sculpted_coords)
+            rfdiff_sculpted_coords = np.array([a.coord for a in rfdiff_sculpted_res])
+            af2_sculpted_coords = np.array([a.coord for a in af2_sculpted_res])
 
-            rmsd_sculpted = get_rmsd_from_coords(
-                rfdiff_sculpted_coords,
-                af2_sculpted_coords,
-                superimposer.rot,
-                superimposer.tran,
-            )
+            if len(rfdiff_sculpted_coords) != 0:
+                rmsd_sculpted = get_rmsd_from_coords(
+                    rfdiff_sculpted_coords,
+                    af2_sculpted_coords,
+                    superimposer.rot,
+                    superimposer.tran,
+                )
+            else:
+                rmsd_sculpted = UNDEFINED_SENTINEL_VALUE
             print(
                 [
                     round(rmsd, 1),
@@ -579,62 +683,39 @@ def make_alignment_file_boltz(sequence_id, sequence, alignment_dir, output_dir):
         sequences.append(chain_seq)
 
     chain_lengths = [len(s) for s in sequences]
-    # Get all relevant files
-    alignment_files = [f for f in os.listdir(alignment_dir) if f.endswith(".a3m")]
-
-    # Sort by the chain letter
-    alignment_files_sorted = sorted(alignment_files, key=extract_chain_letter)
 
     for idxsequence, sequence in enumerate(sequences):
         sequence = sequence.strip()
         chain_id = chain_ids[idxsequence]
-        print(f"Processing chain {chain_id} for {name} with sequence {sequence}...")
+        debug_print(f"Processing chain {chain_id} for {name} with sequence {sequence}...")
 
         with open(f"{output_dir}/{name}_{chain_id}.a3m", "w+") as f:
             f.write(f">101\n")
             f.write(sequence + "\n")
 
-            # Iterate in sorted order
-            filename = None
-            for fn in alignment_files_sorted:
-                if f"Chain_{chain_id}" in fn:
-                    filename = fn
-                    break
-            if filename is None:
+            path = find_alignment_file_for_chain(alignment_dir, chain_id)
+            if path is None:
                 print(f"Could not find alignment file for chain {chain_id}")
                 f.write(f">101\n")
                 f.write(sequence + "\n")
             else:
-                path = os.path.join(alignment_dir, filename)
-                with open(path) as afile:
+                _, reference_seq, hits = read_a3m(path)
+                reference_seq = "".join([c for c in reference_seq if not c.islower()])
+                # Compute positions to keep
+                positions_to_keep = masked_positions(sequence, reference_seq)
 
-                    next(afile)
-                    # read original sequence
-                    reference_name = afile.readline()
-                    reference_seq = afile.readline()
-                    reference_seq = "".join(
-                        [c for c in reference_seq if not c.islower()]
-                    )
-                    # Compute positions to keep
-                    positions_to_keep = masked_positions(sequence, reference_seq)
+                for name_line, seq_line in hits:
+                    seq_line = "".join([c for c in seq_line if not c.islower()])
+                    if not seq_line:
+                        continue
 
-                    while True:
-                        name_line = afile.readline()
-                        seq_line = afile.readline()
-                        seq_line = "".join([c for c in seq_line if not c.islower()])
-                        if not seq_line:
-                            break
-
-                        name_line = name_line.rstrip()
-                        seq_line = seq_line.rstrip()
-
-                        masked_seq = ["-"] * (len(sequence))  # NEEDS A -1
-                        # Place masked residues at the correct positions in full_sequence
-                        for j, pos in enumerate(positions_to_keep):
-                            if j < len(seq_line):
-                                masked_seq[pos] = seq_line[j]
-                        f.write(name_line + "\n")
-                        f.write("".join(masked_seq) + "\n")
+                    masked_seq = ["-"] * (len(sequence))  # NEEDS A -1
+                    # Place masked residues at the correct positions in full_sequence
+                    for j, pos in enumerate(positions_to_keep):
+                        if j < len(seq_line):
+                            masked_seq[pos] = seq_line[j]
+                    f.write(name_line + "\n")
+                    f.write("".join(masked_seq) + "\n")
 
         with open(f"{output_dir}/{name}_{chain_id}.a3m", "rb+") as f:
             f.seek(-1, 2)  # move to the last byte
@@ -779,61 +860,49 @@ def make_alignment_file(cfg, trb_path, pdb_file, mpnn_seq, alignments_path, outp
         for chain in letters:
             if chain in used_chains:
                 # LEt's get the correct file for this chain
-                for file in os.listdir(alignments_path):
-                    if "auth_" + chain in file or "Chain_" + chain in file:
-                        alignment_file = file
-                        print(
-                            "Alignment file for chain "
-                            + chain
-                            + " is "
-                            + alignment_file
-                        )
+                alignment_path = find_alignment_file_for_chain(alignments_path, chain)
+                if alignment_path is None:
+                    raise FileNotFoundError(
+                        f"No alignment file for chain {chain} in {alignments_path}"
+                    )
+                print(
+                    "Alignment file for chain "
+                    + chain
+                    + " is "
+                    + os.path.basename(alignment_path)
+                )
 
-                with open(
-                    os.path.join(alignments_path, alignment_file), "r"
-                ) as chain_alignment_file:
-                    for line_id, line in enumerate(chain_alignment_file):
+                table = str.maketrans(
+                    "", "", string.ascii_lowercase
+                )  # This deletes lowercase characters from the string
+                for header, aligned_seq in read_a3m(alignment_path)[2]:
+                    f.write(header + "\n")
+                    line_without_insertions = aligned_seq.translate(table)
+
+                    new_aligned_seq = "-" * (
+                        len(mpnn_sequence_no_colons)
+                    )  # Make a gap sequence of the length of the sequence..
+                    trb_chain = [
+                        x for x in residue_data_control_1 if x[0][0] == chain
+                    ]
+                    first_residue_in_trb = trb_chain[0][1]
+                    for id, pos in enumerate(residue_data_control_1):
                         if (
-                            line_id >= 3
-                        ):  # skip first three lines, since they contain the original sequence.
-                            if line[0] == ">":
-                                f.write(line)
-                            else:
-                                table = str.maketrans(
-                                    "", "", string.ascii_lowercase
-                                )  # This deletes lowercase characters from the string
-                                line_without_insertions = line.translate(table)
+                            pos[0] == chain
+                        ):  # If position chain corresponds to the chain we're looking at
 
-                                new_aligned_seq = "-" * (
-                                    len(mpnn_sequence_no_colons)
-                                )  # Make a gap sequence of the length of the sequence..
-                                trb_chain = [
-                                    x
-                                    for x in residue_data_control_1
-                                    if x[0][0] == chain
+                            position_to_copy = (
+                                residue_data_control_1[id][1] - 1
+                            )  # minus 1 because this is 1-indexed while the sequence is 0 indexed
+                            new_aligned_seq = (
+                                new_aligned_seq[: residue_data_af2_0[id]]
+                                + line_without_insertions[
+                                    position_to_copy - first_residue_in_trb + 1
                                 ]
-                                first_residue_in_trb = trb_chain[0][1]
-                                for id, pos in enumerate(residue_data_control_1):
-                                    if (
-                                        pos[0] == chain
-                                    ):  # If position chain corresponds to the chain we're looking at
+                                + new_aligned_seq[residue_data_af2_0[id] + 1 :]
+                            )
 
-                                        position_to_copy = (
-                                            residue_data_control_1[id][1] - 1
-                                        )  # minus 1 because this is 1-indexed while the sequence is 0 indexed
-                                        new_aligned_seq = (
-                                            new_aligned_seq[: residue_data_af2_0[id]]
-                                            + line_without_insertions[
-                                                position_to_copy
-                                                - first_residue_in_trb
-                                                + 1
-                                            ]
-                                            + new_aligned_seq[
-                                                residue_data_af2_0[id] + 1 :
-                                            ]
-                                        )
-
-                                f.write(new_aligned_seq + "\n")
+                    f.write(new_aligned_seq + "\n")
 
     # delete empty lines that are generated for weird reasons beyond my comprehension. This should be fixed and this section removed, but it doesn't really slow things that much.
     with open(output, "r+") as output_file:
@@ -890,6 +959,26 @@ UNDEFINED_SENTINEL_COLUMNS = {
     "plddt_sculpted",
 }
 UNDEFINED_SENTINEL_VALUE = -1
+
+_warned_no_sculpted_residues = False
+
+
+def mean_or_undefined(values, scale=1):
+    """Mean of values as an int, or the -1 sentinel when there is nothing to
+    average. An empty set is a real outcome, not a failure: a re-folding run
+    that leaves every residue fixed has no sculpted residues at all, and
+    np.mean([]) is nan, which int() rejects."""
+    global _warned_no_sculpted_residues
+    if len(values) == 0:
+        if not _warned_no_sculpted_residues:
+            _warned_no_sculpted_residues = True
+            log.warning(
+                "No sculpted residues in this design, so sculpted metrics are "
+                f"reported as {UNDEFINED_SENTINEL_VALUE} (undefined). This is expected when "
+                "designable_residues names no residue to redesign."
+            )
+        return UNDEFINED_SENTINEL_VALUE
+    return int(np.mean(values) * scale)
 
 
 def apply_filtering(cfg, output_dir, csv_path):
@@ -1197,7 +1286,7 @@ def rename_pdb_create_csv_colabfold(
                 if i not in residue_data_af2
             ]
 
-            plddt_sculpted = int(np.mean(plddt_sculpted_list))
+            plddt_sculpted = mean_or_undefined(plddt_sculpted_list)
         except NameError:
             plddt_sculpted = -1
 
@@ -1208,7 +1297,6 @@ def rename_pdb_create_csv_colabfold(
             control_structure_path,
             rfdiff_pdb_path,
             symmetry,
-            model_monomer,
         )
         pae = round((np.mean(params["pae"])), 2)
 
@@ -1481,7 +1569,7 @@ def rename_pdb_create_csv_boltz(
                     if i not in residue_data_af2
                 ]
 
-                plddt_sculpted = int(np.mean(plddt_sculpted_list) * 100)
+                plddt_sculpted = mean_or_undefined(plddt_sculpted_list, 100)
             except NameError:
                 plddt_sculpted = -1
 
@@ -1492,7 +1580,6 @@ def rename_pdb_create_csv_boltz(
                 control_structure_path,
                 rfdiff_pdb_path,
                 symmetry,
-                model_monomer,
             )
 
             # if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
@@ -1762,7 +1849,7 @@ def rename_pdb_create_csv_AF3(
                 if i not in residue_data_af2
             ]
 
-            plddt_sculpted = int(np.mean(plddt_sculpted_list))
+            plddt_sculpted = mean_or_undefined(plddt_sculpted_list)
         except NameError:
             plddt_sculpted = -1
 
@@ -1773,7 +1860,6 @@ def rename_pdb_create_csv_AF3(
             control_structure_path,
             rfdiff_pdb_path,
             symmetry,
-            model_monomer,
         )
 
         # if we are doing symmetry or monomer modelling we also want to add monomer rmsd to the output
@@ -1865,12 +1951,11 @@ def rename_pdb_create_csv_AF3(
                     "*summary_confidences.json",
                 )
             )[0]
-            print(
-                f"DEBUG: files in monomer folder {glob.glob(
-                os.path.join(
-                    monomers_dirname, "monomer_" + model_name, "*"
-                ))}"
-            )
+            if verbose_debug():
+                monomer_folder_files = glob.glob(
+                    os.path.join(monomers_dirname, "monomer_" + model_name, "*")
+                )
+                print(f"DEBUG: files in monomer folder {monomer_folder_files}")
             monomer_confidences_files = glob.glob(
                 os.path.join(
                     monomers_dirname, "monomer_" + model_name, "*confidences.json"
@@ -2263,6 +2348,129 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
         json.dump(fixpos, outfile, cls=NumpyInt64Encoder)
 
     return file_path
+
+
+# ---------------------------------------------------------------------------
+# models.jsonl - one line per predicted structure, appended as each backbone
+# finishes. The dashboard reads it in place of walking 3_models/.
+#
+# The row shape and the matching rules below must stay identical to
+# dashboard/parser.py's list_models(), which is duplicated there rather than
+# imported. Any change here needs the same change in both.
+# ---------------------------------------------------------------------------
+MANIFEST_FILENAME = "models.jsonl"
+
+_MANIFEST_SEED_SAMPLE_RE = re.compile(r"^seed-\d+_sample-\d+$")
+_MANIFEST_SKIP_DIRS = {"json_inputs", "yaml_inputs", "alignment_inputs"}
+_MANIFEST_COLABFOLD_SCORES_RE = re.compile(r"_scores_rank_\d+")
+_MANIFEST_MODEL_IDX_RE = re.compile(r"_model_(\d+)")
+
+
+def _manifest_is_confidence_file(name):
+    return (
+        name.endswith("summary_confidences.json")
+        or (name.startswith("confidence_") and name.endswith(".json"))
+        or (name.endswith(".json") and _MANIFEST_COLABFOLD_SCORES_RE.search(name))
+    )
+
+
+def _manifest_pick_structure(files, conf_filename):
+    """The structure file belonging to one confidence file, or (None, None).
+
+    Prefers .cif over .pdb: AF3 writes each model's .cif as soon as that model
+    is done but only writes the .pdb once every model has finished.
+    """
+    for ext in (".cif", ".pdb"):
+        candidates = sorted(f for f in files if f.endswith(ext))
+        if not candidates:
+            continue
+        pick = None
+        if len(candidates) == 1:
+            pick = candidates[0]
+        elif conf_filename.startswith("confidence_"):
+            # Boltz: confidence_<name>.json <-> <name>.<ext>
+            expected = os.path.splitext(conf_filename[len("confidence_"):])[0]
+            pick = next((c for c in candidates if os.path.splitext(c)[0] == expected), None)
+        elif conf_filename.endswith("summary_confidences.json"):
+            # AF3: <name>_summary_confidences.json <-> <name>*.<ext>
+            prefix = conf_filename[: -len("_summary_confidences.json")]
+            pick = next((c for c in candidates if c.startswith(prefix)), None)
+        elif _MANIFEST_COLABFOLD_SCORES_RE.search(conf_filename):
+            # Colabfold: <name>_scores_rank_NNN_<tag>.json <-> the matching
+            # <name>_(un)relaxed_rank_NNN_<tag>.<ext>, matched on exact stem
+            # equality.
+            stem = os.path.splitext(conf_filename)[0]
+            for replacement in ("_relaxed_rank_", "_unrelaxed_rank_"):
+                expected = stem.replace("_scores_rank_", replacement, 1)
+                pick = next((c for c in candidates if os.path.splitext(c)[0] == expected), None)
+                if pick:
+                    break
+        else:
+            pick = candidates[0]
+        if pick:
+            return pick, ext.lstrip(".")
+    return None, None
+
+
+def scan_model_dir(
+    model_dir, model_name, trb_path, model_monomer=False, cycle=None, relative_to=None
+):
+    """Manifest rows for every prediction under one 3_models/model_N directory.
+
+    One directory tree per backbone - the point is that this is called once as
+    each backbone finishes, rather than the dashboard walking every backbone's
+    tree on every poll.
+
+    `relative_to` (the task directory) makes the recorded paths relative to it.
+    Always pass it: the job runs on the cluster and writes paths like
+    /home/user/..., but the dashboard may be reading the same files through a
+    mounted drive as q:/home/user/..., and an absolute cluster path is then
+    neither findable nor even comparable - os.path.relpath() raises
+    ValueError across drives on Windows.
+    """
+    def _rel(path):
+        if path is None or relative_to is None:
+            return path
+        try:
+            return os.path.relpath(path, relative_to).replace(os.sep, "/")
+        except ValueError:
+            return path
+
+    rows = []
+    if not os.path.isdir(model_dir):
+        return rows
+    # Monomer predictions live in a "monomers" directory, which is either the
+    # directory being scanned or one below it. Matched on the path relative to
+    # model_dir, so a job whose own output path contains "monomer" does not
+    # mark every model a monomer.
+    scanning_monomers = os.path.basename(os.path.normpath(model_dir)).lower() == "monomers"
+    for root, dirs, files in os.walk(model_dir):
+        dirs[:] = [
+            d for d in dirs
+            if d not in _MANIFEST_SKIP_DIRS and not _MANIFEST_SEED_SAMPLE_RE.match(d)
+        ]
+        for conf_filename in sorted(f for f in files if _manifest_is_confidence_file(f)):
+            structure, structure_format = _manifest_pick_structure(files, conf_filename)
+            # Colabfold writes every sequence's files flat in model_N/; the
+            # sequence name comes from the filename, not the directory.
+            cf_match = _MANIFEST_COLABFOLD_SCORES_RE.search(conf_filename)
+            seq_name = conf_filename[: cf_match.start()] if cf_match else os.path.basename(root)
+            idx_match = _MANIFEST_MODEL_IDX_RE.search(conf_filename)
+            is_monomer = scanning_monomers or "monomer" in os.path.relpath(root, model_dir).lower()
+            rows.append(
+                {
+                    "model": model_name,
+                    "sequence_name": seq_name,
+                    "model_index": idx_match.group(1) if idx_match else None,
+                    "variant": "monomer" if is_monomer else ("complex" if model_monomer else None),
+                    "structure_path": _rel(os.path.join(root, structure)) if structure else None,
+                    "structure_format": structure_format,
+                    "confidence_path": _rel(os.path.join(root, conf_filename)),
+                    "trb_path": _rel(trb_path),
+                    "cycle": cycle,
+                }
+            )
+    return rows
 
 
 def get_chains_seq(pdb_file):
