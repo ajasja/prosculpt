@@ -24,6 +24,8 @@ model_monomer: False #Whether to compare designed chains to a model of itself in
 only_run_analysis: False  #Only run final operations. This is good if a previous run failed to run final ops. Default: False
 only_run_post_filtering_scoring: False  #Only run the post_filtering_scoring_script against this run's filtered_output.csv (see `filtering:` below). Default: False
 
+verbose_debug: False  #Per-model/per-chain debug prints (chain sequences, monomer folder listings). Default: False
+
 
 defaults:
   - installation
