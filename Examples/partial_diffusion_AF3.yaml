@@ -24,7 +24,8 @@ chain_break_cutoff_A: 2 # Chain break cutoff in angstroms (default: 2)
 omit_AAs: C
 partial_diffusion: True
 skipRfDiff: False #(This tells Prosculpt to skip making a backbone and go straight to mpnn)
-#designable_residues: [A49, A50, A53, A56, A57, B] #
+#designable_residues: [A49, A50, A53, A56, A57]
+#non_designed_chains_to_include: [B]
 
 sampling_temp: 0.4
 backbone_noise: 0.0

@@ -769,6 +769,23 @@ function parseDesignableResidues(value) {
   return { residues, invalid };
 }
 
+// Chain letters for non_designed_chains_to_include: chains carried into the
+// final model but never redesigned. Same input conventions as the field
+// above - comma and/or whitespace separated, brackets optional.
+function parseChainLetters(value) {
+  const body = (value || "").trim().replace(/^\[/, "").replace(/\]$/, "");
+  const chains = [];
+  const invalid = [];
+  body.split(/[,\s]+/).filter(Boolean).forEach((token) => {
+    if (/^[A-Za-z]$/.test(token)) {
+      if (!chains.includes(token)) chains.push(token);
+    } else {
+      invalid.push(token);
+    }
+  });
+  return { chains, invalid };
+}
+
 // Used as a path segment (currently just output_dir's default) - this ends
 // up unquoted in a shell command line slurm_runner.py/the wrapper script
 // build (see wrapper_slurm_array_job_group.sh's `echo "$CMD" | bash`), so a
@@ -997,6 +1014,8 @@ function buildConfigObject() {
       const designable = parseDesignableResidues(mods.redesign.values.designable_residues).residues;
       if (designable.length) cfg.designable_residues = designable;
     }
+    const keptChains = parseChainLetters(mods.redesign.values.non_designed_chains_to_include);
+    if (keptChains.chains.length) cfg.non_designed_chains_to_include = keptChains.chains;
   }
 
   if (mods.partial_diffusion && mods.partial_diffusion.enabled) {
@@ -1299,7 +1318,16 @@ function validateBeforeSubmit() {
       if (!rawResidues) return "Designable residues is required when the \"Redesign only\" module is enabled.";
       const parsedResidues = parseDesignableResidues(rawResidues);
       if (parsedResidues.invalid.length) {
-        return `Designable residues: could not read ${parsedResidues.invalid.join(", ")} - use a residue (A49), a range (A49-57), or a bare chain letter (B).`;
+        return `Designable residues: could not read ${parsedResidues.invalid.join(", ")} - use a residue (A49), a range (A49-57), or a bare chain letter (B, meaning the whole chain).`;
+      }
+      const keptChains = parseChainLetters(redesignMod.values.non_designed_chains_to_include);
+      if (keptChains.invalid.length) {
+        return `Chains to include without redesigning: could not read ${keptChains.invalid.join(", ")} - use chain letters only, e.g. B, C.`;
+      }
+      const designedChains = new Set(parsedResidues.residues.map((r) => r[0]));
+      const both = keptChains.chains.filter((c) => designedChains.has(c));
+      if (both.length) {
+        return `Chain ${both.join(", ")} appears in both Designable residues and Chains to include without redesigning - a chain is either redesigned or kept.`;
       }
     }
     const filteringMod = runJob.modules.filtering;

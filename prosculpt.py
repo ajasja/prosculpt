@@ -372,6 +372,18 @@ def calculate_RMSD_linker_len(
 
             all_af2_res = list(structure_af2.get_residues())
             all_af2_res_ca = [ind["CA"] for ind in all_af2_res]
+            # The predicted structure can hold fewer residues than the input -
+            # a chain named in neither designable_residues nor
+            # non_designed_chains_to_include is dropped from the design. The
+            # comparison is then undefined rather than wrong.
+            if selected_residue_data and max(selected_residue_data) >= len(all_af2_res):
+                log.warning(
+                    f"{os.path.basename(str(af2_pdb))}: predicted structure has "
+                    f"{len(all_af2_res)} residues but the input has at least "
+                    f"{max(selected_residue_data) + 1}; RMSD metrics reported as "
+                    f"{UNDEFINED_SENTINEL_VALUE}."
+                )
+                return ([UNDEFINED_SENTINEL_VALUE] * 5, -1)
             af2_all_fixed_res = [
                 all_af2_res[ind]["CA"] for ind in selected_residue_data
             ]
@@ -1402,7 +1414,7 @@ def rename_pdb_create_csv_colabfold(
         task_id = os.environ.get("SLURM_ARRAY_TASK_ID", 1)
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__out_{output_num}_.pdb"
+        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}.pdb"
         # out -> 00 -> number of task
         # rf -> 01 -> number of corresponding rf difff model
         # af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag
@@ -1683,7 +1695,7 @@ def rename_pdb_create_csv_boltz(
             task_id = os.environ.get("SLURM_ARRAY_TASK_ID", 1)
 
             # Create a new name an copy te af2 model under that name into the output directory
-            new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{boltz_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__out_{output_num}_.pdb"
+            new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{boltz_model}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}.pdb"
             # out -> 00 -> number of task
             # rf -> 01 -> number of corresponding rf difff model
             # af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag
@@ -1988,7 +2000,7 @@ def rename_pdb_create_csv_AF3(
         task_id = os.environ.get("SLURM_ARRAY_TASK_ID", 1)
 
         # Create a new name an copy te af2 model under that name into the output directory
-        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__link_{linker_length}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_fixedchains_{rmsd_list[3]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}__pae_{pae}__out_{output_num}_.pdb"
+        new_pdb_file = f"{task_id}.{trb_num}.{mpnn_sample}.{af2_model}__plddt_{plddt}__plddt_sculpted_{plddt_sculpted}__rmsd_{rmsd_list[0]:.1f}__rmsd_sculpted_{rmsd_list[2]:.1f}__rmsd_motif_{rmsd_list[4]:.1f}.pdb"
         # out -> 00 -> number of task
         # rf -> 01 -> number of corresponding rf difff model
         # af_model -> 4 -> number of the af model (1-5), can be set using --model_order flag
@@ -2067,7 +2079,8 @@ def parse_designable_residues(designable_residues):
     getChainResidOffsets, which compares f"{chain}{resnum}" by equality).
 
     Accepts single residues ("A49"), ranges ("A49-57" or "A49-A57") and
-    bare chain letters ("B": chain kept in the model, never redesigned).
+    bare chain letters ("B": redesign the whole of chain B). Chains to keep
+    in the model without redesigning go in non_designed_chains_to_include.
     Must be a list: a string is iterated character by character when
     chains_to_design is derived from it, turning punctuation into chain
     names. Raises ValueError on a string or an unreadable entry.
@@ -2099,9 +2112,166 @@ def parse_designable_residues(designable_residues):
     if invalid:
         raise ValueError(
             f"Could not read designable_residues entries {invalid}. "
-            "Use a residue (A49), a range (A49-57) or a bare chain letter (B)."
+            "Use a residue (A49), a range (A49-57) or a bare chain letter (B, "
+            "meaning the whole chain)."
         )
     return list(dict.fromkeys(expanded))
+
+
+def parse_non_designed_chains(non_designed_chains):
+    """
+    Normalise non_designed_chains_to_include into a list of chain letters.
+
+    These chains are carried through the pipeline and appear in the final
+    model, but ProteinMPNN never redesigns them. Returns [] when unset.
+    """
+    if non_designed_chains is None:
+        return []
+    if isinstance(non_designed_chains, str):
+        raise ValueError(
+            f"non_designed_chains_to_include must be a YAML list, not a string "
+            f"(got {non_designed_chains!r}). Write it unquoted, e.g.  "
+            "non_designed_chains_to_include: [B, C]"
+        )
+    chains, invalid = [], []
+    for entry in non_designed_chains:
+        token = str(entry).strip()
+        if len(token) == 1 and token.isalpha():
+            chains.append(token)
+        else:
+            invalid.append(token)
+    if invalid:
+        raise ValueError(
+            f"non_designed_chains_to_include takes bare chain letters, got {invalid}."
+        )
+    return list(dict.fromkeys(chains))
+
+
+def parse_tied_positions(tied_positions):
+    """
+    Normalise a tied_positions config value into a list of groups, each group
+    a list of member tokens.
+
+    Accepts one group ([A5-10, B5-10]) or several ([[A5-10, B5-10], [A30, B30]]).
+    A member is a residue (A49), a range (A49-57 or A49-A57) or a bare chain
+    letter (A, meaning that whole chain). Returns None when unset.
+    """
+    if tied_positions is None:
+        return None
+    if isinstance(tied_positions, str):
+        raise ValueError(
+            f"tied_positions must be a YAML list, not a string (got {tied_positions!r}). "
+            "Write it unquoted, e.g.  tied_positions: [A5-10, B5-10]"
+        )
+    entries = list(tied_positions)
+    if not entries:
+        return None
+    groups = entries if isinstance(entries[0], (list, tuple)) else [entries]
+
+    normalised = []
+    for group in groups:
+        if isinstance(group, str) or not isinstance(group, (list, tuple)):
+            raise ValueError(
+                f"Each tied_positions group must be a list of members, got {group!r}. "
+                "Write one group as [A5-10, B5-10], or several as [[A5-10, B5-10], [A30, B30]]."
+            )
+        members = [str(m).strip() for m in group]
+        if len(members) < 2:
+            raise ValueError(
+                f"A tied_positions group needs at least two members, got {members}."
+            )
+        for token in members:
+            if not (DESIGNABLE_RANGE_RE.match(token) or DESIGNABLE_RESIDUE_RE.match(token)):
+                raise ValueError(
+                    f"Could not read tied_positions member {token!r}. "
+                    "Use a residue (A49), a range (A49-57) or a bare chain letter (A)."
+                )
+        normalised.append(members)
+    return normalised
+
+
+def get_chain_residue_numbers(pdb_file):
+    """
+    PDB residue numbers per chain, in order, skipping waters and ligands -
+    so index i of a chain's list is that residue's 1-based position within
+    the chain, which is the numbering ProteinMPNN expects.
+    """
+    parser = PDBParser(QUIET=True)
+    structure = parser.get_structure("protein", pdb_file)
+    chains = {}
+    for chain in structure.get_chains():
+        chains[chain.get_id()] = [
+            residue.get_id()[1]
+            for residue in chain.get_residues()
+            if residue.get_id()[0].strip() == ""
+        ]
+    return chains
+
+
+def expand_tied_member(token, chain_numbers, pdb_name):
+    """
+    One tied_positions member as an ordered list of (chain, position), with
+    position 1-based within its chain. token is matched on PDB numbering.
+    """
+    range_match = DESIGNABLE_RANGE_RE.match(token)
+    if range_match:
+        chain, start, end_chain, end = range_match.groups()
+        if end_chain and end_chain != chain:
+            raise ValueError(f"tied_positions range {token!r} spans two chains.")
+        if int(end) < int(start):
+            raise ValueError(f"tied_positions range {token!r} ends before it starts.")
+        wanted = list(range(int(start), int(end) + 1))
+    else:
+        chain, resnum = DESIGNABLE_RESIDUE_RE.match(token).groups()
+        wanted = None if resnum is None else [int(resnum)]
+
+    if chain not in chain_numbers:
+        raise ValueError(
+            f"tied_positions member {token!r} names chain {chain}, which is not in {pdb_name}. "
+            f"Chains present: {sorted(chain_numbers)}."
+        )
+    numbers = chain_numbers[chain]
+    if wanted is None:
+        return [(chain, i + 1) for i in range(len(numbers))]
+
+    positions = []
+    for resnum in wanted:
+        try:
+            positions.append((chain, numbers.index(resnum) + 1))
+        except ValueError:
+            raise ValueError(
+                f"tied_positions member {token!r} names residue {chain}{resnum}, "
+                f"which is not in {pdb_name}."
+            )
+    return positions
+
+
+def build_tied_positions(tied_groups, pdb_file, pdb_name):
+    """
+    Tie groups for one PDB in ProteinMPNN's tied_positions_jsonl shape:
+    a list of {chain: [positions]} dicts, each dict tying its entries to one
+    another. Members of a group are tied elementwise, so [A5-10, B5-10] gives
+    six groups (A5-B5, A6-B6, ...), not one group of twelve.
+    """
+    if not tied_groups:
+        return []
+    chain_numbers = get_chain_residue_numbers(pdb_file)
+    tied = []
+    for members in tied_groups:
+        expanded = [expand_tied_member(m, chain_numbers, pdb_name) for m in members]
+        lengths = {len(e) for e in expanded}
+        if len(lengths) != 1:
+            raise ValueError(
+                f"tied_positions group {members} ties members of different lengths "
+                f"({', '.join(f'{m}={len(e)}' for m, e in zip(members, expanded))}). "
+                "Every member of a group must cover the same number of residues."
+            )
+        for position_set in zip(*expanded):
+            group = {}
+            for chain, position in position_set:
+                group.setdefault(chain, []).append(position)
+            tied.append(group)
+    return tied
 
 
 def getChainResidOffsets(pdb_file, designable_residues):
@@ -2111,7 +2281,10 @@ def getChainResidOffsets(pdb_file, designable_residues):
     within its own chain - the numbering ProteinMPNN's fixed_positions and
     every "x + chainResidOffset[chain] - 1" call site expect, which is NOT
     the PDB residue number when a chain does not start at 1.
-    designable_residues itself is matched on PDB numbering.
+    designable_residues itself is matched on PDB numbering; a bare chain
+    letter there makes that whole chain designable. An empty list fixes
+    every residue (re-modelling without redesigning); None means the caller
+    does not use the fixed-residue list at all.
     """
     chainResidOffset = {}
     con_hal_idx = []
@@ -2140,22 +2313,20 @@ def getChainResidOffsets(pdb_file, designable_residues):
                 chainResidOffset[chain_id] = global_residue_index - 1
                 first_residue_seen = True
 
-            if designable_residues:
+            if designable_residues is not None:
                 token = f"{chain_id}{residue.get_id()[1]}"
-                if token not in designable_residues:
-                    con_hal_idx.append((chain_id, chain_position))
-                else:
+                if chain_id in designable_residues:
+                    matched_designable.add(chain_id)
+                elif token in designable_residues:
                     matched_designable.add(token)
+                else:
+                    con_hal_idx.append((chain_id, chain_position))
 
             global_residue_index += 1
 
     if designable_residues:
-        # Bare chain letters are meant to stay fixed, so only numbered
-        # entries are expected to match a residue in the PDB.
         unmatched = [
-            str(r)
-            for r in designable_residues
-            if any(c.isdigit() for c in str(r)) and str(r) not in matched_designable
+            str(r) for r in designable_residues if str(r) not in matched_designable
         ]
         # getChainResidOffsets runs once per model, so warn only once per case.
         warn_key = (str(pdb_file), tuple(unmatched))
@@ -2191,6 +2362,8 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
     designable_residues = cfg.get("designable_residues", None)
 
     fixpos = {}
+    tiedpos = {}
+    tied_groups = parse_tied_positions(cfg.get("tied_positions", None))
     pdb_files = Path(pdb_path).glob("*.pdb")
 
     contig = cfg.contig
@@ -2302,7 +2475,14 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
         else:
             breaks = contig.count("/0 ") + 1
 
-        fixed_res = dict(zip(abeceda, [[] for _ in range(breaks)]))
+        if skipRfDiff:
+            # The contig is not used when RFdiffusion is skipped, so seed from
+            # the chains actually in the input. A chain that is designable in
+            # its entirety has no fixed residues, and ProteinMPNN still needs
+            # an entry for it.
+            fixed_res = {chain: [] for chain in chainResidOffset}
+        else:
+            fixed_res = dict(zip(abeceda, [[] for _ in range(breaks)]))
         #print(f"Fixed res (according to contig chain breaks): {fixed_res}")
 
         # This is only good if multiple chains due to symmetry: all of them are equal; ProteinMPNN expects fixed_res as 1-based, resetting for each chain.
@@ -2338,6 +2518,23 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
         print(f"Fixed res: ${fixed_res}")
 
         fixpos[pdb_basename] = fixed_res
+        # ProteinMPNN indexes this dict by pdb name, so every structure needs
+        # an entry; an empty list means "no ties for this one".
+        tiedpos[pdb_basename] = build_tied_positions(
+            tied_groups, pdb_file, pdb_basename
+        )
+        fixed_here = {(c, p) for c, positions in fixed_res.items() for p in positions}
+        tied_here = {
+            (chain, position)
+            for group in tiedpos[pdb_basename]
+            for chain, positions in group.items()
+            for position in positions
+        }
+        if fixed_here & tied_here:
+            log.warning(
+                f"{pdb_basename}: {len(fixed_here & tied_here)} tied position(s) are fixed by "
+                "designable_residues. Designable positions tied to them take the fixed residue."
+            )
 
     #print("_________trb data____", trb_data)
 
@@ -2346,6 +2543,10 @@ def process_pdb_files(pdb_path: str, out_path: str, cfg, trb_paths=None, cycle=0
     # Save the fixpos dict as a JSON file
     with open(file_path, "w") as outfile:
         json.dump(fixpos, outfile, cls=NumpyInt64Encoder)
+
+    if tied_groups:
+        with open(os.path.join(out_path, "tied_pdbs.jsonl"), "w") as outfile:
+            json.dump(tiedpos, outfile, cls=NumpyInt64Encoder)
 
     return file_path
 

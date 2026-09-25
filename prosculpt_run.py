@@ -276,24 +276,78 @@ def general_config_prep(cfg):
             )
 
         if cfg.get("skipRfDiff", False):
-            if not cfg.get("designable_residues", None):
+            # Chains carried through the pipeline: those with residues to
+            # redesign, plus those kept whole without redesigning.
+            non_designed = prosculpt.parse_non_designed_chains(
+                cfg.get("non_designed_chains_to_include", None)
+            )
+            if not cfg.get("designable_residues", None) and not non_designed:
                 raise ValueError(
-                    "skipRfDiff requires designable_residues: the residues ProteinMPNN may redesign, "
-                    "plus the bare chain letter of every other chain to keep in the final model."
+                    "skipRfDiff requires designable_residues (the residues ProteinMPNN may "
+                    "redesign) or non_designed_chains_to_include (chains kept in the model "
+                    "without redesigning), or both."
                 )
-            # We only need to redesign the chains specified in designable_residues
-            cfg.chains_to_design = " ".join(
-                sorted({_[0] for _ in cfg.designable_residues})
+            if cfg.get("designable_residues", None) is None:
+                # Re-modelling without redesigning: every residue stays fixed.
+                cfg.designable_residues = []
+            designed_chains = {_[0] for _ in cfg.designable_residues}
+            # A bare chain letter used to mean "keep this chain but never
+            # redesign it"; it now redesigns the whole chain, and keeping a
+            # chain is non_designed_chains_to_include.
+            bare_letters = sorted(
+                {str(r) for r in cfg.designable_residues if len(str(r)) == 1 and str(r).isalpha()}
             )
+            if bare_letters and cfg.get("non_designed_chains_to_include", None) is None:
+                log.warning(
+                    f"designable_residues names whole chains {bare_letters} and "
+                    "non_designed_chains_to_include is not set. A bare chain letter now "
+                    "REDESIGNS that entire chain. If these chains were meant to be kept "
+                    "unchanged, move them to non_designed_chains_to_include."
+                )
+            overlap = designed_chains & set(non_designed)
+            if overlap:
+                raise ValueError(
+                    f"Chains {sorted(overlap)} appear in both designable_residues and "
+                    "non_designed_chains_to_include. A chain is either redesigned or kept."
+                )
+            cfg.chains_to_design = " ".join(sorted(designed_chains | set(non_designed)))
             log.info(
-                f"Skipping RFdiff, only redesigning chains specified in designable_residues: {cfg.chains_to_design}"
+                f"Skipping RFdiff. Redesigning chains {sorted(designed_chains)}; "
+                f"keeping without redesign {sorted(non_designed)}"
             )
+
+            pdb_chains = set(prosculpt.get_chain_residue_numbers(cfg.pdb_path))
+            unmentioned = sorted(pdb_chains - designed_chains - set(non_designed))
+            if unmentioned:
+                log.warning(
+                    f"Chains {unmentioned} are in {cfg.pdb_path} but named in neither "
+                    "designable_residues nor non_designed_chains_to_include, so they are "
+                    "dropped from the design. Add them to non_designed_chains_to_include "
+                    "to keep them."
+                )
 
         if "inference" not in cfg:
             cfg.inference = {}
 
         if "symmetry" not in cfg.inference:
             cfg.inference.symmetry = None
+
+        # tied_positions: validated here so a bad value stops the job before
+        # RFdiffusion or MPNN run. Residue numbers are read against the input
+        # PDB, which is only what MPNN sees when RFdiffusion is skipped.
+        tied_positions = prosculpt.parse_tied_positions(cfg.get("tied_positions", None))
+        if tied_positions:
+            if cfg.inference.symmetry is not None:
+                raise ValueError(
+                    "tied_positions cannot be combined with inference.symmetry - symmetry "
+                    "already ties every chain position for position. Use one or the other."
+                )
+            if not cfg.get("skipRfDiff", False):
+                raise ValueError(
+                    "tied_positions is only supported with skipRfDiff: True. Its residue "
+                    "numbers refer to the input PDB, which ProteinMPNN only sees directly "
+                    "when RFdiffusion is skipped."
+                )
         
         if "write_trajectory" not in cfg.inference:
             cfg.inference.write_trajectory = False
@@ -862,7 +916,7 @@ def do_cycling(cfg):
             proteinMPNN_cmd_str = f'{cfg.mpnn_run_command} \
                 --jsonl_path {cfg.path_for_parsed_chains} \
                 --fixed_positions_jsonl {cfg.path_for_fixed_positions} \
-                {"--tied_positions_jsonl "+cfg.path_for_tied_positions if cfg.inference.symmetry!=None else ""} \
+                {"--tied_positions_jsonl "+cfg.path_for_tied_positions if (cfg.inference.symmetry!=None or cfg.get("tied_positions", None)) else ""} \
                 --chain_id_jsonl {cfg.path_for_assigned_chains} \
                 --out_folder {cfg.mpnn_out_dir} \
                 --num_seq_per_target {cfg.num_seq_per_target_mpnn if cycle == 0 else 1} \

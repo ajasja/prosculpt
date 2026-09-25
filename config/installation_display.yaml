@@ -1,0 +1,34 @@
+# This config includes installation paths and other constant values
+# Do not modify the {OUTPUT_PATH} tags. They are handled internally by prosculpt. 
+
+rfdiff_run_command:  >- 
+                      singularity run --nv 
+                      -B {OUTPUT_PATH}:/output 
+                      [prosculptPath]/singularity_files/rfdiff.sif
+                      inference.schedule_directory_path={OUTPUT_PATH}/schedules
+
+
+mpnn_run_command: singularity exec --nv [prosculptPath]/singularity_files/proteinmpnn.sif python /app/proteinmpnn/protein_mpnn_run.py
+
+
+colabfold_preparation_script: [prosculptPath]/scripts/af2_preparation_script.sh
+
+colabfold_run_command: singularity run --nv [prosculptPath]/singularity_files/colabfold.sif colabfold_batch
+
+pymol_python_path: singularity exec -B [prosculptPath]:[prosculptPath] [prosculptPath]/singularity_files/pymol.sif /usr/bin/python3.13
+
+prosculpt_python_path: [condaPath]/envs/prosculpt_test/bin/python
+
+slurm:
+  #General slurm parameters that apply to every job (they can be overwritten by individual jobs)
+  #Do not specify the --array command here. Use the num_tasks parameter in the job yaml file.
+  partition: gpu-a40
+  gres: gpu:1
+  exclude: compute-3-18,compute-3-20,compute-0-10
+  cpus-per-task: 2
+  output: slurm-%A_%a_%x.out
+  error: slurm-%A_%a_%x.err
+
+
+
+
