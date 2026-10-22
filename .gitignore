@@ -164,4 +164,5 @@ Examples/Examples_out
 outputs/
 .vscode/
 config/installation.yaml
+config/installation_display.yaml
 dashboard/dashboard_config.yaml
