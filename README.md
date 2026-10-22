@@ -183,8 +183,10 @@ A `filtering:` section can be added to a job's config to automatically select
   following the same contract as `scoring_script.py` above, to run
   against the *filtered* subset only - useful for a more expensive scoring
   pass (e.g. Rosetta interface analysis) that isn't worth running on every
-  model. See `scripts/post_filtering_scoring_script.py` for an example (ddG/
-  ShapeComplementarity per chain-chain interface). When set,
+  model. See `scripts/post_filtering_scoring_script.py` for an example
+  (InterfaceAnalyzer/ShapeComplementarity per interface, where an interface
+  is written as its two sides separated by an underscore - `A_B` for
+  chain-to-chain, `AB_CD` for group-to-group). When set,
   `slurm_runner.py` automatically submits this as a second, dependent SLURM
   job alongside the main one (see `filtering_slurm:` for its own slurm
   options, and `config/installation.yaml`'s `filtering_slurm:` for

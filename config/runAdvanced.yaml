@@ -108,6 +108,6 @@ rfdiff_backbone_filters:
 #    max_results: 50          # caps passing models to the best max_results by metric/higher_better
 #  post_filtering_scoring_script: scripts/post_filtering_scoring_script.py   # optional; omit to skip post-filtering scoring entirely
 #  post_filtering_scoring_script_arguments: # optional; extra arguments passed to post_filtering_scoring_script, same shape as pass_to_mpnn/pass_to_af above
-#    --chain_pairs: "AB,AC"    # overrides the script's default CHAIN_PAIRS; "all" scores every pairwise combination
+#    --chain_pairs: "A_B,A_C"  # overrides the script's default CHAIN_PAIRS; "all" scores every pairwise combination, "AB_CD" scores chains A+B together against C+D together
 #  filtering_slurm:           # optional; same shape as the top-level slurm: block. cpus-per-task controls the scoring script's parallelism.
 #    cpus-per-task: 8
